@@ -83,8 +83,39 @@ def _published_to_string(value: object | None) -> str | None:
 
 
 async def seed_starter_sources(session: AsyncSession) -> int:
-    added = 0
+    changed = 0
     for source in STARTER_SOURCES:
+        existing = await session.scalar(select(NewsSource).where(NewsSource.name == source.name))
+        if existing is not None:
+            before = (
+                existing.url,
+                existing.region,
+                existing.category,
+                existing.source_type,
+                existing.language,
+                existing.source_score,
+                existing.polling_interval_seconds,
+            )
+            existing.url = source.url
+            existing.region = source.region
+            existing.category = source.category
+            existing.source_type = source.source_type
+            existing.language = source.language
+            existing.source_score = source.source_score
+            existing.polling_interval_seconds = source.polling_interval_seconds
+            existing.parser_type = "rss"
+            existing.asset_classes = [source.category]
+            after = (
+                existing.url,
+                existing.region,
+                existing.category,
+                existing.source_type,
+                existing.language,
+                existing.source_score,
+                existing.polling_interval_seconds,
+            )
+            changed += int(before != after)
+            continue
         stmt = (
             insert(NewsSource)
             .values(
@@ -102,8 +133,8 @@ async def seed_starter_sources(session: AsyncSession) -> int:
             .on_conflict_do_nothing(index_elements=["url"])
         )
         result = await session.execute(stmt)
-        added += result.rowcount or 0
-    return added
+        changed += result.rowcount or 0
+    return changed
 
 
 async def add_source(

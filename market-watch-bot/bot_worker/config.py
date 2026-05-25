@@ -89,7 +89,7 @@ STARTER_SOURCES = [
     ),
     StarterSource(
         name="Vietstock",
-        url="https://vietstock.vn/rss.htm",
+        url="https://vietstock.vn/830/chung-khoan/co-phieu.rss",
         region="vietnam",
         category="vietnam_equity",
         source_type="rss",

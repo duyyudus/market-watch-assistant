@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bot_worker.config import load_settings
+from bot_worker.config import STARTER_SOURCES, load_settings
 
 
 def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
@@ -49,3 +49,9 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     )
     assert settings.bot.default_retention_days == 60
     assert settings.alerts.watchlist_threshold == 55
+
+
+def test_vietnam_starter_source_points_to_real_rss_feed() -> None:
+    vietstock = next(source for source in STARTER_SOURCES if source.name == "Vietstock")
+
+    assert vietstock.url == "https://vietstock.vn/830/chung-khoan/co-phieu.rss"

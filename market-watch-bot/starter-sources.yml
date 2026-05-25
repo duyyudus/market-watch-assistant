@@ -1,3 +1,42 @@
+# Starter source guide
+#
+# Add new source entries under `sources:` using these fields:
+#
+# - name: Human-readable unique source name. `market-watch migrate` uses this
+#   name to update existing starter sources.
+# - url: RSS feed URL. The MVP parser expects a real RSS/XML feed, not a
+#   landing page that lists feeds.
+# - region: One of:
+#   global, asia, us, vietnam, china, crypto, other
+# - category: One of:
+#   global_macro, us_equity, vietnam_equity, crypto, commodity, fx, rates,
+#   geopolitics, company_disclosure, exchange_announcement
+# - type: One of:
+#   rss, api, crawler, official, newsletter, social, market_data
+#   MVP ingestion currently supports RSS-style feeds only; use `official` for
+#   official RSS feeds and `rss` for regular media RSS feeds.
+# - language: One of:
+#   en, vi, zh, ja, multi
+# - score: Source quality score from 0 to 100. Suggested values:
+#   100 = official regulator / central bank / exchange / company filing
+#   90  = institutional wire/API
+#   75  = reputable financial media
+#   60  = aggregator or broad free media feed
+#   40  = blog/social/community feed
+#   20  = unverified source
+# - interval: Polling interval in seconds. Suggested values:
+#   300  = high-priority official/crypto feeds
+#   600  = regular financial RSS
+#   900  = Vietnam market RSS or medium-priority feeds
+#   1800 = broad aggregators or lower-priority feeds
+#
+# Common examples:
+# - Vietnam stocks: region=vietnam, category=vietnam_equity, language=vi
+# - US equities: region=us, category=us_equity, language=en
+# - Global macro: region=global or us, category=global_macro, language=en
+# - Crypto: region=crypto, category=crypto, language=en
+# - Central bank/regulator RSS: type=official, score=90-100
+
 sources:
 - name: Federal Reserve Press Releases
   url: https://www.federalreserve.gov/feeds/press_all.xml
@@ -16,7 +55,7 @@ sources:
   score: 70
   interval: 600
 - name: Vietstock
-  url: https://vietstock.vn/rss.htm
+  url: https://vietstock.vn/830/chung-khoan/co-phieu.rss
   region: vietnam
   category: vietnam_equity
   type: rss

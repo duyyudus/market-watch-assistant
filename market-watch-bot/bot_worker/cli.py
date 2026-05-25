@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from bot_worker.config import Settings, load_settings, starter_sources_yaml, write_default_files
+from bot_worker.db.models import AlertDecisionRecord, EventCluster
 from bot_worker.db.session import make_engine, make_session_factory
 from bot_worker.retention import RetentionPolicy, retention_cutoffs
 from bot_worker.scoring import AlertThresholds, decide_alert
@@ -533,13 +534,61 @@ def alert_test(score: Annotated[int, typer.Option("--score")] = 80) -> None:
 
 
 @alert_app.command("list")
-def alert_list() -> None:
-    typer.echo("alert decisions are stored in alert_decisions after pipeline runs")
+def alert_list(
+    limit: Annotated[int, typer.Option("--limit", min=1, max=200)] = 20,
+    level: Annotated[str | None, typer.Option("--level")] = None,
+) -> None:
+    async def action(session):
+        stmt = (
+            select(AlertDecisionRecord, EventCluster)
+            .join(EventCluster, EventCluster.id == AlertDecisionRecord.event_cluster_id)
+            .order_by(AlertDecisionRecord.created_at.desc())
+            .limit(limit)
+        )
+        if level:
+            stmt = stmt.where(AlertDecisionRecord.decision == level)
+        rows = list((await session.execute(stmt)).all())
+        if not rows:
+            typer.echo("No alert decisions found")
+            return
+        for alert, event in rows:
+            typer.echo(
+                f"{alert.id}\t{alert.decision}\t{event.final_score}\t"
+                f"{alert.channel or '-'}\t{event.canonical_headline}"
+            )
+
+    _run(_with_session(action))
 
 
 @alert_app.command("show")
 def alert_show(identifier: str) -> None:
-    typer.echo(f"alert show {identifier} requires alert_decisions data")
+    async def action(session):
+        stmt = (
+            select(AlertDecisionRecord, EventCluster)
+            .join(EventCluster, EventCluster.id == AlertDecisionRecord.event_cluster_id)
+            .where(AlertDecisionRecord.id == identifier)
+        )
+        row = (await session.execute(stmt)).first()
+        if row is None:
+            typer.echo("Alert decision not found")
+            raise typer.Exit(1)
+        alert, event = row
+        _echo_json(
+            {
+                "id": alert.id,
+                "event_cluster_id": alert.event_cluster_id,
+                "event": event.canonical_headline,
+                "decision": alert.decision,
+                "reason": alert.reason,
+                "score": event.final_score,
+                "score_breakdown": alert.score_breakdown,
+                "channel": alert.channel,
+                "suppression_reason": alert.suppression_reason,
+                "created_at": alert.created_at,
+            }
+        )
+
+    _run(_with_session(action))
 
 
 @digest_app.command("preview")
