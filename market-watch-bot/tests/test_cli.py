@@ -49,3 +49,55 @@ def test_cli_alert_list_reports_empty_decisions(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "No alert decisions found" in result.output
+
+
+def test_cli_source_purge_requires_explicit_confirmation(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_purge_source(_session, identifier: str):
+        calls.append(identifier)
+        return {"status": "purged", "source": identifier, "news_sources": 1}
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(cli, "purge_source", fake_purge_source)
+
+    result = runner.invoke(app, ["source", "purge", "Investing.com News"])
+
+    assert result.exit_code == 1
+    assert calls == []
+    assert "Refusing to purge without --yes" in result.output
+
+
+def test_cli_source_purge_reports_deleted_counts(monkeypatch) -> None:
+    async def fake_purge_source(_session, identifier: str):
+        return {
+            "status": "purged",
+            "source": identifier,
+            "source_fetch_logs": 2,
+            "raw_news_items": 3,
+            "normalized_news_items": 4,
+            "event_clusters": 1,
+            "news_sources": 1,
+        }
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(cli, "purge_source", fake_purge_source)
+
+    result = runner.invoke(app, ["source", "purge", "Investing.com News", "--yes"])
+
+    assert result.exit_code == 0
+    assert "Purged source Investing.com News" in result.output
+    assert "source_fetch_logs: 2" in result.output
+    assert "event_clusters: 1" in result.output

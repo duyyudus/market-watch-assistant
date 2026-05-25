@@ -46,8 +46,8 @@ sources:
   language: en
   score: 100
   interval: 900
-- name: Investing.com News
-  url: https://www.investing.com/rss/news.rss
+- name: MarketWatch Top Stories
+  url: https://feeds.marketwatch.com/marketwatch/topstories/
   region: global
   category: global_macro
   type: rss

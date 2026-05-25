@@ -7,11 +7,36 @@ bot:
   default_retention_days: 60
   timezone: Asia/Ho_Chi_Minh
 
+ingestion:
+  rss_freshness_hours: 168
+
 alerts:
   immediate_threshold: 80
   watchlist_threshold: 55
   digest_threshold: 30
   default_channel: log
+
+embeddings:
+  provider: openrouter
+  api_base_url: https://openrouter.ai/api/v1
+  model: openai/text-embedding-3-large
+  dimensions: 1536
+  api_key_env: OPENROUTER_API_KEY
+  version: v1
+
+market_data:
+  vn_base_url: http://192.168.100.39:8020
+  crypto_provider: binance
+  crypto_fallback_provider: coingecko
+  global_provider: yahoo
+  symbol_map:
+    BTC: bitcoin
+    ETH: ethereum
+    SOL: solana
+    SPY: SPY
+    QQQ: QQQ
+    GLD: GLD
+    USO: USO
 
 retention:
   fetch_logs_days: 14
@@ -19,3 +44,12 @@ retention:
   normalized_news_items_days: 180
   event_clusters_days: 1095
   alert_decisions_days: 365
+
+logging:
+  level: INFO
+  log_file: .log/market-watch-bot.log
+  console: true
+  max_lines: 10000
+  backup_count: 5
+
+

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import typer
 from sqlalchemy import select, text
@@ -14,23 +15,32 @@ from sqlalchemy import select, text
 from bot_worker.config import Settings, load_settings, starter_sources_yaml, write_default_files
 from bot_worker.db.models import AlertDecisionRecord, EventCluster
 from bot_worker.db.session import make_engine, make_session_factory
+from bot_worker.digest import digest_window_for_date
+from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.retention import RetentionPolicy, retention_cutoffs
 from bot_worker.scoring import AlertThresholds, decide_alert
 from bot_worker.services import (
     CORE_JOBS,
     add_source,
     add_watchlist_entry,
+    digest_display_headline,
     digest_preview,
+    embed_pending_event_clusters,
+    embed_pending_news_items,
+    fetch_market_moves,
     fetch_source,
     get_source,
     import_sources_yaml,
     list_sources,
+    purge_source,
     record_job_run,
     retention_preview,
+    run_missed_catalyst_review,
     run_pipeline,
     run_retention,
     seed_starter_sources,
     set_source_enabled,
+    store_market_moves,
     watchlist_entries,
 )
 from bot_worker.watchlist import match_watchlist
@@ -48,6 +58,9 @@ alert_policy_app = typer.Typer(no_args_is_help=True)
 digest_app = typer.Typer(no_args_is_help=True)
 retention_app = typer.Typer(no_args_is_help=True)
 health_app = typer.Typer(no_args_is_help=True)
+embedding_app = typer.Typer(no_args_is_help=True)
+market_app = typer.Typer(no_args_is_help=True)
+catalyst_app = typer.Typer(no_args_is_help=True)
 
 app.add_typer(source_app, name="source")
 app.add_typer(worker_app, name="worker")
@@ -61,10 +74,21 @@ alert_app.add_typer(alert_policy_app, name="policy")
 app.add_typer(digest_app, name="digest")
 app.add_typer(retention_app, name="retention")
 app.add_typer(health_app, name="health")
+app.add_typer(embedding_app, name="embedding")
+app.add_typer(market_app, name="market")
+app.add_typer(catalyst_app, name="catalyst")
+
+
+@app.callback()
+def main() -> None:
+    """Initialize logging for CLI commands."""
+    from bot_worker.logging import setup_logging
+    setup_logging(_settings())
 
 
 def _settings() -> Settings:
     return load_settings()
+
 
 
 def _run(coro: Awaitable[object]) -> object:
@@ -250,6 +274,31 @@ def source_disable(identifier: str) -> None:
     _run(_with_session(action))
 
 
+@source_app.command("purge")
+def source_purge(
+    identifier: str,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm permanent deletion of the source and its data")
+    ] = False,
+) -> None:
+    if not yes:
+        typer.echo("Refusing to purge without --yes")
+        raise typer.Exit(1)
+
+    async def action(session):
+        result = await purge_source(session, identifier)
+        if result.get("status") == "not_found":
+            typer.echo("source not found")
+            raise typer.Exit(1)
+        typer.echo(f"Purged source {result['source']}")
+        for key, value in result.items():
+            if key in {"status", "source"}:
+                continue
+            typer.echo(f"{key}: {value}")
+
+    _run(_with_session(action))
+
+
 @source_app.command("import")
 def source_import(path: Path) -> None:
     sources = import_sources_yaml(path)
@@ -311,7 +360,12 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
         while True:
 
             async def action(session):
-                result = await run_pipeline(session)
+                settings = _settings()
+                result = await run_pipeline(
+                    session,
+                    freshness_hours=settings.ingestion.rss_freshness_hours,
+                    embedding_config=EmbeddingConfig.from_settings(settings),
+                )
                 await record_job_run(session, "pipeline", result)
                 typer.echo(f"pipeline: {result}")
 
@@ -368,11 +422,19 @@ def job_failures() -> None:
 @pipeline_app.command("run")
 def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) -> None:
     if dry_run:
-        typer.echo("Dry run pipeline: poll -> normalize -> dedupe -> cluster -> score -> alert")
+        typer.echo(
+            "Dry run pipeline: poll -> normalize -> dedupe -> embed -> "
+            "cluster -> market -> score -> alert"
+        )
         return
 
     async def action(session):
-        result = await run_pipeline(session)
+        settings = _settings()
+        result = await run_pipeline(
+            session,
+            freshness_hours=settings.ingestion.rss_freshness_hours,
+            embedding_config=EmbeddingConfig.from_settings(settings),
+        )
         await record_job_run(session, "pipeline", result)
         _echo_json(result)
 
@@ -605,8 +667,29 @@ def digest_preview_command(limit: Annotated[int, typer.Option("--limit")] = 20) 
 
 
 @digest_app.command("build")
-def digest_build() -> None:
-    digest_preview_command()
+def digest_build(
+    date_value: Annotated[str | None, typer.Option("--date")] = None,
+    since_value: Annotated[str | None, typer.Option("--since")] = None,
+    until_value: Annotated[str | None, typer.Option("--until")] = None,
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+) -> None:
+    settings = _settings()
+    if date_value:
+        since, until = digest_window_for_date(date_value, ZoneInfo(settings.bot.timezone))
+    else:
+        since = datetime.fromisoformat(since_value).astimezone(UTC) if since_value else None
+        until = datetime.fromisoformat(until_value).astimezone(UTC) if until_value else None
+
+    async def action(session):
+        rows = await digest_preview(session, limit=limit, since=since, until=until)
+        if not rows:
+            typer.echo("No digest events")
+        for event in rows:
+            section = event.regions[0] if event.regions else "global"
+            headline = await digest_display_headline(session, event, since=since, until=until)
+            typer.echo(f"[{section}] {event.final_score} {event.status} {headline}")
+
+    _run(_with_session(action))
 
 
 @digest_app.command("history")
@@ -638,6 +721,62 @@ def retention_run() -> None:
 
     async def action(session):
         _echo_json(await run_retention(session, policy))
+
+    _run(_with_session(action))
+
+
+@embedding_app.command("backfill")
+def embedding_backfill(
+    kind: Annotated[str, typer.Option("--kind")] = "news",
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
+) -> None:
+    settings = _settings()
+    config = EmbeddingConfig.from_settings(settings)
+
+    async def action(session):
+        if kind == "news":
+            count = await embed_pending_news_items(session, config=config, limit=limit)
+        elif kind == "events":
+            count = await embed_pending_event_clusters(session, config=config, limit=limit)
+        else:
+            typer.echo("kind must be news or events")
+            raise typer.Exit(1)
+        _echo_json({"kind": kind, "embedded": count, "provider": config.provider})
+
+    _run(_with_session(action))
+
+
+@market_app.command("fetch")
+def market_fetch(
+    symbols: Annotated[str, typer.Option("--symbols")],
+    window: Annotated[str, typer.Option("--window")] = "1d",
+) -> None:
+    settings = _settings()
+    parsed_symbols = [symbol.strip() for symbol in symbols.split(",") if symbol.strip()]
+
+    async def action(session):
+        moves = await fetch_market_moves(
+            symbols=parsed_symbols,
+            window=window,
+            vn_base_url=settings.market_data.vn_base_url,
+            symbol_map=settings.market_data.symbol_map,
+        )
+        inserted = await store_market_moves(session, moves)
+        _echo_json(
+            {
+                "inserted": inserted,
+                "symbols": parsed_symbols,
+            }
+        )
+
+    _run(_with_session(action))
+
+
+@catalyst_app.command("review")
+def catalyst_review(window: Annotated[str, typer.Option("--window")] = "1d") -> None:
+    async def action(session):
+        count = await run_missed_catalyst_review(session, window=window)
+        _echo_json({"created": count, "window": window})
 
     _run(_with_session(action))
 

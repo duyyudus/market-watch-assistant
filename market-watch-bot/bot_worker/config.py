@@ -26,11 +26,42 @@ class BotConfig(BaseModel):
     timezone: str = "Asia/Ho_Chi_Minh"
 
 
+class IngestionConfig(BaseModel):
+    rss_freshness_hours: int = 72
+
+
 class AlertConfig(BaseModel):
     immediate_threshold: int = 80
     watchlist_threshold: int = 55
     digest_threshold: int = 30
     default_channel: str = "log"
+
+
+class EmbeddingSettings(BaseModel):
+    provider: str = "openrouter"
+    api_base_url: str = "https://openrouter.ai/api/v1"
+    model: str = "openai/text-embedding-3-large"
+    dimensions: int = 1536
+    api_key_env: str = "OPENROUTER_API_KEY"
+    version: str = "v1"
+
+
+class MarketDataConfig(BaseModel):
+    vn_base_url: str = "http://192.168.100.39:8020"
+    crypto_provider: str = "binance"
+    crypto_fallback_provider: str = "coingecko"
+    global_provider: str = "yahoo"
+    symbol_map: dict[str, str] = Field(
+        default_factory=lambda: {
+            "BTC": "bitcoin",
+            "ETH": "ethereum",
+            "SOL": "solana",
+            "SPY": "SPY",
+            "QQQ": "QQQ",
+            "GLD": "GLD",
+            "USO": "USO",
+        }
+    )
 
 
 class RetentionConfig(BaseModel):
@@ -39,6 +70,14 @@ class RetentionConfig(BaseModel):
     normalized_news_items_days: int = 180
     event_clusters_days: int = 1095
     alert_decisions_days: int = 365
+
+
+class LoggingConfig(BaseModel):
+    level: str = "INFO"
+    log_file: str | None = ".log/market-watch-bot.log"
+    console: bool = True
+    max_lines: int = 10000
+    backup_count: int = 5
 
 
 class Settings(BaseModel):
@@ -50,8 +89,13 @@ class Settings(BaseModel):
     redis_url: str | None = None
     app: AppConfig = Field(default_factory=AppConfig)
     bot: BotConfig = Field(default_factory=BotConfig)
+    ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
+    embeddings: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+
 
 
 @dataclass(frozen=True)
@@ -78,8 +122,8 @@ STARTER_SOURCES = [
         polling_interval_seconds=900,
     ),
     StarterSource(
-        name="Investing.com News",
-        url="https://www.investing.com/rss/news.rss",
+        name="MarketWatch Top Stories",
+        url="https://feeds.marketwatch.com/marketwatch/topstories/",
         region="global",
         category="global_macro",
         source_type="rss",

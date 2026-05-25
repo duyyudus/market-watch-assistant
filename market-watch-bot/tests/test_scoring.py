@@ -26,3 +26,21 @@ def test_decide_alert_uses_thresholds_and_suppression() -> None:
     assert immediate.decision == "immediate_alert"
     assert suppressed.decision == "suppressed"
     assert suppressed.reason == "cooldown"
+
+
+def test_market_move_can_escalate_market_confirmed_news_to_immediate_alert() -> None:
+    score = score_event(
+        ScoreInput(
+            top_source_score=65,
+            source_count=1,
+            watchlist_tier="D",
+            is_duplicate=False,
+            is_stale=False,
+            market_move_score=75,
+        )
+    )
+
+    decision = decide_alert(score.final_score, AlertThresholds())
+
+    assert score.market_move_score == 75
+    assert decision.decision == "immediate_alert"

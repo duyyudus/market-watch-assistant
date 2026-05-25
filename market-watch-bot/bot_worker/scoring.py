@@ -11,6 +11,7 @@ class ScoreInput:
     is_duplicate: bool
     is_stale: bool
     status: str = "reported"
+    market_move_score: int | None = None
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class ScoreBreakdown:
     relevance_score: int
     novelty_score: int
     urgency_score: int
+    market_move_score: int
     confidence_score: int
     duplicate_penalty: int
     noise_penalty: int
@@ -50,6 +52,7 @@ def score_event(input_data: ScoreInput) -> ScoreBreakdown:
     relevance = relevance_by_tier.get((input_data.watchlist_tier or "D").upper(), 35)
     novelty = 85 if not input_data.is_duplicate else 20
     urgency = 80 if relevance >= 75 and source_score >= 75 else 45
+    market_move = min(100, max(0, input_data.market_move_score or 0))
     duplicate_penalty = 30 if input_data.is_duplicate else 0
     stale_penalty = 25 if input_data.is_stale else 0
     noise_penalty = 10 if source_score < 50 else 0
@@ -59,17 +62,21 @@ def score_event(input_data: ScoreInput) -> ScoreBreakdown:
         + relevance * 0.25
         + novelty * 0.10
         + urgency * 0.10
+        + market_move * 0.10
         + confidence * 0.10
         - duplicate_penalty
         - stale_penalty
         - noise_penalty
     )
+    if source_score >= 65 and market_move >= 70:
+        raw = max(raw, 80)
     return ScoreBreakdown(
         source_score=source_score,
         impact_score=impact,
         relevance_score=relevance,
         novelty_score=novelty,
         urgency_score=urgency,
+        market_move_score=market_move,
         confidence_score=confidence,
         duplicate_penalty=duplicate_penalty,
         noise_penalty=noise_penalty,

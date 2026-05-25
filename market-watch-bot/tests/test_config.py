@@ -49,9 +49,19 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     )
     assert settings.bot.default_retention_days == 60
     assert settings.alerts.watchlist_threshold == 55
+    assert settings.market_data.global_provider == "yahoo"
+    assert settings.market_data.symbol_map["SPY"] == "SPY"
 
 
 def test_vietnam_starter_source_points_to_real_rss_feed() -> None:
     vietstock = next(source for source in STARTER_SOURCES if source.name == "Vietstock")
 
     assert vietstock.url == "https://vietstock.vn/830/chung-khoan/co-phieu.rss"
+
+
+def test_market_starter_source_uses_reachable_rss_feed() -> None:
+    marketwatch = next(
+        source for source in STARTER_SOURCES if source.name == "MarketWatch Top Stories"
+    )
+
+    assert marketwatch.url == "https://feeds.marketwatch.com/marketwatch/topstories/"

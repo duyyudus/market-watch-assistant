@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import UserDefinedType
 
 
 def new_id(prefix: str) -> str:
@@ -18,6 +19,37 @@ def utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class Vector(UserDefinedType):
+    cache_ok = True
+
+    def __init__(self, dimensions: int) -> None:
+        self.dimensions = dimensions
+
+    def get_col_spec(self, **_kw: object) -> str:
+        return f"vector({self.dimensions})"
+
+    def bind_processor(self, _dialect):
+        def process(value: list[float] | None) -> str | None:
+            if value is None:
+                return None
+            return "[" + ",".join(str(float(item)) for item in value) + "]"
+
+        return process
+
+    def result_processor(self, _dialect, _coltype):
+        def process(value: object | None) -> list[float] | None:
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return [float(item) for item in value]
+            text = str(value).strip("[]")
+            if not text:
+                return []
+            return [float(item) for item in text.split(",")]
+
+        return process
 
 
 class NewsSource(Base):
@@ -174,6 +206,73 @@ class EventScoreHistory(Base):
     score_breakdown: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     final_score: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NewsItemEmbedding(Base):
+    __tablename__ = "news_item_embeddings"
+
+    news_item_id: Mapped[str] = mapped_column(
+        ForeignKey("normalized_news_items.id"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=1536)
+    embedding_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    vector: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EventClusterEmbedding(Base):
+    __tablename__ = "event_cluster_embeddings"
+
+    event_cluster_id: Mapped[str] = mapped_column(
+        ForeignKey("event_clusters.id"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=1536)
+    embedding_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    vector: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MarketMove(Base):
+    __tablename__ = "market_moves"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("move"))
+    asset_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    exchange: Mapped[str | None] = mapped_column(String(64))
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window: Mapped[str] = mapped_column(String(16), nullable=False)
+    price_change_pct: Mapped[float] = mapped_column(nullable=False)
+    volume_change_pct: Mapped[float | None] = mapped_column()
+    value_traded_change_pct: Mapped[float | None] = mapped_column()
+    z_score: Mapped[float | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MissedCatalystReview(Base):
+    __tablename__ = "missed_catalyst_reviews"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("review"))
+    asset_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    move_window: Mapped[str] = mapped_column(String(16), nullable=False)
+    price_change_pct: Mapped[float] = mapped_column(nullable=False)
+    volume_change_pct: Mapped[float | None] = mapped_column()
+    detected_event_cluster_id: Mapped[str | None] = mapped_column(ForeignKey("event_clusters.id"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    agent_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class AlertDecisionRecord(Base):
