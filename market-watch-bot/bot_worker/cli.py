@@ -1,0 +1,623 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import subprocess
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from sqlalchemy import text
+
+from bot_worker.config import Settings, load_settings, starter_sources_yaml, write_default_files
+from bot_worker.db.session import make_engine, make_session_factory
+from bot_worker.retention import RetentionPolicy, retention_cutoffs
+from bot_worker.scoring import AlertThresholds, decide_alert
+from bot_worker.services import (
+    CORE_JOBS,
+    add_source,
+    add_watchlist_entry,
+    digest_preview,
+    fetch_source,
+    get_source,
+    import_sources_yaml,
+    list_sources,
+    record_job_run,
+    retention_preview,
+    run_pipeline,
+    run_retention,
+    seed_starter_sources,
+    set_source_enabled,
+    watchlist_entries,
+)
+from bot_worker.watchlist import match_watchlist
+
+app = typer.Typer(no_args_is_help=True, help="Market watch bot CLI")
+source_app = typer.Typer(no_args_is_help=True)
+worker_app = typer.Typer(no_args_is_help=True)
+job_app = typer.Typer(no_args_is_help=True)
+pipeline_app = typer.Typer(no_args_is_help=True)
+news_app = typer.Typer(no_args_is_help=True)
+event_app = typer.Typer(no_args_is_help=True)
+watchlist_app = typer.Typer(no_args_is_help=True)
+alert_app = typer.Typer(no_args_is_help=True)
+alert_policy_app = typer.Typer(no_args_is_help=True)
+digest_app = typer.Typer(no_args_is_help=True)
+retention_app = typer.Typer(no_args_is_help=True)
+health_app = typer.Typer(no_args_is_help=True)
+
+app.add_typer(source_app, name="source")
+app.add_typer(worker_app, name="worker")
+app.add_typer(job_app, name="job")
+app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(news_app, name="news")
+app.add_typer(event_app, name="event")
+app.add_typer(watchlist_app, name="watchlist")
+app.add_typer(alert_app, name="alert")
+alert_app.add_typer(alert_policy_app, name="policy")
+app.add_typer(digest_app, name="digest")
+app.add_typer(retention_app, name="retention")
+app.add_typer(health_app, name="health")
+
+
+def _settings() -> Settings:
+    return load_settings()
+
+
+def _run(coro: Awaitable[object]) -> object:
+    return asyncio.run(coro)
+
+
+async def _with_session(fn: Callable) -> object:
+    settings = _settings()
+    factory = make_session_factory(settings)
+    async with factory() as session, session.begin():
+        return await fn(session)
+
+
+def _echo_json(data: object) -> None:
+    typer.echo(json.dumps(data, indent=2, sort_keys=True, default=str))
+
+
+def _db_error(exc: Exception) -> None:
+    typer.echo(f"Database unavailable: {exc}")
+
+
+@app.command()
+def init(
+    project_dir: Annotated[Path, typer.Option(help="Directory for runtime files")] = Path("."),
+) -> None:
+    """Create default .env, .env.example, settings.yml, and starter source YAML."""
+    write_default_files(project_dir)
+    sources_file = project_dir / "starter-sources.yml"
+    if not sources_file.exists():
+        sources_file.write_text(starter_sources_yaml(), encoding="utf-8")
+    typer.echo(f"Initialized market-watch-bot files in {project_dir}")
+
+
+@app.command()
+def migrate() -> None:
+    """Run Alembic migrations against DATABASE_URL."""
+    result = subprocess.run(["uv", "run", "alembic", "upgrade", "head"], check=False)
+    if result.returncode == 0:
+        async def action(session):
+            added = await seed_starter_sources(session)
+            typer.echo(f"Seeded {added} starter sources")
+
+        try:
+            _run(_with_session(action))
+        except Exception as exc:  # noqa: BLE001
+            _db_error(exc)
+            raise typer.Exit(1) from exc
+    raise typer.Exit(result.returncode)
+
+
+@app.command()
+def doctor() -> None:
+    """Check configuration, database connectivity, and pgvector availability."""
+    settings = _settings()
+    typer.echo(f"app: {settings.app.name}")
+    typer.echo(f"environment: {settings.app.environment}")
+    typer.echo(f"database_url: {settings.database_url}")
+
+    async def check() -> None:
+        engine = make_engine(settings)
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+                vector = await conn.scalar(
+                    text("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+                )
+                typer.echo("database reachable: yes")
+                typer.echo(f"pgvector installed: {'yes' if vector else 'no'}")
+        finally:
+            await engine.dispose()
+
+    try:
+        _run(check())
+    except Exception as exc:  # noqa: BLE001 - doctor reports environment diagnostics
+        _db_error(exc)
+    typer.echo(f"openrouter configured: {'yes' if settings.openrouter_api_key else 'no'}")
+    typer.echo(f"alert channel: {settings.alerts.default_channel}")
+
+
+@source_app.command("add")
+def source_add(
+    kind: Annotated[str, typer.Argument(help="Source type, usually rss")] = "rss",
+    name: Annotated[str, typer.Option("--name")] = "",
+    url: Annotated[str, typer.Option("--url")] = "",
+    region: Annotated[str, typer.Option("--region")] = "global",
+    category: Annotated[str, typer.Option("--category")] = "global_macro",
+    language: Annotated[str, typer.Option("--language")] = "en",
+    score: Annotated[int, typer.Option("--score")] = 60,
+    interval: Annotated[int, typer.Option("--interval")] = 300,
+) -> None:
+    async def action(session):
+        source = await add_source(
+            session,
+            name=name,
+            url=url,
+            region=region,
+            category=category,
+            source_type=kind,
+            language=language,
+            score=score,
+            interval=interval,
+        )
+        typer.echo(f"Added source {source.id}: {source.name}")
+
+    try:
+        _run(_with_session(action))
+    except Exception as exc:  # noqa: BLE001
+        _db_error(exc)
+        raise typer.Exit(1) from exc
+
+
+@source_app.command("list")
+def source_list(enabled: Annotated[bool, typer.Option("--enabled")] = False) -> None:
+    async def action(session):
+        rows = await list_sources(session, enabled=True if enabled else None)
+        if not rows:
+            typer.echo("No sources found")
+        for source in rows:
+            state = "enabled" if source.enabled else "disabled"
+            typer.echo(f"{source.id}\t{source.name}\t{source.region}\t{source.category}\t{state}")
+
+    try:
+        _run(_with_session(action))
+    except Exception as exc:  # noqa: BLE001
+        _db_error(exc)
+
+
+@source_app.command("show")
+def source_show(identifier: str) -> None:
+    async def action(session):
+        source = await get_source(session, identifier)
+        if source is None:
+            typer.echo("Source not found")
+            raise typer.Exit(1)
+        _echo_json(
+            {
+                "id": source.id,
+                "name": source.name,
+                "url": source.url,
+                "region": source.region,
+                "category": source.category,
+                "enabled": source.enabled,
+                "score": source.source_score,
+            }
+        )
+
+    _run(_with_session(action))
+
+
+@source_app.command("test")
+def source_test(identifier: str) -> None:
+    async def action(session):
+        source = await get_source(session, identifier)
+        if source is None:
+            typer.echo("Source not found")
+            raise typer.Exit(1)
+        result = await fetch_source(session, source)
+        _echo_json(result)
+
+    _run(_with_session(action))
+
+
+@source_app.command("fetch")
+def source_fetch(identifier: str) -> None:
+    source_test(identifier)
+
+
+@source_app.command("enable")
+def source_enable(identifier: str) -> None:
+    async def action(session):
+        ok = await set_source_enabled(session, identifier, True)
+        typer.echo("enabled" if ok else "source not found")
+
+    _run(_with_session(action))
+
+
+@source_app.command("disable")
+def source_disable(identifier: str) -> None:
+    async def action(session):
+        ok = await set_source_enabled(session, identifier, False)
+        typer.echo("disabled" if ok else "source not found")
+
+    _run(_with_session(action))
+
+
+@source_app.command("import")
+def source_import(path: Path) -> None:
+    sources = import_sources_yaml(path)
+
+    async def action(session):
+        count = 0
+        for source in sources:
+            await add_source(
+                session,
+                name=str(source["name"]),
+                url=str(source["url"]),
+                region=str(source.get("region", "global")),
+                category=str(source.get("category", "global_macro")),
+                source_type=str(source.get("type", "rss")),
+                language=str(source.get("language", "en")),
+                score=int(source.get("score", 60)),
+                interval=int(source.get("interval", 300)),
+            )
+            count += 1
+        typer.echo(f"Imported {count} sources")
+
+    _run(_with_session(action))
+
+
+@source_app.command("export")
+def source_export(out: Annotated[Path, typer.Option("--out")] = Path("sources.yaml")) -> None:
+    async def action(session):
+        rows = await list_sources(session)
+        data = {
+            "sources": [
+                {
+                    "name": source.name,
+                    "url": source.url,
+                    "region": source.region,
+                    "category": source.category,
+                    "type": source.source_type,
+                    "language": source.language,
+                    "score": source.source_score,
+                    "interval": source.polling_interval_seconds,
+                }
+                for source in rows
+            ]
+        }
+        import yaml
+
+        out.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        typer.echo(f"Exported {len(rows)} sources to {out}")
+
+    _run(_with_session(action))
+
+
+@worker_app.command("start")
+def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> None:
+    jobs = only.split(",") if only else CORE_JOBS
+    typer.echo(f"Starting worker loop for jobs: {', '.join(jobs)}")
+    typer.echo("Use Ctrl+C to stop")
+
+    async def loop() -> None:
+        while True:
+
+            async def action(session):
+                result = await run_pipeline(session)
+                await record_job_run(session, "pipeline", result)
+                typer.echo(f"pipeline: {result}")
+
+            await _with_session(action)
+            await asyncio.sleep(_settings().bot.polling_interval_seconds)
+
+    _run(loop())
+
+
+@worker_app.command("status")
+def worker_status() -> None:
+    typer.echo("worker status: command-driven MVP; no supervisor state recorded")
+
+
+@worker_app.command("logs")
+def worker_logs(tail: Annotated[int, typer.Option("--tail")] = 200) -> None:
+    typer.echo(f"worker logs are stdout/stderr in MVP (tail requested: {tail})")
+
+
+@worker_app.command("health")
+def worker_health() -> None:
+    health_pipeline()
+
+
+@job_app.command("list")
+def job_list() -> None:
+    for job in CORE_JOBS:
+        typer.echo(job)
+
+
+@job_app.command("run")
+def job_run(name: str, dry_run: Annotated[bool, typer.Option("--dry-run")] = False) -> None:
+    if name == "pipeline":
+        pipeline_run(dry_run=dry_run)
+        return
+    if name == "retention_cleanup":
+        retention_run()
+        return
+    typer.echo(f"Job {name} is registered; direct implementation is deferred in MVP")
+
+
+@job_app.command("history")
+def job_history() -> None:
+    typer.echo(
+        "job history is stored in job_runs; use database queries for detailed MVP inspection"
+    )
+
+
+@job_app.command("failures")
+def job_failures() -> None:
+    typer.echo("failed job retry queue is deferred in MVP")
+
+
+@pipeline_app.command("run")
+def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) -> None:
+    if dry_run:
+        typer.echo("Dry run pipeline: poll -> normalize -> dedupe -> cluster -> score -> alert")
+        return
+
+    async def action(session):
+        result = await run_pipeline(session)
+        await record_job_run(session, "pipeline", result)
+        _echo_json(result)
+
+    try:
+        _run(_with_session(action))
+    except Exception as exc:  # noqa: BLE001
+        _db_error(exc)
+        raise typer.Exit(1) from exc
+
+
+@pipeline_app.command("inspect")
+def pipeline_inspect(item: Annotated[str, typer.Option("--item")]) -> None:
+    typer.echo(f"Pipeline inspection for {item} is available after database ingestion")
+
+
+@pipeline_app.command("stats")
+def pipeline_stats() -> None:
+    health_pipeline()
+
+
+@news_app.command("list")
+def news_list() -> None:
+    typer.echo("news list requires database-backed normalized_news_items")
+
+
+@news_app.command("show")
+def news_show(identifier: str) -> None:
+    typer.echo(f"news show {identifier} requires database-backed normalized_news_items")
+
+
+@news_app.command("search")
+def news_search(query: str) -> None:
+    typer.echo(f"news search for {query!r} uses title/snippet metadata in MVP")
+
+
+@event_app.command("list")
+def event_list() -> None:
+    async def action(session):
+        rows = await digest_preview(session)
+        for event in rows:
+            typer.echo(
+                f"{event.id}\t{event.final_score}\t{event.status}\t{event.canonical_headline}"
+            )
+
+    _run(_with_session(action))
+
+
+@event_app.command("show")
+def event_show(identifier: str) -> None:
+    typer.echo(f"event show {identifier} requires event_clusters data")
+
+
+@event_app.command("merge")
+def event_merge(left: str, right: str) -> None:
+    typer.echo(f"event merge requested for {left} and {right}; manual merge is deferred in MVP")
+
+
+@event_app.command("rescore")
+def event_rescore(identifier: str) -> None:
+    typer.echo(f"event rescore requested for {identifier}; scoring runs during pipeline in MVP")
+
+
+@event_app.command("mark")
+def event_mark(identifier: str, status: Annotated[str, typer.Option("--status")]) -> None:
+    typer.echo(f"event mark requested for {identifier}: {status}; direct update is deferred in MVP")
+
+
+@watchlist_app.command("add")
+def watchlist_add(
+    name: Annotated[str, typer.Option("--name")],
+    symbol: Annotated[str | None, typer.Option("--symbol")] = None,
+    entity_type: Annotated[str, typer.Option("--type")] = "macro_theme",
+    region: Annotated[str | None, typer.Option("--region")] = None,
+    asset_class: Annotated[str | None, typer.Option("--asset-class")] = None,
+    tier: Annotated[str, typer.Option("--tier")] = "D",
+    alias: Annotated[list[str] | None, typer.Option("--alias")] = None,
+) -> None:
+    async def action(session):
+        entry = await add_watchlist_entry(
+            session,
+            name=name,
+            symbol=symbol,
+            tier=tier,
+            entity_type=entity_type,
+            region=region,
+            asset_class=asset_class,
+            aliases=alias or [],
+        )
+        typer.echo(f"Added watchlist entry {entry.id}: {entry.name}")
+
+    _run(_with_session(action))
+
+
+@watchlist_app.command("list")
+def watchlist_list() -> None:
+    async def action(session):
+        rows = await watchlist_entries(session)
+        for row in rows:
+            typer.echo(f"{row.symbol or '-'}\t{row.name}\t{row.tier}\t{row.entity_type}")
+
+    _run(_with_session(action))
+
+
+@watchlist_app.command("show")
+def watchlist_show(identifier: str) -> None:
+    typer.echo(f"watchlist show {identifier} is deferred in MVP")
+
+
+@watchlist_app.command("match")
+def watchlist_match(text_value: str) -> None:
+    async def action(session):
+        matches = match_watchlist(text_value, await watchlist_entries(session))
+        if not matches:
+            typer.echo("No matches")
+        for match in matches:
+            typer.echo(f"{match.symbol or '-'}\t{match.name}\t{match.tier}\t{match.entity_type}")
+
+    _run(_with_session(action))
+
+
+@alert_policy_app.command("show")
+def alert_policy_show() -> None:
+    settings = _settings()
+    _echo_json(
+        {
+            "immediate_threshold": settings.alerts.immediate_threshold,
+            "watchlist_threshold": settings.alerts.watchlist_threshold,
+            "digest_threshold": settings.alerts.digest_threshold,
+            "default_channel": settings.alerts.default_channel,
+        }
+    )
+
+
+@alert_policy_app.command("set")
+def alert_policy_set(key: str, value: str) -> None:
+    typer.echo(
+        f"Policy setting {key}={value} accepted for runtime config; "
+        "persistent edit is manual in MVP"
+    )
+
+
+@alert_policy_app.command("reset")
+def alert_policy_reset() -> None:
+    typer.echo("Alert policy reset uses defaults from settings.yml in MVP")
+
+
+@alert_app.command("test")
+def alert_test(score: Annotated[int, typer.Option("--score")] = 80) -> None:
+    settings = _settings()
+    decision = decide_alert(
+        score,
+        AlertThresholds(
+            immediate=settings.alerts.immediate_threshold,
+            watchlist=settings.alerts.watchlist_threshold,
+            digest=settings.alerts.digest_threshold,
+        ),
+    )
+    _echo_json({"score": score, "decision": decision.decision, "reason": decision.reason})
+
+
+@alert_app.command("list")
+def alert_list() -> None:
+    typer.echo("alert decisions are stored in alert_decisions after pipeline runs")
+
+
+@alert_app.command("show")
+def alert_show(identifier: str) -> None:
+    typer.echo(f"alert show {identifier} requires alert_decisions data")
+
+
+@digest_app.command("preview")
+def digest_preview_command(limit: Annotated[int, typer.Option("--limit")] = 20) -> None:
+    async def action(session):
+        rows = await digest_preview(session, limit=limit)
+        if not rows:
+            typer.echo("No digest events")
+        for event in rows:
+            section = event.regions[0] if event.regions else "global"
+            typer.echo(f"[{section}] {event.final_score} {event.canonical_headline}")
+
+    _run(_with_session(action))
+
+
+@digest_app.command("build")
+def digest_build() -> None:
+    digest_preview_command()
+
+
+@digest_app.command("history")
+def digest_history() -> None:
+    typer.echo("digest history is represented by event and alert history in MVP")
+
+
+@retention_app.command("show")
+def retention_show() -> None:
+    settings = _settings()
+    _echo_json(settings.retention.model_dump())
+
+
+@retention_app.command("preview")
+def retention_preview_command() -> None:
+    settings = _settings()
+    policy = RetentionPolicy(**settings.retention.model_dump())
+
+    async def action(session):
+        _echo_json(await retention_preview(session, policy))
+
+    _run(_with_session(action))
+
+
+@retention_app.command("run")
+def retention_run() -> None:
+    settings = _settings()
+    policy = RetentionPolicy(**settings.retention.model_dump())
+
+    async def action(session):
+        _echo_json(await run_retention(session, policy))
+
+    _run(_with_session(action))
+
+
+@health_app.command("sources")
+def health_sources() -> None:
+    source_list()
+
+
+@health_app.command("jobs")
+def health_jobs() -> None:
+    job_list()
+
+
+@health_app.command("db")
+def health_db() -> None:
+    doctor()
+
+
+@health_app.command("pipeline")
+def health_pipeline() -> None:
+    typer.echo("pipeline jobs:")
+    for job in CORE_JOBS:
+        typer.echo(f"- {job}")
+    settings = _settings()
+    cutoffs = retention_cutoffs(
+        datetime.now(UTC),
+        RetentionPolicy(**settings.retention.model_dump()),
+    )
+    typer.echo("retention cutoffs:")
+    for key, value in cutoffs.items():
+        typer.echo(f"- {key}: {value.isoformat()}")

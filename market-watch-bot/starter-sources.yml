@@ -1,0 +1,33 @@
+sources:
+- name: Federal Reserve Press Releases
+  url: https://www.federalreserve.gov/feeds/press_all.xml
+  region: us
+  category: global_macro
+  type: official
+  language: en
+  score: 100
+  interval: 900
+- name: Investing.com News
+  url: https://www.investing.com/rss/news.rss
+  region: global
+  category: global_macro
+  type: rss
+  language: en
+  score: 70
+  interval: 600
+- name: Vietstock
+  url: https://vietstock.vn/rss.htm
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+  interval: 900
+- name: CoinDesk
+  url: https://www.coindesk.com/arc/outboundfeeds/rss/
+  region: crypto
+  category: crypto
+  type: rss
+  language: en
+  score: 75
+  interval: 600

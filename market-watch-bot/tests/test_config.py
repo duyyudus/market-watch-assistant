@@ -1,0 +1,51 @@
+from pathlib import Path
+
+from bot_worker.config import load_settings
+
+
+def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    settings_file = tmp_path / "settings.yml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app",
+                "OPENROUTER_API_KEY=secret-key",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings_file.write_text(
+        """
+app:
+  name: custom-watch
+  environment: test
+bot:
+  polling_interval_seconds: 42
+alerts:
+  immediate_threshold: 77
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file, settings_file=settings_file)
+
+    assert settings.database_url == "postgresql+asyncpg://user:pass@db:5432/app"
+    assert settings.openrouter_api_key == "secret-key"
+    assert settings.app.name == "custom-watch"
+    assert settings.app.environment == "test"
+    assert settings.bot.polling_interval_seconds == 42
+    assert settings.alerts.immediate_threshold == 77
+
+
+def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
+    settings = load_settings(
+        env_file=tmp_path / "missing.env", settings_file=tmp_path / "missing.yml"
+    )
+
+    assert (
+        settings.database_url
+        == "postgresql+asyncpg://postgres:postgres@192.168.100.39:5432/market_watch_assistant"
+    )
+    assert settings.bot.default_retention_days == 60
+    assert settings.alerts.watchlist_threshold == 55
