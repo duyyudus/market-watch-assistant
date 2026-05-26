@@ -23,6 +23,10 @@ embeddings:
   dimensions: 1536
   api_key_env: OPENROUTER_API_KEY
   version: v1
+  cluster_attach_enabled: true
+  cluster_attach_lookback_days: 7
+  cluster_attach_min_similarity: 0.88
+  cluster_attach_candidate_limit: 20
 
 market_data:
   vn_base_url: http://192.168.100.39:8020
@@ -51,5 +55,4 @@ logging:
   console: true
   max_lines: 10000
   backup_count: 5
-
 

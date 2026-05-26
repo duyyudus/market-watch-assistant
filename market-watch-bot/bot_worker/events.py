@@ -27,14 +27,62 @@ class EventClusterDraft:
     top_source_score: int = 0
 
 
+@dataclass(frozen=True)
+class VectorClusterCandidate:
+    cluster_id: str
+    similarity: float
+    regions: list[str]
+    asset_classes: list[str]
+    affected_entities: list[str]
+
+
 def _similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left.casefold(), right.casefold()).ratio()
+
+
+def _normalized_set(values: list[str]) -> set[str]:
+    return {value.casefold() for value in values if value}
 
 
 def _entity_overlap(left: set[str], right: set[str]) -> bool:
     if not left or not right:
         return False
     return bool({item.casefold() for item in left} & {item.casefold() for item in right})
+
+
+def vector_similarity_score(similarity: float) -> int:
+    return round(similarity * 100)
+
+
+def is_vector_cluster_attachable(
+    candidate: VectorClusterCandidate,
+    *,
+    item_region: str,
+    item_asset_classes: list[str],
+    item_entities: list[str],
+    min_similarity: float,
+) -> bool:
+    if candidate.similarity < min_similarity:
+        return False
+
+    candidate_regions = _normalized_set(candidate.regions)
+    region = item_region.casefold()
+    if region not in candidate_regions and "global" not in candidate_regions and region != "global":
+        return False
+
+    candidate_asset_classes = _normalized_set(candidate.asset_classes)
+    item_asset_class_set = _normalized_set(item_asset_classes)
+    if candidate_asset_classes and item_asset_class_set and not (
+        candidate_asset_classes & item_asset_class_set
+    ):
+        return False
+
+    candidate_entities = _normalized_set(candidate.affected_entities)
+    item_entity_set = _normalized_set(item_entities)
+    if candidate_entities and item_entity_set:
+        return bool(candidate_entities & item_entity_set)
+
+    return True
 
 
 def cluster_candidates(candidates: list[EventCandidate]) -> list[EventClusterDraft]:

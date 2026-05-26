@@ -44,6 +44,10 @@ class EmbeddingSettings(BaseModel):
     dimensions: int = 1536
     api_key_env: str = "OPENROUTER_API_KEY"
     version: str = "v1"
+    cluster_attach_enabled: bool = True
+    cluster_attach_lookback_days: int = 7
+    cluster_attach_min_similarity: float = 0.88
+    cluster_attach_candidate_limit: int = 20
 
 
 class MarketDataConfig(BaseModel):

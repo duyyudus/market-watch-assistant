@@ -23,6 +23,10 @@ class EmbeddingConfig:
     api_key_env: str = "OPENROUTER_API_KEY"
     api_key: str | None = None
     version: str = "v1"
+    cluster_attach_enabled: bool = True
+    cluster_attach_lookback_days: int = 7
+    cluster_attach_min_similarity: float = 0.88
+    cluster_attach_candidate_limit: int = 20
 
     @classmethod
     def from_settings(cls, settings: Settings) -> EmbeddingConfig:
@@ -37,6 +41,10 @@ class EmbeddingConfig:
             api_key_env=settings.embeddings.api_key_env,
             api_key=api_key,
             version=settings.embeddings.version,
+            cluster_attach_enabled=settings.embeddings.cluster_attach_enabled,
+            cluster_attach_lookback_days=settings.embeddings.cluster_attach_lookback_days,
+            cluster_attach_min_similarity=settings.embeddings.cluster_attach_min_similarity,
+            cluster_attach_candidate_limit=settings.embeddings.cluster_attach_candidate_limit,
         )
 
 

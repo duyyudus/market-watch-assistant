@@ -23,6 +23,10 @@ def test_load_settings_uses_openrouter_embedding_defaults(tmp_path) -> None:
     assert settings.embeddings.model == "openai/text-embedding-3-large"
     assert settings.embeddings.dimensions == 1536
     assert settings.embeddings.api_key_env == "OPENROUTER_API_KEY"
+    assert settings.embeddings.cluster_attach_enabled is True
+    assert settings.embeddings.cluster_attach_lookback_days == 7
+    assert settings.embeddings.cluster_attach_min_similarity == 0.88
+    assert settings.embeddings.cluster_attach_candidate_limit == 20
 
 
 @pytest.mark.asyncio
