@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select
@@ -25,9 +26,19 @@ from bot_worker.events import (
     is_vector_cluster_attachable,
     vector_similarity_score,
 )
+from bot_worker.llm import LLMConfig
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
+from bot_worker.services.llm import resolve_llm_cluster_decision
 from bot_worker.services.watchlists import news_item_entities, news_item_tickers, watchlist_entries
 from bot_worker.watchlist import WatchlistEntry, match_watchlist
+
+
+@dataclass(frozen=True)
+class ClusterBuildStats:
+    created_clusters: int = 0
+    attached_existing: int = 0
+    llm_cluster_decisions: int = 0
+    llm_cluster_attaches: int = 0
 
 
 def pgvector_literal(vector: list[float]) -> str:
@@ -124,6 +135,47 @@ def _rescore_cluster(cluster: EventCluster) -> None:
     cluster.relevance_score = score.relevance_score
     cluster.final_score = score.final_score
     cluster.alert_level = decide_alert(score.final_score, AlertThresholds()).decision
+
+
+def _candidate_has_plausible_context(
+    candidate: VectorClusterCandidate,
+    *,
+    item_region: str,
+    item_asset_classes: list[str],
+) -> bool:
+    candidate_regions = {value.casefold() for value in candidate.regions if value}
+    region = item_region.casefold()
+    if region not in candidate_regions and "global" not in candidate_regions and region != "global":
+        return False
+
+    candidate_asset_classes = {value.casefold() for value in candidate.asset_classes if value}
+    item_asset_class_set = {value.casefold() for value in item_asset_classes if value}
+    return not (
+        candidate_asset_classes
+        and item_asset_class_set
+        and not (candidate_asset_classes & item_asset_class_set)
+    )
+
+
+def _is_gray_zone_cluster_candidate(
+    candidate: VectorClusterCandidate,
+    *,
+    item_region: str,
+    item_asset_classes: list[str],
+    embedding_config: EmbeddingConfig,
+    llm_config: LLMConfig | None,
+) -> bool:
+    if llm_config is None:
+        return False
+    if candidate.similarity < llm_config.cluster_ambiguous_min_similarity:
+        return False
+    if candidate.similarity >= embedding_config.cluster_attach_min_similarity:
+        return False
+    return _candidate_has_plausible_context(
+        candidate,
+        item_region=item_region,
+        item_asset_classes=item_asset_classes,
+    )
 async def _attach_news_item_to_cluster(
     session: AsyncSession,
     *,
@@ -329,7 +381,8 @@ async def build_event_clusters(
     *,
     limit: int = 500,
     embedding_config: EmbeddingConfig | None = None,
-) -> int:
+    llm_config: LLMConfig | None = None,
+) -> ClusterBuildStats:
     existing_news = select(EventClusterItem.news_item_id)
     stmt = (
         select(NormalizedNewsItem)
@@ -339,9 +392,12 @@ async def build_event_clusters(
     )
     items = list((await session.scalars(stmt)).all())
     if not items:
-        return 0
+        return ClusterBuildStats()
     watch_entries = await watchlist_entries(session)
     candidates: list[EventCandidate] = []
+    attached_existing = 0
+    llm_cluster_decisions = 0
+    llm_cluster_attaches = 0
     for item in items:
         candidate = await _candidate_from_item(session, item, watch_entries)
         entities = candidate.entities
@@ -375,6 +431,48 @@ async def build_event_clusters(
                     tickers=tickers,
                     similarity=vector_candidate.similarity,
                 )
+                attached_existing += 1
+                attached = True
+                break
+            if attached:
+                continue
+            for vector_candidate in vector_candidates[: (
+                llm_config.cluster_decision_candidate_limit if llm_config is not None else 0
+            )]:
+                if not _is_gray_zone_cluster_candidate(
+                    vector_candidate,
+                    item_region=item.region,
+                    item_asset_classes=item.asset_classes,
+                    embedding_config=embedding_config,
+                    llm_config=llm_config,
+                ):
+                    continue
+                cluster = await session.get(EventCluster, vector_candidate.cluster_id)
+                if cluster is None:
+                    continue
+                attempted, should_attach = await resolve_llm_cluster_decision(
+                    session=session,
+                    item=item,
+                    cluster=cluster,
+                    similarity=vector_candidate.similarity,
+                    config=llm_config,
+                    entities=entities,
+                    tickers=tickers,
+                )
+                if attempted:
+                    llm_cluster_decisions += 1
+                if not should_attach:
+                    continue
+                await _attach_news_item_to_cluster(
+                    session,
+                    item=item,
+                    cluster=cluster,
+                    entities=entities,
+                    tickers=tickers,
+                    similarity=vector_candidate.similarity,
+                )
+                attached_existing += 1
+                llm_cluster_attaches += 1
                 attached = True
                 break
         if attached:
@@ -416,4 +514,9 @@ async def build_event_clusters(
         await session.flush()
         for news_id in draft.news_ids:
             session.add(EventClusterItem(event_cluster_id=cluster.id, news_item_id=news_id))
-    return len(drafts)
+    return ClusterBuildStats(
+        created_clusters=len(drafts),
+        attached_existing=attached_existing,
+        llm_cluster_decisions=llm_cluster_decisions,
+        llm_cluster_attaches=llm_cluster_attaches,
+    )

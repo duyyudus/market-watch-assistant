@@ -20,6 +20,7 @@ from bot_worker.services.embeddings import (
     embed_pending_news_items,
 )
 from bot_worker.services.events import (
+    ClusterBuildStats,
     build_event_clusters,
     pgvector_literal,
     recluster_recent_event_clusters,
@@ -80,6 +81,7 @@ from bot_worker.services.watchlists import (
 __all__ = [
     "AlertDeliveryConfig",
     "CORE_JOBS",
+    "ClusterBuildStats",
     "add_source",
     "add_watchlist_entry",
     "baseline_reset_preview",

@@ -46,6 +46,10 @@ llm:
   relevance_score_threshold: 80
   min_modifier: -10
   max_modifier: 10
+  cluster_decision_enabled: true
+  cluster_ambiguous_min_similarity: 0.78
+  cluster_decision_min_confidence: 70
+  cluster_decision_candidate_limit: 3
 
 market_data:
   vn_base_url: http://192.168.100.39:8020

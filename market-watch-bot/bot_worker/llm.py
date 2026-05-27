@@ -19,6 +19,7 @@ PROMPT_VERSION = "event-v1"
 CLASSIFY_PROMPT_VERSION = "classify-v1"
 SCORE_PROMPT_VERSION = "score-v1"
 SUMMARY_PROMPT_VERSION = "summarize-v1"
+CLUSTER_DECISION_PROMPT_VERSION = "cluster-decision-v1"
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,10 @@ class LLMConfig:
     relevance_score_threshold: int = 80
     min_modifier: int = -10
     max_modifier: int = 10
+    cluster_decision_enabled: bool = True
+    cluster_ambiguous_min_similarity: float = 0.78
+    cluster_decision_min_confidence: int = 70
+    cluster_decision_candidate_limit: int = 3
 
     @classmethod
     def from_settings(cls, settings: Settings) -> LLMConfig:
@@ -64,6 +69,10 @@ class LLMConfig:
             relevance_score_threshold=settings.llm.relevance_score_threshold,
             min_modifier=settings.llm.min_modifier,
             max_modifier=settings.llm.max_modifier,
+            cluster_decision_enabled=settings.llm.cluster_decision_enabled,
+            cluster_ambiguous_min_similarity=settings.llm.cluster_ambiguous_min_similarity,
+            cluster_decision_min_confidence=settings.llm.cluster_decision_min_confidence,
+            cluster_decision_candidate_limit=settings.llm.cluster_decision_candidate_limit,
         )
 
 
@@ -142,6 +151,17 @@ class LLMEventScore(BaseModel):
     @field_validator("modifier_reason")
     @classmethod
     def normalize_modifier_reason(cls, value: str) -> str:
+        return normalize_text(value)
+
+
+class LLMClusterDecision(BaseModel):
+    decision: str = Field(pattern="^(same_event|related_but_separate|different_event)$")
+    confidence: int = Field(ge=0, le=100)
+    rationale: str = Field(min_length=1)
+
+    @field_validator("rationale")
+    @classmethod
+    def normalize_rationale(cls, value: str) -> str:
         return normalize_text(value)
 
 
@@ -247,6 +267,49 @@ def build_news_classification_prompt(item: NormalizedNewsItem) -> str:
             f"Current region: {item.region}",
             f"Current asset classes: {', '.join(item.asset_classes or [])}",
             f"Language: {item.language}",
+        ]
+    )
+
+
+def build_cluster_decision_prompt(
+    item: NormalizedNewsItem,
+    cluster: EventCluster,
+    *,
+    similarity: float,
+    item_entities: list[str],
+    item_tickers: list[str],
+) -> str:
+    return "\n".join(
+        [
+            "Decide whether this news item belongs to this existing event cluster.",
+            "Return only JSON matching the requested schema.",
+            "Use same_event only when both inputs describe the same real-world market event.",
+            "Use related_but_separate for same topic/theme but a different event or update.",
+            "Use different_event for unrelated catalysts.",
+            "",
+            "News item:",
+            f"News item id: {item.id}",
+            f"Title: {normalize_text(item.title)}",
+            f"Snippet: {normalize_text(item.snippet) if item.snippet else ''}",
+            f"Source: {normalize_text(item.source_name)}",
+            f"Source score: {item.source_score}",
+            f"Region: {item.region}",
+            f"Asset classes: {', '.join(item.asset_classes or [])}",
+            f"Entities: {', '.join(item_entities)}",
+            f"Tickers: {', '.join(item_tickers)}",
+            "",
+            "Existing event cluster:",
+            f"Event cluster id: {cluster.id}",
+            f"Headline: {normalize_text(cluster.canonical_headline)}",
+            f"Summary: {normalize_text(cluster.summary) if cluster.summary else ''}",
+            f"Status: {cluster.status}",
+            f"Regions: {', '.join(cluster.regions or [])}",
+            f"Asset classes: {', '.join(cluster.asset_classes or [])}",
+            f"Affected entities: {', '.join(cluster.affected_entities or [])}",
+            f"Affected tickers: {', '.join(cluster.affected_tickers or [])}",
+            f"Source count: {cluster.source_count}",
+            f"Top source score: {cluster.top_source_score}",
+            f"Embedding similarity: {similarity:.4f}",
         ]
     )
 
@@ -430,6 +493,21 @@ class OpenRouterChatProvider:
             ),
         )
         return LLMEventScore.model_validate(result), usage
+
+    async def decide_cluster_match(
+        self, prompt: str
+    ) -> tuple[LLMClusterDecision, dict[str, object]]:
+        result, usage = await self.complete_structured(
+            prompt=prompt,
+            schema_name="market_cluster_decision",
+            schema_model=LLMClusterDecision,
+            system_message=(
+                "You decide whether a market news item belongs to an existing event "
+                "cluster. Be conservative: only choose same_event for the same specific "
+                "real-world event, not just a related theme."
+            ),
+        )
+        return LLMClusterDecision.model_validate(result), usage
 
 
 def llm_provider(config: LLMConfig) -> OpenRouterChatProvider:

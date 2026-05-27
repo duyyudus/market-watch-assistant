@@ -229,9 +229,15 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
         order.append("embed_news")
         return 0
 
-    async def cluster_zero(*_args, **_kwargs) -> int:
+    async def cluster_zero(*_args, **kwargs):
         order.append("cluster")
-        return 0
+        assert kwargs["llm_config"].api_key == "key"
+        return pipeline_services.ClusterBuildStats(
+            created_clusters=0,
+            attached_existing=1,
+            llm_cluster_decisions=1,
+            llm_cluster_attaches=1,
+        )
 
     async def one_alert(_session) -> int:
         return 1
@@ -260,6 +266,10 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
 
     assert order == ["extract_entities", "embed_news", "cluster"]
     assert result["entities_extracted"] == 0
+    assert result["clusters"] == 0
+    assert result["cluster_attached_existing"] == 1
+    assert result["llm_cluster_decisions"] == 1
+    assert result["llm_cluster_attaches"] == 1
     assert result["alerts"] == 1
     assert result["delivered_alerts"] == 2
     assert result["failed_alert_deliveries"] == 1

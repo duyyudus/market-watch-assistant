@@ -13,7 +13,14 @@ from bot_worker.db.models import (
     NewsEntity,
     NormalizedNewsItem,
 )
-from bot_worker.llm import LLMAnalysis, LLMClassification, LLMConfig, LLMEventScore, LLMEventSummary
+from bot_worker.llm import (
+    LLMAnalysis,
+    LLMClassification,
+    LLMClusterDecision,
+    LLMConfig,
+    LLMEventScore,
+    LLMEventSummary,
+)
 
 
 class ScalarRows:
@@ -93,6 +100,22 @@ class FakeTargetSession:
         return None
 
 
+class FakeClusterDecisionSession:
+    def __init__(self) -> None:
+        self.added: list[object] = []
+        self.scalar_calls = 0
+
+    async def scalar(self, _stmt):
+        self.scalar_calls += 1
+        return None
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def flush(self) -> None:
+        return None
+
+
 class FakeEntityExtractionSession:
     def __init__(
         self,
@@ -157,6 +180,18 @@ def news_item(item_id: str, title: str | None = None) -> NormalizedNewsItem:
     )
 
 
+def cluster_candidate_event() -> EventCluster:
+    return EventCluster(
+        id="evt_1",
+        canonical_headline="Oil jumps after tanker incident near Hormuz",
+        regions=["global"],
+        asset_classes=["commodity"],
+        affected_entities=["Hormuz", "Brent"],
+        source_count=2,
+        top_source_score=85,
+    )
+
+
 @pytest.mark.asyncio
 async def test_enrich_event_clusters_skips_when_api_key_missing() -> None:
     event = EventCluster(
@@ -176,6 +211,121 @@ async def test_enrich_event_clusters_skips_when_api_key_missing() -> None:
 
     assert count == 0
     assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_llm_cluster_decision_attaches_high_confidence_same_event(
+    monkeypatch,
+) -> None:
+    item = news_item("news_1", title="Brent rises as Hormuz shipping risks increase")
+    item.region = "global"
+    item.asset_classes = ["commodity"]
+    session = FakeClusterDecisionSession()
+
+    class FakeProvider:
+        async def decide_cluster_match(
+            self,
+            prompt: str,
+        ) -> tuple[LLMClusterDecision, dict[str, int]]:
+            assert "Brent rises as Hormuz" in prompt
+            return (
+                LLMClusterDecision(
+                    decision="same_event",
+                    confidence=84,
+                    rationale="Both describe the same Hormuz shipping disruption.",
+                ),
+                {"total_tokens": 120},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    attempted, should_attach = await llm_services.resolve_llm_cluster_decision(
+        session=session,
+        item=item,
+        cluster=cluster_candidate_event(),
+        similarity=0.87,
+        config=LLMConfig(enabled=True, api_key="key"),
+        entities=["Hormuz", "Brent"],
+        tickers=[],
+    )
+
+    assert attempted
+    assert should_attach
+    run = next(value for value in session.added if isinstance(value, LLMAnalysisRun))
+    assert run.target_type == "cluster_candidate"
+    assert run.target_id == llm_services.cluster_candidate_target_id("news_1", "evt_1")
+    assert run.prompt_version == "cluster-decision-v1"
+    assert run.status == "succeeded"
+    assert run.result["decision"] == "same_event"
+    assert run.usage["total_tokens"] == 120
+
+
+@pytest.mark.asyncio
+async def test_resolve_llm_cluster_decision_rejects_low_confidence_same_event(
+    monkeypatch,
+) -> None:
+    item = news_item("news_1", title="Brent rises as Hormuz shipping risks increase")
+    session = FakeClusterDecisionSession()
+
+    class FakeProvider:
+        async def decide_cluster_match(
+            self,
+            _prompt: str,
+        ) -> tuple[LLMClusterDecision, dict[str, int]]:
+            return (
+                LLMClusterDecision(
+                    decision="same_event",
+                    confidence=69,
+                    rationale="Possibly the same incident, but not certain enough.",
+                ),
+                {"total_tokens": 80},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    attempted, should_attach = await llm_services.resolve_llm_cluster_decision(
+        session=session,
+        item=item,
+        cluster=cluster_candidate_event(),
+        similarity=0.87,
+        config=LLMConfig(enabled=True, api_key="key"),
+        entities=["Hormuz"],
+        tickers=[],
+    )
+
+    assert attempted
+    assert not should_attach
+    run = next(value for value in session.added if isinstance(value, LLMAnalysisRun))
+    assert run.status == "succeeded"
+    assert run.result["confidence"] == 69
+
+
+@pytest.mark.asyncio
+async def test_resolve_llm_cluster_decision_fails_open_on_provider_error(monkeypatch) -> None:
+    item = news_item("news_1", title="Brent rises as Hormuz shipping risks increase")
+    session = FakeClusterDecisionSession()
+
+    class FakeProvider:
+        async def decide_cluster_match(self, _prompt: str):
+            raise ValueError("provider unavailable")
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    attempted, should_attach = await llm_services.resolve_llm_cluster_decision(
+        session=session,
+        item=item,
+        cluster=cluster_candidate_event(),
+        similarity=0.87,
+        config=LLMConfig(enabled=True, api_key="key"),
+        entities=["Hormuz"],
+        tickers=[],
+    )
+
+    assert attempted
+    assert not should_attach
+    run = next(value for value in session.added if isinstance(value, LLMAnalysisRun))
+    assert run.status == "failed"
+    assert run.error_message == "provider unavailable"
 
 
 @pytest.mark.asyncio

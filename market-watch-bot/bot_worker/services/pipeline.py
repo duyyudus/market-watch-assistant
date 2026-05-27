@@ -17,7 +17,7 @@ from bot_worker.llm import (
 from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pending_alerts
 from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
-from bot_worker.services.events import build_event_clusters
+from bot_worker.services.events import ClusterBuildStats, build_event_clusters
 from bot_worker.services.ingestion import mark_exact_duplicates, normalize_pending_raw_items
 from bot_worker.services.llm import enrich_event_clusters_with_llm, extract_entities_with_llm
 from bot_worker.services.sources import fetch_source
@@ -105,8 +105,18 @@ async def run_pipeline(
         logger.info("  ⚠ Embedding config not provided, skipping news embedding generation")
 
     logger.info("─── [Stage 6/9] Building Event Clusters ───")
-    clusters = await build_event_clusters(session, embedding_config=embedding_config)
-    logger.info("  ✓ Built %d new event clusters", clusters)
+    cluster_stats: ClusterBuildStats = await build_event_clusters(
+        session,
+        embedding_config=embedding_config,
+        llm_config=llm_config,
+    )
+    logger.info("  ✓ Built %d new event clusters", cluster_stats.created_clusters)
+    logger.info(
+        "  ✓ Attached %d items to existing clusters (%d LLM decisions, %d LLM attaches)",
+        cluster_stats.attached_existing,
+        cluster_stats.llm_cluster_decisions,
+        cluster_stats.llm_cluster_attaches,
+    )
 
     event_embeddings = 0
     logger.info("─── [Stage 7/9] Generating Event Embeddings ───")
@@ -152,7 +162,10 @@ async def run_pipeline(
         "duplicates": duplicates,
         "entities_extracted": entities_extracted,
         "news_embeddings": news_embeddings,
-        "clusters": clusters,
+        "clusters": cluster_stats.created_clusters,
+        "cluster_attached_existing": cluster_stats.attached_existing,
+        "llm_cluster_decisions": cluster_stats.llm_cluster_decisions,
+        "llm_cluster_attaches": cluster_stats.llm_cluster_attaches,
         "event_embeddings": event_embeddings,
         "llm_enriched": llm_enriched,
         "alerts": alerts,

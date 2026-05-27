@@ -15,12 +15,15 @@ from bot_worker.db.models import (
 )
 from bot_worker.llm import (
     CLASSIFY_PROMPT_VERSION,
+    CLUSTER_DECISION_PROMPT_VERSION,
     PROMPT_VERSION,
     SCORE_PROMPT_VERSION,
     SUMMARY_PROMPT_VERSION,
     LLMAnalysis,
     LLMClassification,
+    LLMClusterDecision,
     LLMConfig,
+    build_cluster_decision_prompt,
     build_event_analysis_prompt,
     build_event_score_prompt,
     build_event_summary_prompt,
@@ -125,6 +128,114 @@ def _news_classification_snapshot(item: NormalizedNewsItem) -> dict[str, object]
         "region": item.region,
         "asset_classes": item.asset_classes,
     }
+
+
+def cluster_candidate_target_id(news_item_id: str, event_cluster_id: str) -> str:
+    return prompt_hash(f"{news_item_id}:{event_cluster_id}")
+
+
+def _cluster_decision_snapshot(
+    item: NormalizedNewsItem,
+    cluster: EventCluster,
+    *,
+    similarity: float,
+    entities: list[str],
+    tickers: list[str],
+) -> dict[str, object]:
+    return {
+        "news_item_id": item.id,
+        "event_cluster_id": cluster.id,
+        "similarity": similarity,
+        "title": item.title,
+        "snippet": item.snippet,
+        "item_region": item.region,
+        "item_asset_classes": item.asset_classes,
+        "item_entities": entities,
+        "item_tickers": tickers,
+        "cluster_headline": cluster.canonical_headline,
+        "cluster_regions": cluster.regions,
+        "cluster_asset_classes": cluster.asset_classes,
+        "cluster_entities": cluster.affected_entities,
+        "cluster_tickers": cluster.affected_tickers,
+    }
+
+
+def _cluster_decision_should_attach(
+    result: dict[str, object] | None,
+    *,
+    config: LLMConfig,
+) -> bool:
+    if not result:
+        return False
+    decision = str(result.get("decision") or "")
+    confidence = int(result.get("confidence") or 0)
+    return (
+        decision == "same_event"
+        and confidence >= config.cluster_decision_min_confidence
+    )
+
+
+async def resolve_llm_cluster_decision(
+    *,
+    session: AsyncSession,
+    item: NormalizedNewsItem,
+    cluster: EventCluster,
+    similarity: float,
+    config: LLMConfig,
+    entities: list[str],
+    tickers: list[str],
+) -> tuple[bool, bool]:
+    if not config.enabled or not config.api_key or not config.cluster_decision_enabled:
+        return False, False
+
+    target_id = cluster_candidate_target_id(item.id, cluster.id)
+    run = await _existing_llm_run(
+        session,
+        target_type="cluster_candidate",
+        target_id=target_id,
+        config=config,
+        prompt_version=CLUSTER_DECISION_PROMPT_VERSION,
+    )
+    if run is not None and run.status == "succeeded":
+        return True, _cluster_decision_should_attach(run.result, config=config)
+
+    prompt = build_cluster_decision_prompt(
+        item,
+        cluster,
+        similarity=similarity,
+        item_entities=entities,
+        item_tickers=tickers,
+    )
+    run = await _prepare_llm_run(
+        session,
+        existing_run=run,
+        target_type="cluster_candidate",
+        target_id=target_id,
+        config=config,
+        prompt_version=CLUSTER_DECISION_PROMPT_VERSION,
+        prompt=prompt,
+        input_snapshot=_cluster_decision_snapshot(
+            item,
+            cluster,
+            similarity=similarity,
+            entities=entities,
+            tickers=tickers,
+        ),
+    )
+    await session.flush()
+    try:
+        result, usage = await llm_provider(config).decide_cluster_match(prompt)
+    except Exception as exc:  # noqa: BLE001 - LLM clustering must fail open
+        run.status = "failed"
+        run.error_message = str(exc)
+        run.updated_at = utcnow()
+        return True, False
+    run.status = "succeeded"
+    decision = LLMClusterDecision.model_validate(result)
+    run.result = decision.model_dump()
+    run.usage = usage
+    run.updated_at = utcnow()
+    return True, _cluster_decision_should_attach(run.result, config=config)
 
 
 async def classify_news_item_with_llm(

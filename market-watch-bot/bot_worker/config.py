@@ -68,6 +68,10 @@ class LLMSettings(BaseModel):
     relevance_score_threshold: int = 80
     min_modifier: int = -10
     max_modifier: int = 10
+    cluster_decision_enabled: bool = True
+    cluster_ambiguous_min_similarity: float = 0.78
+    cluster_decision_min_confidence: int = 70
+    cluster_decision_candidate_limit: int = 3
 
 
 class MarketDataConfig(BaseModel):

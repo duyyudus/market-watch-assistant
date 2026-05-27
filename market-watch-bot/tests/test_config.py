@@ -56,6 +56,10 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings.llm.max_concurrency == 3
     assert settings.llm.min_modifier == -10
     assert settings.llm.max_modifier == 10
+    assert settings.llm.cluster_decision_enabled is True
+    assert settings.llm.cluster_ambiguous_min_similarity == 0.78
+    assert settings.llm.cluster_decision_min_confidence == 70
+    assert settings.llm.cluster_decision_candidate_limit == 3
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
 

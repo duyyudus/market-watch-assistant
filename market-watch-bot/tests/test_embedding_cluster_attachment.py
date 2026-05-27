@@ -7,11 +7,13 @@ import bot_worker.services.events as event_services
 from bot_worker.db.models import (
     EventCluster,
     EventClusterItem,
+    LLMAnalysisRun,
     NewsItemEmbedding,
     NormalizedNewsItem,
 )
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.events import VectorClusterCandidate
+from bot_worker.llm import LLMConfig
 
 
 class ScalarRows:
@@ -33,9 +35,15 @@ class FakeSession:
         self.added: list[object] = []
         self.executed: list[object] = []
         self.flushes = 0
+        self.scalar_results: list[object | None] = []
 
     async def scalars(self, _stmt):
         return ScalarRows(self._scalars.pop(0))
+
+    async def scalar(self, _stmt):
+        if self.scalar_results:
+            return self.scalar_results.pop(0)
+        return None
 
     async def get(self, model, key):
         if model is EventCluster and self.cluster is not None and self.cluster.id == key:
@@ -258,12 +266,15 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
         fake_vector_cluster_candidates_for_item,
     )
 
-    created = await services.build_event_clusters(
+    stats = await services.build_event_clusters(
         session,
         embedding_config=EmbeddingConfig(provider="local"),
     )
 
-    assert created == 0
+    assert stats.created_clusters == 0
+    assert stats.attached_existing == 1
+    assert stats.llm_cluster_decisions == 0
+    assert stats.llm_cluster_attaches == 0
     cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
     assert len(cluster_items) == 1
     assert cluster_items[0].event_cluster_id == "evt_1"
@@ -315,12 +326,12 @@ async def test_build_event_clusters_creates_new_cluster_when_vector_match_is_not
         fake_vector_cluster_candidates_for_item,
     )
 
-    created = await services.build_event_clusters(
+    stats = await services.build_event_clusters(
         session,
         embedding_config=EmbeddingConfig(provider="local"),
     )
 
-    assert created == 1
+    assert stats.created_clusters == 1
     assert any(isinstance(value, EventCluster) for value in session.added)
     cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
     assert len(cluster_items) == 1
@@ -351,9 +362,9 @@ async def test_build_event_clusters_uses_empty_entities_without_title_word_fallb
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
 
-    created = await services.build_event_clusters(session)
+    stats = await services.build_event_clusters(session)
 
-    assert created == 1
+    assert stats.created_clusters == 1
     cluster = next(value for value in session.added if isinstance(value, EventCluster))
     assert cluster.affected_entities == []
     assert not ({"Bitcoin", "options", "are"} & set(cluster.affected_entities))
@@ -383,12 +394,284 @@ async def test_build_event_clusters_populates_affected_tickers_from_news_entitie
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
 
-    created = await services.build_event_clusters(session)
+    stats = await services.build_event_clusters(session)
 
-    assert created == 1
+    assert stats.created_clusters == 1
     cluster = next(value for value in session.added if isinstance(value, EventCluster))
     assert cluster.affected_entities == ["Bitcoin"]
     assert cluster.affected_tickers == ["BTC"]
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_attaches_gray_zone_match_when_llm_confirms(
+    monkeypatch,
+) -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Brent rises as Hormuz shipping risks increase",
+        source_score=80,
+        region="global",
+        asset_classes=["commodity"],
+        processing_status="normalized",
+    )
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="Oil jumps after tanker incident near Hormuz",
+        regions=["global"],
+        asset_classes=["commodity"],
+        affected_entities=["hormuz"],
+        source_count=1,
+        top_source_score=70,
+    )
+    session = FakeSession(scalars=[[item], []], cluster=cluster)
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["hormuz", "brent"]
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fake_vector_cluster_candidates_for_item(*_args, **_kwargs):
+        return [
+            VectorClusterCandidate(
+                cluster_id="evt_1",
+                similarity=0.87,
+                regions=["global"],
+                asset_classes=["commodity"],
+                affected_entities=["hormuz"],
+            )
+        ]
+
+    async def fake_resolve_llm_cluster_decision(
+        *,
+        session,
+        item,
+        cluster,
+        similarity,
+        config,
+        entities,
+        tickers,
+    ):
+        assert item.id == "news_1"
+        assert cluster.id == "evt_1"
+        assert similarity == 0.87
+        assert config.cluster_decision_min_confidence == 70
+        assert entities == ["hormuz", "brent"]
+        assert tickers == []
+        return True, True
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "vector_cluster_candidates_for_item",
+        fake_vector_cluster_candidates_for_item,
+    )
+    monkeypatch.setattr(
+        event_services,
+        "resolve_llm_cluster_decision",
+        fake_resolve_llm_cluster_decision,
+    )
+
+    stats = await services.build_event_clusters(
+        session,
+        embedding_config=EmbeddingConfig(provider="local"),
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert stats.created_clusters == 0
+    assert stats.attached_existing == 1
+    assert stats.llm_cluster_decisions == 1
+    assert stats.llm_cluster_attaches == 1
+    cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
+    assert len(cluster_items) == 1
+    assert cluster_items[0].event_cluster_id == "evt_1"
+    assert cluster_items[0].similarity_score == 87
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_does_not_attach_gray_zone_match_when_llm_rejects(
+    monkeypatch,
+) -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Fed keeps rates unchanged",
+        source_score=90,
+        region="us",
+        asset_classes=["equity"],
+        processing_status="normalized",
+    )
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="Fed cuts rates after emergency meeting",
+        regions=["us"],
+        asset_classes=["equity"],
+        affected_entities=["fed"],
+        source_count=1,
+        top_source_score=90,
+    )
+    session = FakeSession(scalars=[[item], []], cluster=cluster)
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["fed"]
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fake_vector_cluster_candidates_for_item(*_args, **_kwargs):
+        return [
+            VectorClusterCandidate(
+                cluster_id="evt_1",
+                similarity=0.87,
+                regions=["us"],
+                asset_classes=["equity"],
+                affected_entities=["fed"],
+            )
+        ]
+
+    async def fake_resolve_llm_cluster_decision(**_kwargs):
+        return True, False
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "vector_cluster_candidates_for_item",
+        fake_vector_cluster_candidates_for_item,
+    )
+    monkeypatch.setattr(
+        event_services,
+        "resolve_llm_cluster_decision",
+        fake_resolve_llm_cluster_decision,
+    )
+
+    stats = await services.build_event_clusters(
+        session,
+        embedding_config=EmbeddingConfig(provider="local"),
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert stats.created_clusters == 1
+    assert stats.attached_existing == 0
+    assert stats.llm_cluster_decisions == 1
+    assert stats.llm_cluster_attaches == 0
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_skips_llm_for_below_gray_zone_similarity(
+    monkeypatch,
+) -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Fed keeps rates unchanged",
+        source_score=90,
+        region="us",
+        asset_classes=["equity"],
+        processing_status="normalized",
+    )
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="Fed cuts rates after emergency meeting",
+        regions=["us"],
+        asset_classes=["equity"],
+        affected_entities=["fed"],
+        source_count=1,
+        top_source_score=90,
+    )
+    session = FakeSession(scalars=[[item], []], cluster=cluster)
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["fed"]
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fake_vector_cluster_candidates_for_item(*_args, **_kwargs):
+        return [
+            VectorClusterCandidate(
+                cluster_id="evt_1",
+                similarity=0.77,
+                regions=["us"],
+                asset_classes=["equity"],
+                affected_entities=["fed"],
+            )
+        ]
+
+    async def fail_resolve_llm_cluster_decision(**_kwargs):
+        raise AssertionError("LLM should not be called below gray-zone minimum")
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "vector_cluster_candidates_for_item",
+        fake_vector_cluster_candidates_for_item,
+    )
+    monkeypatch.setattr(
+        event_services,
+        "resolve_llm_cluster_decision",
+        fail_resolve_llm_cluster_decision,
+    )
+
+    stats = await services.build_event_clusters(
+        session,
+        embedding_config=EmbeddingConfig(provider="local"),
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert stats.created_clusters == 1
+    assert stats.llm_cluster_decisions == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_llm_cluster_decision_reuses_cached_successful_no_decision() -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Fed keeps rates unchanged",
+        source_score=90,
+        region="us",
+        asset_classes=["equity"],
+        processing_status="normalized",
+    )
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="Fed cuts rates after emergency meeting",
+        regions=["us"],
+        asset_classes=["equity"],
+        affected_entities=["fed"],
+    )
+    session = FakeSession(scalars=[], cluster=cluster)
+    session.scalar_results.append(
+        LLMAnalysisRun(
+            target_type="cluster_candidate",
+            target_id="cached",
+            provider="openrouter",
+            model="openai/gpt-4.1-mini",
+            prompt_version="cluster-decision-v1",
+            prompt_hash="hash",
+            input_snapshot={},
+            result={
+                "decision": "related_but_separate",
+                "confidence": 88,
+                "rationale": "Same central bank but different policy action.",
+            },
+            status="succeeded",
+        )
+    )
+
+    attempted, should_attach = await event_services.resolve_llm_cluster_decision(
+        session=session,
+        item=item,
+        cluster=cluster,
+        similarity=0.87,
+        config=LLMConfig(enabled=True, api_key="key"),
+        entities=["fed"],
+        tickers=[],
+    )
+
+    assert attempted
+    assert not should_attach
+    assert session.added == []
 
 
 @pytest.mark.asyncio

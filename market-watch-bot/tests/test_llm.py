@@ -7,9 +7,11 @@ from bot_worker.db.models import EventCluster, NormalizedNewsItem
 from bot_worker.llm import (
     LLMAnalysis,
     LLMClassification,
+    LLMClusterDecision,
     LLMConfig,
     LLMEventScore,
     LLMEventSummary,
+    build_cluster_decision_prompt,
     build_event_analysis_prompt,
     build_event_score_prompt,
     build_event_summary_prompt,
@@ -124,6 +126,48 @@ def test_event_summary_and_score_prompts_are_distinct() -> None:
     assert "Market move score: 75" in score_prompt
 
 
+def test_cluster_decision_prompt_compares_news_item_to_candidate_cluster() -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Brent rises as Hormuz shipping risks increase",
+        snippet="Oil benchmarks gained after reports of shipping disruption.",
+        source_name="MarketWatch",
+        source_type="rss",
+        source_score=75,
+        region="global",
+        asset_classes=["commodity"],
+        language="en",
+        url="https://example.test/oil",
+        title_hash="title",
+        normalized_text_hash="text",
+    )
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="Oil jumps after tanker incident near Hormuz",
+        regions=["global"],
+        asset_classes=["commodity"],
+        affected_entities=["Hormuz", "Brent"],
+        affected_tickers=["BZ"],
+        source_count=2,
+        top_source_score=85,
+        status="reported",
+    )
+
+    prompt = build_cluster_decision_prompt(
+        item,
+        cluster,
+        similarity=0.87,
+        item_entities=["Hormuz", "Brent"],
+        item_tickers=["BZ"],
+    )
+
+    assert "Decide whether this news item belongs to this existing event cluster" in prompt
+    assert "Brent rises as Hormuz" in prompt
+    assert "Oil jumps after tanker incident" in prompt
+    assert "Embedding similarity: 0.8700" in prompt
+    assert "OPENROUTER_API_KEY" not in prompt
+
+
 def test_llm_analysis_validation_and_modifier_clamping() -> None:
     analysis = LLMAnalysis.model_validate(
         {
@@ -182,10 +226,18 @@ def test_task_specific_llm_schemas_validate_expected_outputs() -> None:
             "modifier_reason": "Market reaction confirms relevance.",
         }
     )
+    cluster_decision = LLMClusterDecision.model_validate(
+        {
+            "decision": "same_event",
+            "confidence": 84,
+            "rationale": "Both items describe the same Hormuz shipping disruption.",
+        }
+    )
 
     assert classification.actionability == "low"
     assert summary.status == "reported"
     assert score.score_modifier == 10
+    assert cluster_decision.decision == "same_event"
 
 
 def test_llm_schema_marks_all_properties_required_for_strict_openrouter_mode() -> None:
