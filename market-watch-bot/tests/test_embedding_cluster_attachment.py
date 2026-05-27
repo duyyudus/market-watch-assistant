@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 import bot_worker.services as services
+import bot_worker.services.events as event_services
 from bot_worker.db.models import (
     EventCluster,
     EventClusterItem,
@@ -181,9 +182,9 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
             )
         ]
 
-    monkeypatch.setattr(services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(
-        services,
+        event_services,
         "vector_cluster_candidates_for_item",
         fake_vector_cluster_candidates_for_item,
     )
@@ -234,9 +235,9 @@ async def test_build_event_clusters_creates_new_cluster_when_vector_match_is_not
             )
         ]
 
-    monkeypatch.setattr(services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(
-        services,
+        event_services,
         "vector_cluster_candidates_for_item",
         fake_vector_cluster_candidates_for_item,
     )

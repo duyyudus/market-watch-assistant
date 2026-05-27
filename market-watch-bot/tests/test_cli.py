@@ -1,6 +1,8 @@
 from typer.testing import CliRunner
 
-import bot_worker.cli as cli
+import bot_worker.cli.alerts as alert_cli
+import bot_worker.cli.llm as llm_cli
+import bot_worker.cli.source as source_cli
 from bot_worker.cli import app
 from bot_worker.db.models import EventCluster, LLMAnalysisRun, NormalizedNewsItem
 
@@ -44,7 +46,7 @@ def test_cli_alert_list_reports_empty_decisions(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(EmptySession())
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(alert_cli, "_with_session", fake_with_session)
 
     result = runner.invoke(app, ["alert", "list"])
 
@@ -65,8 +67,8 @@ def test_cli_source_purge_requires_explicit_confirmation(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(EmptySession())
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
-    monkeypatch.setattr(cli, "purge_source", fake_purge_source)
+    monkeypatch.setattr(source_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(source_cli, "purge_source", fake_purge_source)
 
     result = runner.invoke(app, ["source", "purge", "Investing.com News"])
 
@@ -93,8 +95,8 @@ def test_cli_source_purge_reports_deleted_counts(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(EmptySession())
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
-    monkeypatch.setattr(cli, "purge_source", fake_purge_source)
+    monkeypatch.setattr(source_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(source_cli, "purge_source", fake_purge_source)
 
     result = runner.invoke(app, ["source", "purge", "Investing.com News", "--yes"])
 
@@ -122,7 +124,7 @@ def test_cli_llm_test_show_prompt_does_not_require_network(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(PromptSession())
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
 
     result = runner.invoke(app, ["llm", "test", "--event", "evt_1", "--show-prompt"])
 
@@ -139,7 +141,7 @@ def test_cli_llm_test_invalid_event_exits_cleanly(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(MissingSession())
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
 
     result = runner.invoke(app, ["llm", "test", "--event", "missing", "--show-prompt"])
 
@@ -171,7 +173,7 @@ def test_cli_llm_usage_summarizes_stored_runs(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(UsageSession())
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
 
     result = runner.invoke(app, ["llm", "usage", "--since", "7d"])
 
@@ -219,18 +221,18 @@ def test_cli_llm_enrich_reports_latest_failed_run(monkeypatch) -> None:
     async def fake_latest_llm_analysis(_session, _event_id, **_kwargs):
         return failed
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
     monkeypatch.setattr(
-        cli,
+        llm_cli,
         "enrich_event_clusters_with_llm",
         fake_enrich_event_clusters_with_llm,
     )
     monkeypatch.setattr(
-        cli,
+        llm_cli,
         "latest_successful_llm_analysis",
         fake_latest_successful_llm_analysis,
     )
-    monkeypatch.setattr(cli, "latest_llm_analysis", fake_latest_llm_analysis)
+    monkeypatch.setattr(llm_cli, "latest_llm_analysis", fake_latest_llm_analysis)
 
     result = runner.invoke(app, ["llm", "enrich", "--event", "evt_failed"])
 
@@ -281,8 +283,8 @@ def test_cli_llm_classify_uses_news_item_task(monkeypatch) -> None:
         assert force
         return run
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
-    monkeypatch.setattr(cli, "classify_news_item_with_llm", fake_classify_news_item_with_llm)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "classify_news_item_with_llm", fake_classify_news_item_with_llm)
 
     result = runner.invoke(app, ["llm", "classify", "--item", "news_1"])
 
@@ -321,8 +323,8 @@ def test_cli_llm_summarize_uses_event_summary_task(monkeypatch) -> None:
         assert force
         return run
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
-    monkeypatch.setattr(cli, "summarize_event_with_llm", fake_summarize_event_with_llm)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "summarize_event_with_llm", fake_summarize_event_with_llm)
 
     result = runner.invoke(app, ["llm", "summarize", "--event", "evt_1"])
 
@@ -361,8 +363,8 @@ def test_cli_llm_score_uses_event_score_task(monkeypatch) -> None:
         assert force
         return run
 
-    monkeypatch.setattr(cli, "_with_session", fake_with_session)
-    monkeypatch.setattr(cli, "score_event_with_llm", fake_score_event_with_llm)
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "score_event_with_llm", fake_score_event_with_llm)
 
     result = runner.invoke(app, ["llm", "score", "--event", "evt_1"])
 

@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import pytest
 
 import bot_worker.services as services
+import bot_worker.services.alerts as alert_services
+import bot_worker.services.llm as llm_services
 from bot_worker.db.models import (
     AlertDecisionRecord,
     EventCluster,
@@ -140,13 +142,13 @@ async def test_enrich_event_clusters_records_successful_structured_result(monkey
                 {"prompt_tokens": 100, "completion_tokens": 80, "total_tokens": 180},
             )
 
-    monkeypatch.setattr(services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
 
     async def fake_market_move_score_for_cluster(_session, _cluster):
         return 0
 
     monkeypatch.setattr(
-        services,
+        llm_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
     )
@@ -197,9 +199,9 @@ async def test_manual_event_enrichment_can_force_low_value_event(monkeypatch) ->
     async def fake_market_move_score_for_cluster(_session, _cluster):
         return 0
 
-    monkeypatch.setattr(services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
     monkeypatch.setattr(
-        services,
+        llm_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
     )
@@ -258,13 +260,13 @@ async def test_enrich_event_clusters_limits_concurrent_llm_calls(monkeypatch) ->
             )
 
     provider = FakeProvider()
-    monkeypatch.setattr(services, "llm_provider", lambda _config: provider)
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: provider)
 
     async def fake_market_move_score_for_cluster(_session, _cluster):
         return 0
 
     monkeypatch.setattr(
-        services,
+        llm_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
     )
@@ -323,13 +325,13 @@ async def test_enrich_event_clusters_isolates_llm_call_failures(monkeypatch) -> 
                 {"total_tokens": 100},
             )
 
-    monkeypatch.setattr(services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
 
     async def fake_market_move_score_for_cluster(_session, _cluster):
         return 0
 
     monkeypatch.setattr(
-        services,
+        llm_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
     )
@@ -379,7 +381,7 @@ async def test_alert_decision_includes_llm_modifier_in_score_breakdown(monkeypat
         return 0
 
     monkeypatch.setattr(
-        services,
+        alert_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
     )
@@ -427,7 +429,7 @@ async def test_classify_news_item_records_classify_prompt_version(monkeypatch) -
                 {"total_tokens": 50},
             )
 
-    monkeypatch.setattr(services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
 
     run = await services.classify_news_item_with_llm(
         session,
@@ -469,7 +471,7 @@ async def test_summarize_event_records_summary_prompt_version(monkeypatch) -> No
                 {"total_tokens": 60},
             )
 
-    monkeypatch.setattr(services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
 
     run = await services.summarize_event_with_llm(
         session,
@@ -512,9 +514,9 @@ async def test_score_event_records_score_prompt_version(monkeypatch) -> None:
     async def fake_market_move_score_for_cluster(_session, _cluster):
         return 75
 
-    monkeypatch.setattr(services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
     monkeypatch.setattr(
-        services,
+        llm_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
     )
