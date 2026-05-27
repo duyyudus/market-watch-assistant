@@ -14,7 +14,7 @@ alerts:
   immediate_threshold: 80
   watchlist_threshold: 55
   digest_threshold: 30
-  default_channel: log
+  default_channel: telegram
 
 embeddings:
   provider: openrouter

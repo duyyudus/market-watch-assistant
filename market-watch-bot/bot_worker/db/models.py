@@ -321,6 +321,23 @@ class AlertDecisionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AlertDeliveryRecord(Base):
+    __tablename__ = "alert_deliveries"
+
+    id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: new_id("delivery")
+    )
+    alert_decision_id: Mapped[str | None] = mapped_column(ForeignKey("alert_decisions.id"))
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_response: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class WatchlistEntity(Base):
     __tablename__ = "watchlist_entities"
 

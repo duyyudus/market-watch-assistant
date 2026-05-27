@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from bot_worker.services.alert_delivery import (
+    AlertDeliveryConfig,
+    dispatch_pending_alerts,
+    format_alert_message,
+    send_test_alert,
+)
 from bot_worker.services.alerts import (
     record_alert_decisions,
 )
@@ -67,6 +73,7 @@ from bot_worker.services.watchlists import (
 )
 
 __all__ = [
+    "AlertDeliveryConfig",
     "CORE_JOBS",
     "add_source",
     "add_watchlist_entry",
@@ -75,12 +82,14 @@ __all__ = [
     "digest_display_headline",
     "digest_preview",
     "digest_time_in_window",
+    "dispatch_pending_alerts",
     "embed_pending_event_clusters",
     "embed_pending_news_items",
     "enrich_event_clusters_with_llm",
     "fetch_market_moves",
     "fetch_source",
     "fetch_source_content",
+    "format_alert_message",
     "get_source",
     "import_sources_yaml",
     "is_rss_item_fresh",
@@ -103,6 +112,7 @@ __all__ = [
     "score_event_with_llm",
     "seed_starter_sources",
     "select_digest_headline",
+    "send_test_alert",
     "set_source_enabled",
     "store_market_moves",
     "summarize_event_with_llm",

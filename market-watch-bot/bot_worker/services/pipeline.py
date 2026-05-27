@@ -14,6 +14,7 @@ from bot_worker.embeddings import (
 from bot_worker.llm import (
     LLMConfig,
 )
+from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pending_alerts
 from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
 from bot_worker.services.events import build_event_clusters
@@ -45,6 +46,7 @@ async def run_pipeline(
     freshness_hours: int = 72,
     embedding_config: EmbeddingConfig | None = None,
     llm_config: LLMConfig | None = None,
+    alert_delivery_config: AlertDeliveryConfig | None = None,
 ) -> dict[str, int | str]:
     if dry_run:
         return {"status": "dry_run", "jobs": len(CORE_JOBS)}
@@ -119,6 +121,19 @@ async def run_pipeline(
     logger.info("─── [Stage 8/8] Recording Alert Decisions ───")
     alerts = await record_alert_decisions(session)
     logger.info("  ✓ Recorded alert decisions for %d event clusters", alerts)
+    delivered_alerts = 0
+    failed_alert_deliveries = 0
+    if alert_delivery_config is not None and alert_delivery_config.channel == "telegram":
+        delivery_counts = await dispatch_pending_alerts(session, alert_delivery_config)
+        delivered_alerts = delivery_counts["sent"]
+        failed_alert_deliveries = delivery_counts["failed"]
+        logger.info(
+            "  ✓ Delivered %d Telegram alerts (%d failed)",
+            delivered_alerts,
+            failed_alert_deliveries,
+        )
+    else:
+        logger.info("  ⚠ Alert delivery config not provided or not Telegram, skipping dispatch")
 
     logger.info("======================================================================")
     logger.info("🎉 Pipeline run completed successfully!")
@@ -132,4 +147,6 @@ async def run_pipeline(
         "event_embeddings": event_embeddings,
         "llm_enriched": llm_enriched,
         "alerts": alerts,
+        "delivered_alerts": delivered_alerts,
+        "failed_alert_deliveries": failed_alert_deliveries,
     }

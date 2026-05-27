@@ -54,6 +54,111 @@ def test_cli_alert_list_reports_empty_decisions(monkeypatch) -> None:
     assert "No alert decisions found" in result.output
 
 
+def test_cli_alert_channel_show_reports_telegram_configuration(monkeypatch) -> None:
+    class Settings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class alerts:
+            default_channel = "telegram"
+
+    monkeypatch.setattr(alert_cli, "_settings", lambda: Settings())
+
+    result = runner.invoke(app, ["alert", "channel", "show"])
+
+    assert result.exit_code == 0
+    assert '"default_channel": "telegram"' in result.output
+    assert '"telegram_bot_token_configured": true' in result.output
+    assert '"telegram_chat_id_configured": true' in result.output
+
+
+def test_cli_alert_send_test_requires_telegram_credentials(monkeypatch) -> None:
+    class Settings:
+        telegram_bot_token = None
+        telegram_chat_id = None
+
+        class alerts:
+            default_channel = "telegram"
+
+    monkeypatch.setattr(alert_cli, "_settings", lambda: Settings())
+
+    result = runner.invoke(app, ["alert", "send-test", "--channel", "telegram"])
+
+    assert result.exit_code == 1
+    assert "Telegram delivery requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID" in result.output
+
+
+def test_cli_alert_send_test_calls_delivery_service(monkeypatch) -> None:
+    class Settings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class alerts:
+            default_channel = "telegram"
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    calls: list[tuple[object, str]] = []
+
+    async def fake_send_test_alert(session, config, message):
+        assert isinstance(session, EmptySession)
+        calls.append((config, message))
+        return {"status": "sent", "channel": "telegram", "recipient": "chat_1"}
+
+    monkeypatch.setattr(alert_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(alert_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(alert_cli, "send_test_alert", fake_send_test_alert)
+
+    result = runner.invoke(
+        app,
+        ["alert", "send-test", "--channel", "telegram", "--message", "hello"],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0][1] == "hello"
+    assert '"status": "sent"' in result.output
+
+
+def test_cli_alert_dispatch_dry_run_prints_pending_counts(monkeypatch) -> None:
+    class Settings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class alerts:
+            default_channel = "telegram"
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    async def fake_dispatch_pending_alerts(session, config, *, limit, dry_run):
+        assert isinstance(session, EmptySession)
+        assert config.channel == "telegram"
+        assert limit == 5
+        assert dry_run is True
+        return {"pending": 2, "attempted": 0, "sent": 0, "failed": 0, "skipped": 1}
+
+    monkeypatch.setattr(alert_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(alert_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(alert_cli, "dispatch_pending_alerts", fake_dispatch_pending_alerts)
+
+    result = runner.invoke(
+        app,
+        ["alert", "dispatch", "--channel", "telegram", "--limit", "5", "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert '"pending": 2' in result.output
+    assert '"attempted": 0' in result.output
+    assert '"skipped": 1' in result.output
+
+
 def test_cli_source_purge_requires_explicit_confirmation(monkeypatch) -> None:
     calls: list[str] = []
 
