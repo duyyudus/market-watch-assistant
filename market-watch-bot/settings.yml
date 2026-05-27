@@ -27,6 +27,7 @@ embeddings:
   cluster_attach_lookback_days: 7
   cluster_attach_min_similarity: 0.88
   cluster_attach_candidate_limit: 20
+  max_concurrency: 3
 
 llm:
   enabled: true

@@ -1,8 +1,16 @@
+import asyncio
 import os
 
 import pytest
 
+import bot_worker.services.embeddings as embedding_services
 from bot_worker.config import load_settings
+from bot_worker.db.models import (
+    EventCluster,
+    EventClusterEmbedding,
+    NewsItemEmbedding,
+    NormalizedNewsItem,
+)
 from bot_worker.embeddings import (
     EmbeddingConfig,
     OpenRouterEmbeddingProvider,
@@ -11,6 +19,30 @@ from bot_worker.embeddings import (
     embedding_text_hash,
     local_embedding,
 )
+
+
+class ScalarRows:
+    def __init__(self, rows: list[object]) -> None:
+        self.rows = rows
+
+    def all(self) -> list[object]:
+        return self.rows
+
+
+class FakeEmbeddingSession:
+    def __init__(self, rows: list[object]) -> None:
+        self.rows = rows
+        self.added: list[object] = []
+        self.scalars_calls = 0
+
+    async def scalars(self, _stmt):
+        self.scalars_calls += 1
+        if self.scalars_calls == 1:
+            return ScalarRows(self.rows)
+        return ScalarRows([])
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
 
 
 def test_load_settings_uses_openrouter_embedding_defaults(tmp_path) -> None:
@@ -27,6 +59,7 @@ def test_load_settings_uses_openrouter_embedding_defaults(tmp_path) -> None:
     assert settings.embeddings.cluster_attach_lookback_days == 7
     assert settings.embeddings.cluster_attach_min_similarity == 0.88
     assert settings.embeddings.cluster_attach_candidate_limit == 20
+    assert settings.embeddings.max_concurrency == 3
 
 
 @pytest.mark.asyncio
@@ -105,4 +138,110 @@ def test_cosine_similarity_orders_related_vectors() -> None:
 def test_embedding_config_reads_api_key_from_env(monkeypatch) -> None:
     monkeypatch.setitem(os.environ, "OPENROUTER_API_KEY", "from-env")
 
-    assert EmbeddingConfig.from_settings(load_settings()).api_key == "from-env"
+    config = EmbeddingConfig.from_settings(load_settings())
+
+    assert config.api_key == "from-env"
+    assert config.max_concurrency == 3
+
+
+@pytest.mark.asyncio
+async def test_embed_pending_news_items_limits_concurrent_provider_batches(monkeypatch) -> None:
+    items = [
+        NormalizedNewsItem(
+            id=f"news_{index}",
+            title=f"Market news {index}",
+            snippet=f"Snippet {index}",
+            source_name="MarketWatch",
+            source_type="rss",
+            source_score=75,
+            region="crypto",
+            asset_classes=["crypto"],
+            language="en",
+            url=f"https://example.test/news/{index}",
+            title_hash=f"title-{index}",
+            normalized_text_hash=f"text-{index}",
+            processing_status="normalized",
+        )
+        for index in range(4)
+    ]
+    session = FakeEmbeddingSession(items)
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.active_calls = 0
+            self.max_active_calls = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.active_calls += 1
+            self.max_active_calls = max(self.max_active_calls, self.active_calls)
+            await asyncio.sleep(0.01)
+            self.active_calls -= 1
+            return [[float(index), 0.0] for index, _text in enumerate(texts)]
+
+    provider = FakeProvider()
+    monkeypatch.setattr(embedding_services, "embedding_provider", lambda _config: provider)
+
+    count = await embedding_services.embed_pending_news_items(
+        session,
+        config=EmbeddingConfig(provider="local", dimensions=2, max_concurrency=2),
+    )
+
+    embeddings = [value for value in session.added if isinstance(value, NewsItemEmbedding)]
+    assert count == 4
+    assert provider.max_active_calls == 2
+    assert len(embeddings) == 4
+    assert {embedding.news_item_id for embedding in embeddings} == {
+        "news_0",
+        "news_1",
+        "news_2",
+        "news_3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_embed_pending_event_clusters_limits_concurrent_provider_batches(monkeypatch) -> None:
+    clusters = [
+        EventCluster(
+            id=f"evt_{index}",
+            canonical_headline=f"High value event {index}",
+            summary=f"Summary {index}",
+            source_count=1,
+            top_source_score=90,
+            affected_entities=[],
+            regions=["global"],
+            asset_classes=["equity"],
+        )
+        for index in range(4)
+    ]
+    session = FakeEmbeddingSession(clusters)
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.active_calls = 0
+            self.max_active_calls = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.active_calls += 1
+            self.max_active_calls = max(self.max_active_calls, self.active_calls)
+            await asyncio.sleep(0.01)
+            self.active_calls -= 1
+            return [[float(index), 1.0] for index, _text in enumerate(texts)]
+
+    provider = FakeProvider()
+    monkeypatch.setattr(embedding_services, "embedding_provider", lambda _config: provider)
+
+    count = await embedding_services.embed_pending_event_clusters(
+        session,
+        config=EmbeddingConfig(provider="local", dimensions=2, max_concurrency=2),
+    )
+
+    embeddings = [value for value in session.added if isinstance(value, EventClusterEmbedding)]
+    assert count == 4
+    assert provider.max_active_calls == 2
+    assert len(embeddings) == 4
+    assert {embedding.event_cluster_id for embedding in embeddings} == {
+        "evt_0",
+        "evt_1",
+        "evt_2",
+        "evt_3",
+    }

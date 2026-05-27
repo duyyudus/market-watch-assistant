@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import math
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +21,29 @@ from bot_worker.embeddings import (
 from bot_worker.services.watchlists import news_item_entities
 
 
+def _batch_work_items[T](work_items: list[T], *, max_concurrency: int) -> list[list[T]]:
+    concurrency = max(1, max_concurrency)
+    batch_size = max(1, math.ceil(len(work_items) / concurrency))
+    return [
+        work_items[index : index + batch_size]
+        for index in range(0, len(work_items), batch_size)
+    ]
+
+
+async def _embed_text_batches(
+    text_batches: list[list[str]], *, config: EmbeddingConfig
+) -> list[list[float]]:
+    provider = embedding_provider(config)
+    semaphore = asyncio.Semaphore(max(1, config.max_concurrency))
+
+    async def embed_with_limit(texts: list[str]) -> list[list[float]]:
+        async with semaphore:
+            return await provider.embed(texts)
+
+    batch_vectors = await asyncio.gather(*(embed_with_limit(texts) for texts in text_batches))
+    return [vector for vectors in batch_vectors for vector in vectors]
+
+
 async def embed_pending_news_items(
     session: AsyncSession, *, config: EmbeddingConfig, limit: int = 100
 ) -> int:
@@ -34,10 +60,10 @@ async def embed_pending_news_items(
         return 0
     if config.provider != "local" and not config.api_key:
         return 0
-    texts: list[str] = []
+    work_items: list[tuple[NormalizedNewsItem, str]] = []
     for item in items:
         entities = await news_item_entities(session, item.id)
-        texts.append(
+        text = (
             build_embedding_text(
                 title=item.title,
                 snippet=item.snippet,
@@ -47,8 +73,13 @@ async def embed_pending_news_items(
                 asset_classes=item.asset_classes,
             )
         )
-    vectors = await embedding_provider(config).embed(texts)
-    for item, text, vector in zip(items, texts, vectors, strict=True):
+        work_items.append((item, text))
+    batches = _batch_work_items(work_items, max_concurrency=config.max_concurrency)
+    vectors = await _embed_text_batches(
+        [[text for _item, text in batch] for batch in batches],
+        config=config,
+    )
+    for (item, text), vector in zip(work_items, vectors, strict=True):
         session.add(
             NewsItemEmbedding(
                 news_item_id=item.id,
@@ -61,6 +92,8 @@ async def embed_pending_news_items(
             )
         )
     return len(vectors)
+
+
 async def embed_pending_event_clusters(
     session: AsyncSession, *, config: EmbeddingConfig, limit: int = 100
 ) -> int:
@@ -76,19 +109,26 @@ async def embed_pending_event_clusters(
         return 0
     if config.provider != "local" and not config.api_key:
         return 0
-    texts = [
-        build_embedding_text(
-            title=cluster.canonical_headline,
-            snippet=cluster.summary,
-            source_name="event_cluster",
-            entities=cluster.affected_entities,
-            region=",".join(cluster.regions),
-            asset_classes=cluster.asset_classes,
+    work_items = [
+        (
+            cluster,
+            build_embedding_text(
+                title=cluster.canonical_headline,
+                snippet=cluster.summary,
+                source_name="event_cluster",
+                entities=cluster.affected_entities,
+                region=",".join(cluster.regions),
+                asset_classes=cluster.asset_classes,
+            ),
         )
         for cluster in clusters
     ]
-    vectors = await embedding_provider(config).embed(texts)
-    for cluster, text, vector in zip(clusters, texts, vectors, strict=True):
+    batches = _batch_work_items(work_items, max_concurrency=config.max_concurrency)
+    vectors = await _embed_text_batches(
+        [[text for _cluster, text in batch] for batch in batches],
+        config=config,
+    )
+    for (cluster, text), vector in zip(work_items, vectors, strict=True):
         session.add(
             EventClusterEmbedding(
                 event_cluster_id=cluster.id,

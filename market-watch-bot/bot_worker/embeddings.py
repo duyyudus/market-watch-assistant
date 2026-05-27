@@ -27,6 +27,7 @@ class EmbeddingConfig:
     cluster_attach_lookback_days: int = 7
     cluster_attach_min_similarity: float = 0.88
     cluster_attach_candidate_limit: int = 20
+    max_concurrency: int = 3
 
     @classmethod
     def from_settings(cls, settings: Settings) -> EmbeddingConfig:
@@ -45,6 +46,7 @@ class EmbeddingConfig:
             cluster_attach_lookback_days=settings.embeddings.cluster_attach_lookback_days,
             cluster_attach_min_similarity=settings.embeddings.cluster_attach_min_similarity,
             cluster_attach_candidate_limit=settings.embeddings.cluster_attach_candidate_limit,
+            max_concurrency=settings.embeddings.max_concurrency,
         )
 
 

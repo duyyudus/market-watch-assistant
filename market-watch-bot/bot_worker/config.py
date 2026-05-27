@@ -48,6 +48,7 @@ class EmbeddingSettings(BaseModel):
     cluster_attach_lookback_days: int = 7
     cluster_attach_min_similarity: float = 0.88
     cluster_attach_candidate_limit: int = 20
+    max_concurrency: int = Field(default=3, ge=1)
 
 
 class LLMSettings(BaseModel):

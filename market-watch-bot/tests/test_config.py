@@ -50,6 +50,7 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings.bot.default_retention_days == 60
     assert settings.alerts.watchlist_threshold == 55
     assert settings.llm.enabled is False
+    assert settings.embeddings.max_concurrency == 3
     assert settings.llm.provider == "openrouter"
     assert settings.llm.model == "openai/gpt-4.1-mini"
     assert settings.llm.max_concurrency == 3
