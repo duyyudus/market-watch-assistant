@@ -22,6 +22,7 @@ from bot_worker.services.embeddings import (
 from bot_worker.services.events import (
     build_event_clusters,
     pgvector_literal,
+    recluster_recent_event_clusters,
     vector_cluster_candidates_for_item,
 )
 from bot_worker.services.ingestion import (
@@ -36,6 +37,7 @@ from bot_worker.services.jobs import (
 from bot_worker.services.llm import (
     classify_news_item_with_llm,
     enrich_event_clusters_with_llm,
+    extract_entities_with_llm,
     latest_llm_analysis,
     latest_successful_llm_analysis,
     score_event_with_llm,
@@ -69,6 +71,7 @@ from bot_worker.services.sources import (
 from bot_worker.services.watchlists import (
     add_watchlist_entry,
     news_item_entities,
+    news_item_tickers,
     watchlist_entries,
 )
 
@@ -86,6 +89,7 @@ __all__ = [
     "embed_pending_event_clusters",
     "embed_pending_news_items",
     "enrich_event_clusters_with_llm",
+    "extract_entities_with_llm",
     "fetch_market_moves",
     "fetch_source",
     "fetch_source_content",
@@ -99,12 +103,14 @@ __all__ = [
     "mark_exact_duplicates",
     "market_move_score_for_cluster",
     "news_item_entities",
+    "news_item_tickers",
     "normalize_pending_raw_items",
     "pgvector_literal",
     "purge_source",
     "raw_item_from_parsed",
     "record_alert_decisions",
     "record_job_run",
+    "recluster_recent_event_clusters",
     "retention_preview",
     "run_missed_catalyst_review",
     "run_pipeline",

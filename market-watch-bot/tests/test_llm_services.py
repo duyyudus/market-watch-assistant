@@ -10,6 +10,7 @@ from bot_worker.db.models import (
     AlertDecisionRecord,
     EventCluster,
     LLMAnalysisRun,
+    NewsEntity,
     NormalizedNewsItem,
 )
 from bot_worker.llm import LLMAnalysis, LLMClassification, LLMConfig, LLMEventScore, LLMEventSummary
@@ -90,6 +91,70 @@ class FakeTargetSession:
 
     async def flush(self) -> None:
         return None
+
+
+class FakeEntityExtractionSession:
+    def __init__(
+        self,
+        items: list[NormalizedNewsItem],
+        existing_entities: list[NewsEntity] | dict[str, list[NewsEntity]] | None = None,
+    ) -> None:
+        self.items = items
+        if isinstance(existing_entities, dict):
+            self.existing_entities_by_item = existing_entities
+            self.existing_entities = []
+        else:
+            self.existing_entities_by_item = None
+            self.existing_entities = existing_entities or []
+        self.added: list[object] = []
+        self.deleted: list[object] = []
+        self.scalar_calls = 0
+        self.scalars_calls = 0
+
+    async def scalars(self, _stmt):
+        self.scalars_calls += 1
+        if self.scalars_calls == 1:
+            return ScalarRows(self.items)
+        if self.existing_entities_by_item is not None:
+            item_index = self.scalars_calls - 2
+            item = self.items[item_index]
+            return ScalarRows(self.existing_entities_by_item.get(item.id, []))
+        return ScalarRows(self.existing_entities)
+
+    async def get(self, _model, key: str):
+        return next((item for item in self.items if item.id == key), None)
+
+    async def scalar(self, _stmt):
+        self.scalar_calls += 1
+        return None
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def execute(self, stmt):
+        self.deleted.append(stmt)
+        return ExecuteRows([])
+
+    async def flush(self) -> None:
+        return None
+
+
+def news_item(item_id: str, title: str | None = None) -> NormalizedNewsItem:
+    return NormalizedNewsItem(
+        id=item_id,
+        title=title or f"Market news {item_id}",
+        snippet=f"Snippet for {item_id}",
+        source_name="MarketWatch",
+        source_type="rss",
+        source_score=75,
+        region="crypto",
+        asset_classes=["crypto"],
+        language="en",
+        url=f"https://example.test/{item_id}",
+        title_hash=f"title-{item_id}",
+        normalized_text_hash=f"text-{item_id}",
+        processing_status="normalized",
+    )
 
 
 @pytest.mark.asyncio
@@ -442,6 +507,240 @@ async def test_classify_news_item_records_classify_prompt_version(monkeypatch) -
     assert run.target_type == "news_item"
     assert run.prompt_version == "classify-v1"
     assert run.result["event_type"] == "credit_growth"
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_persists_news_entities_without_watchlist(
+    monkeypatch,
+) -> None:
+    item = news_item(
+        "news_1",
+        "Bitcoin options are coming to Nasdaq. Here's what it means for you.",
+    )
+    session = FakeEntityExtractionSession([item])
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="exchange_product",
+                    region="crypto",
+                    asset_classes=["crypto"],
+                    entities=["Bitcoin"],
+                    tickers=["BTC"],
+                    duplicate_hint="possible",
+                    confidence=86,
+                    rationale="Bitcoin is the only affected asset in the headline.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    runs = [value for value in session.added if isinstance(value, LLMAnalysisRun)]
+    assert count == 1
+    assert len(runs) == 1
+    assert len(entities) == 2
+    assert {entity.normalized_name for entity in entities} == {"Bitcoin", "BTC"}
+    bitcoin = next(entity for entity in entities if entity.normalized_name == "Bitcoin")
+    btc = next(entity for entity in entities if entity.normalized_name == "BTC")
+    assert bitcoin.entity_type == "market_entity"
+    assert bitcoin.ticker is None
+    assert bitcoin.confidence == 86
+    assert btc.entity_type == "ticker"
+    assert btc.ticker == "BTC"
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_limits_concurrent_classification_calls(
+    monkeypatch,
+) -> None:
+    items = [news_item(f"news_{index}") for index in range(4)]
+    session = FakeEntityExtractionSession(items, existing_entities={item.id: [] for item in items})
+
+    class FakeProvider:
+        def __init__(self) -> None:
+            self.active_calls = 0
+            self.max_active_calls = 0
+
+        async def classify_news_item(self, prompt: str):
+            self.active_calls += 1
+            self.max_active_calls = max(self.max_active_calls, self.active_calls)
+            await asyncio.sleep(0.01)
+            self.active_calls -= 1
+            item_id = next(item.id for item in items if item.id in prompt)
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="exchange_product",
+                    region="crypto",
+                    asset_classes=["crypto"],
+                    entities=[f"Entity {item_id}"],
+                    tickers=[],
+                    duplicate_hint="possible",
+                    confidence=80,
+                    rationale="The item mentions a market entity.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    provider = FakeProvider()
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: provider)
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key", max_concurrency=2),
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    runs = [value for value in session.added if isinstance(value, LLMAnalysisRun)]
+    assert count == 4
+    assert provider.max_active_calls == 2
+    assert len(entities) == 4
+    assert len(runs) == 4
+    assert {run.status for run in runs} == {"succeeded"}
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_isolates_classification_failures(monkeypatch) -> None:
+    items = [
+        news_item("news_success", "Successful classification"),
+        news_item("news_failure", "Failing classification"),
+    ]
+    session = FakeEntityExtractionSession(items, existing_entities={item.id: [] for item in items})
+
+    class FakeProvider:
+        async def classify_news_item(self, prompt: str):
+            if "news_failure" in prompt:
+                raise ValueError("provider unavailable")
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="exchange_product",
+                    region="crypto",
+                    asset_classes=["crypto"],
+                    entities=["Bitcoin"],
+                    tickers=["BTC"],
+                    duplicate_hint="possible",
+                    confidence=86,
+                    rationale="Bitcoin is the affected asset.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key", max_concurrency=2),
+    )
+
+    runs = {run.target_id: run for run in session.added if isinstance(run, LLMAnalysisRun)}
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    assert count == 1
+    assert runs["news_success"].status == "succeeded"
+    assert runs["news_failure"].status == "failed"
+    assert runs["news_failure"].error_message == "provider unavailable"
+    assert {entity.news_item_id for entity in entities} == {"news_success"}
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_skips_existing_entities_without_force(
+    monkeypatch,
+) -> None:
+    item = news_item("news_existing")
+    session = FakeEntityExtractionSession(
+        [item],
+        existing_entities={
+            item.id: [
+                NewsEntity(
+                    news_item_id=item.id,
+                    entity_type="market_entity",
+                    raw_text="Bitcoin",
+                    normalized_name="Bitcoin",
+                    confidence=80,
+                )
+            ]
+        },
+    )
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            raise AssertionError("provider should not be called")
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert count == 0
+    assert session.added == []
+    assert session.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_force_deletes_existing_entities_and_reclassifies(
+    monkeypatch,
+) -> None:
+    item = news_item("news_existing")
+    session = FakeEntityExtractionSession(
+        [item],
+        existing_entities={
+            item.id: [
+                NewsEntity(
+                    news_item_id=item.id,
+                    entity_type="market_entity",
+                    raw_text="Old entity",
+                    normalized_name="Old entity",
+                    confidence=70,
+                )
+            ]
+        },
+    )
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="exchange_product",
+                    region="crypto",
+                    asset_classes=["crypto"],
+                    entities=["Bitcoin"],
+                    tickers=[],
+                    duplicate_hint="possible",
+                    confidence=86,
+                    rationale="Bitcoin is the affected asset.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+        force=True,
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    assert count == 1
+    assert len(session.deleted) == 1
+    assert len(entities) == 1
+    assert entities[0].normalized_name == "Bitcoin"
 
 
 @pytest.mark.asyncio

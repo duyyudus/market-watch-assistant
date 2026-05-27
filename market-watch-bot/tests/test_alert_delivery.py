@@ -216,7 +216,21 @@ async def test_send_test_alert_records_failed_delivery_without_raising() -> None
 
 @pytest.mark.asyncio
 async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
+    order: list[str] = []
+
     async def zero(*_args, **_kwargs) -> int:
+        return 0
+
+    async def extract_zero(*_args, **_kwargs) -> int:
+        order.append("extract_entities")
+        return 0
+
+    async def embed_zero(*_args, **_kwargs) -> int:
+        order.append("embed_news")
+        return 0
+
+    async def cluster_zero(*_args, **_kwargs) -> int:
+        order.append("cluster")
         return 0
 
     async def one_alert(_session) -> int:
@@ -227,7 +241,9 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
 
     monkeypatch.setattr(pipeline_services, "normalize_pending_raw_items", zero)
     monkeypatch.setattr(pipeline_services, "mark_exact_duplicates", zero)
-    monkeypatch.setattr(pipeline_services, "build_event_clusters", zero)
+    monkeypatch.setattr(pipeline_services, "extract_entities_with_llm", extract_zero)
+    monkeypatch.setattr(pipeline_services, "embed_pending_news_items", embed_zero)
+    monkeypatch.setattr(pipeline_services, "build_event_clusters", cluster_zero)
     monkeypatch.setattr(pipeline_services, "record_alert_decisions", one_alert)
     monkeypatch.setattr(pipeline_services, "dispatch_pending_alerts", fake_dispatch)
 
@@ -238,8 +254,12 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
             telegram_bot_token="token",
             telegram_chat_id="chat_1",
         ),
+        llm_config=pipeline_services.LLMConfig(enabled=True, api_key="key"),
+        embedding_config=pipeline_services.EmbeddingConfig(provider="local"),
     )
 
+    assert order == ["extract_entities", "embed_news", "cluster"]
+    assert result["entities_extracted"] == 0
     assert result["alerts"] == 1
     assert result["delivered_alerts"] == 2
     assert result["failed_alert_deliveries"] == 1

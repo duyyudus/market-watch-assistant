@@ -38,6 +38,35 @@ def test_cluster_candidates_groups_related_titles_with_entity_overlap() -> None:
     assert clusters[0].top_source_score == 75
 
 
+def test_cluster_candidates_groups_similar_bitcoin_options_titles_without_filler_entities() -> None:
+    candidates = [
+        EventCandidate(
+            news_id="news_1",
+            title="Bitcoin options are coming to Nasdaq. Here's what it means for you.",
+            source_score=75,
+            entities=["Bitcoin"],
+            region="crypto",
+            asset_classes=["crypto"],
+            published_at=datetime(2026, 5, 25, 3, tzinfo=UTC),
+        ),
+        EventCandidate(
+            news_id="news_2",
+            title="Bitcoin trades above $110,000 as Nasdaq prepares options launch",
+            source_score=70,
+            entities=["Bitcoin"],
+            region="crypto",
+            asset_classes=["crypto"],
+            published_at=datetime(2026, 5, 25, 4, tzinfo=UTC),
+        ),
+    ]
+
+    clusters = cluster_candidates(candidates)
+
+    assert len(clusters) == 1
+    assert clusters[0].entities == {"Bitcoin"}
+    assert not ({"are", "above", "trades", "options"} & clusters[0].entities)
+
+
 def test_vector_cluster_attach_policy_accepts_strict_compatible_match() -> None:
     candidate = VectorClusterCandidate(
         cluster_id="evt_1",

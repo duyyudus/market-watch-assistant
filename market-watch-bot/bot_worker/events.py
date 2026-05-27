@@ -14,6 +14,7 @@ class EventCandidate:
     region: str
     asset_classes: list[str]
     published_at: datetime | None
+    tickers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -21,6 +22,7 @@ class EventClusterDraft:
     canonical_headline: str
     news_ids: list[str] = field(default_factory=list)
     entities: set[str] = field(default_factory=set)
+    tickers: set[str] = field(default_factory=set)
     regions: set[str] = field(default_factory=set)
     asset_classes: set[str] = field(default_factory=set)
     source_count: int = 0
@@ -104,6 +106,7 @@ def cluster_candidates(candidates: list[EventCandidate]) -> list[EventClusterDra
             clusters.append(target)
         target.news_ids.append(candidate.news_id)
         target.entities.update(candidate_entities)
+        target.tickers.update(candidate.tickers)
         target.regions.add(candidate.region)
         target.asset_classes.update(candidate.asset_classes)
         target.source_count += 1

@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
 import bot_worker.cli.alerts as alert_cli
+import bot_worker.cli.events as event_cli
 import bot_worker.cli.llm as llm_cli
 import bot_worker.cli.source as source_cli
 from bot_worker.cli import app
@@ -236,6 +237,41 @@ def test_cli_llm_test_show_prompt_does_not_require_network(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Fed announces emergency liquidity facility" in result.output
     assert "Return only JSON" in result.output
+
+
+def test_cli_event_recluster_dry_run_reports_result(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    async def fake_recluster(_session, *, since, dry_run, limit):
+        assert since.tzinfo is not None
+        assert dry_run is True
+        assert limit == 500
+        return {
+            "status": "dry_run",
+            "affected_clusters": 2,
+            "news_items": 2,
+            "new_clusters": 0,
+        }
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(event_cli, "recluster_recent_event_clusters", fake_recluster)
+
+    result = runner.invoke(app, ["event", "recluster", "--since", "48h"])
+
+    assert result.exit_code == 0
+    assert '"status": "dry_run"' in result.output
+    assert '"affected_clusters": 2' in result.output
+
+
+def test_cli_event_recluster_requires_confirm_for_mutation() -> None:
+    result = runner.invoke(app, ["event", "recluster", "--since", "48h", "--apply"])
+
+    assert result.exit_code == 1
+    assert "Use --confirm with --apply" in result.output
 
 
 def test_cli_llm_test_invalid_event_exits_cleanly(monkeypatch) -> None:

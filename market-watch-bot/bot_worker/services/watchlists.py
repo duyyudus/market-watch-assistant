@@ -19,6 +19,19 @@ async def news_item_entities(session: AsyncSession, news_item_id: str) -> list[s
         ).all()
     )
     return [row.normalized_name for row in rows]
+
+
+async def news_item_tickers(session: AsyncSession, news_item_id: str) -> list[str]:
+    rows = list(
+        (
+            await session.scalars(
+                select(NewsEntity).where(NewsEntity.news_item_id == news_item_id)
+            )
+        ).all()
+    )
+    return [row.ticker for row in rows if row.ticker]
+
+
 async def watchlist_entries(session: AsyncSession) -> list[WatchlistEntry]:
     rows = list(
         (

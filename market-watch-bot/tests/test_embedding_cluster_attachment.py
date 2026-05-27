@@ -53,6 +53,70 @@ class FakeSession:
         self.flushes += 1
 
 
+class FakeReclusterSession:
+    def __init__(self) -> None:
+        self.cluster_1 = EventCluster(
+            id="evt_1",
+            canonical_headline="Bitcoin options are coming to Nasdaq",
+            status="reported",
+            regions=["crypto"],
+            asset_classes=["crypto"],
+            affected_entities=["Bitcoin", "are", "options"],
+            source_count=1,
+            top_source_score=75,
+        )
+        self.cluster_2 = EventCluster(
+            id="evt_2",
+            canonical_headline="Bitcoin trades above $110,000 as Nasdaq prepares options launch",
+            status="reported",
+            regions=["crypto"],
+            asset_classes=["crypto"],
+            affected_entities=["Bitcoin", "above", "trades"],
+            source_count=1,
+            top_source_score=70,
+        )
+        self.item_1 = NormalizedNewsItem(
+            id="news_1",
+            title="Bitcoin options are coming to Nasdaq. Here's what it means for you.",
+            source_score=75,
+            region="crypto",
+            asset_classes=["crypto"],
+            processing_status="normalized",
+            created_at=datetime(2026, 5, 25, 3, tzinfo=UTC),
+        )
+        self.item_2 = NormalizedNewsItem(
+            id="news_2",
+            title="Bitcoin trades above $110,000 as Nasdaq prepares options launch",
+            source_score=70,
+            region="crypto",
+            asset_classes=["crypto"],
+            processing_status="normalized",
+            created_at=datetime(2026, 5, 25, 4, tzinfo=UTC),
+        )
+        self.scalars_results = [
+            ["evt_1", "evt_2"],
+            [self.cluster_1, self.cluster_2],
+            [self.item_1, self.item_2],
+            [],
+        ]
+        self.added: list[object] = []
+        self.executed: list[object] = []
+        self.flushes = 0
+
+    async def scalars(self, _stmt):
+        return ScalarRows(self.scalars_results.pop(0))
+
+    async def execute(self, stmt):
+        self.executed.append(stmt)
+        return FakeExecuteResult()
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def flush(self) -> None:
+        self.flushes += 1
+
+
 class QueryRows:
     def __init__(self, rows: list[object]) -> None:
         self._rows = rows
@@ -160,6 +224,10 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
         assert news_item_id == "news_1"
         return ["hormuz", "brent"]
 
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        assert news_item_id == "news_1"
+        return []
+
     async def fake_vector_cluster_candidates_for_item(
         _session,
         news_item: NormalizedNewsItem,
@@ -183,6 +251,7 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
         ]
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -224,6 +293,9 @@ async def test_build_event_clusters_creates_new_cluster_when_vector_match_is_not
     async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
         return ["fed"]
 
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
     async def fake_vector_cluster_candidates_for_item(*_args, **_kwargs):
         return [
             VectorClusterCandidate(
@@ -236,6 +308,7 @@ async def test_build_event_clusters_creates_new_cluster_when_vector_match_is_not
         ]
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -253,3 +326,135 @@ async def test_build_event_clusters_creates_new_cluster_when_vector_match_is_not
     assert len(cluster_items) == 1
     assert cluster_items[0].similarity_score is None
     assert session.executed == []
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_uses_empty_entities_without_title_word_fallback(
+    monkeypatch,
+) -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Bitcoin options are coming to Nasdaq. Here's what it means for you.",
+        source_score=75,
+        region="crypto",
+        asset_classes=["crypto"],
+        processing_status="normalized",
+    )
+    session = FakeSession(scalars=[[item], []])
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    created = await services.build_event_clusters(session)
+
+    assert created == 1
+    cluster = next(value for value in session.added if isinstance(value, EventCluster))
+    assert cluster.affected_entities == []
+    assert not ({"Bitcoin", "options", "are"} & set(cluster.affected_entities))
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_populates_affected_tickers_from_news_entities(
+    monkeypatch,
+) -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Bitcoin options are coming to Nasdaq. Here's what it means for you.",
+        source_score=75,
+        region="crypto",
+        asset_classes=["crypto"],
+        processing_status="normalized",
+    )
+    session = FakeSession(scalars=[[item], []])
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["Bitcoin"]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        assert news_item_id == "news_1"
+        return ["BTC"]
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    created = await services.build_event_clusters(session)
+
+    assert created == 1
+    cluster = next(value for value in session.added if isinstance(value, EventCluster))
+    assert cluster.affected_entities == ["Bitcoin"]
+    assert cluster.affected_tickers == ["BTC"]
+
+
+@pytest.mark.asyncio
+async def test_recluster_recent_event_clusters_merges_duplicate_clusters_with_clean_entities(
+    monkeypatch,
+) -> None:
+    session = FakeReclusterSession()
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        assert news_item_id in {"news_1", "news_2"}
+        return ["Bitcoin"]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        assert news_item_id in {"news_1", "news_2"}
+        return ["BTC"]
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=False,
+    )
+
+    cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
+    assert result["status"] == "reclustered"
+    assert result["affected_clusters"] == 2
+    assert result["news_items"] == 2
+    assert result["new_clusters"] == 1
+    assert result["stale_clusters"] == 1
+    assert len(cluster_items) == 2
+    assert {item.event_cluster_id for item in cluster_items} == {"evt_1"}
+    assert session.cluster_1.affected_entities == ["Bitcoin"]
+    assert session.cluster_1.affected_tickers == ["BTC"]
+    assert session.cluster_1.source_count == 2
+    assert session.cluster_2.status == "stale"
+    assert session.cluster_2.source_count == 0
+    assert len(session.executed) == 2
+
+
+@pytest.mark.asyncio
+async def test_recluster_recent_event_clusters_dry_run_does_not_mutate(monkeypatch) -> None:
+    session = FakeReclusterSession()
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        assert news_item_id in {"news_1", "news_2"}
+        return ["Bitcoin"]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        assert news_item_id in {"news_1", "news_2"}
+        return ["BTC"]
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=True,
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["affected_clusters"] == 2
+    assert result["news_items"] == 2
+    assert result["new_clusters"] == 1
+    assert session.added == []
+    assert session.executed == []
+    assert session.cluster_2.status == "reported"

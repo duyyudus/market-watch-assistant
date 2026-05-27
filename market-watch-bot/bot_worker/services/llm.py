@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
     EventCluster,
     LLMAnalysisRun,
+    NewsEntity,
     NormalizedNewsItem,
     utcnow,
 )
@@ -18,6 +19,7 @@ from bot_worker.llm import (
     SCORE_PROMPT_VERSION,
     SUMMARY_PROMPT_VERSION,
     LLMAnalysis,
+    LLMClassification,
     LLMConfig,
     build_event_analysis_prompt,
     build_event_score_prompt,
@@ -111,6 +113,20 @@ async def _prepare_llm_run(
     existing_run.usage = None
     existing_run.updated_at = utcnow()
     return existing_run
+
+
+def _news_classification_snapshot(item: NormalizedNewsItem) -> dict[str, object]:
+    return {
+        "news_item_id": item.id,
+        "title": item.title,
+        "snippet": item.snippet,
+        "source_name": item.source_name,
+        "source_score": item.source_score,
+        "region": item.region,
+        "asset_classes": item.asset_classes,
+    }
+
+
 async def classify_news_item_with_llm(
     session: AsyncSession,
     *,
@@ -133,15 +149,6 @@ async def classify_news_item_with_llm(
     if run is not None and run.status == "succeeded" and not force:
         return run
     prompt = build_news_classification_prompt(item)
-    snapshot = {
-        "news_item_id": item.id,
-        "title": item.title,
-        "snippet": item.snippet,
-        "source_name": item.source_name,
-        "source_score": item.source_score,
-        "region": item.region,
-        "asset_classes": item.asset_classes,
-    }
     run = await _prepare_llm_run(
         session,
         existing_run=run,
@@ -150,7 +157,7 @@ async def classify_news_item_with_llm(
         config=config,
         prompt_version=CLASSIFY_PROMPT_VERSION,
         prompt=prompt,
-        input_snapshot=snapshot,
+        input_snapshot=_news_classification_snapshot(item),
     )
     await session.flush()
     try:
@@ -165,6 +172,169 @@ async def classify_news_item_with_llm(
     run.usage = usage
     run.updated_at = utcnow()
     return run
+
+
+def _classification_entities(
+    *,
+    item_id: str,
+    result: dict[str, object],
+) -> list[NewsEntity]:
+    confidence = int(result.get("confidence") or 0)
+    entities: list[NewsEntity] = []
+    seen: set[tuple[str, str | None]] = set()
+    for value in result.get("entities") or []:
+        name = str(value).strip()
+        if not name:
+            continue
+        key = (name.casefold(), None)
+        if key in seen:
+            continue
+        seen.add(key)
+        entities.append(
+            NewsEntity(
+                news_item_id=item_id,
+                entity_type="market_entity",
+                raw_text=name,
+                normalized_name=name,
+                confidence=confidence,
+            )
+        )
+    for value in result.get("tickers") or []:
+        ticker = str(value).strip().upper()
+        if not ticker:
+            continue
+        key = (ticker.casefold(), ticker)
+        if key in seen:
+            continue
+        seen.add(key)
+        entities.append(
+            NewsEntity(
+                news_item_id=item_id,
+                entity_type="ticker",
+                raw_text=ticker,
+                normalized_name=ticker,
+                ticker=ticker,
+                confidence=confidence,
+            )
+        )
+    return entities
+
+
+async def extract_entities_with_llm(
+    session: AsyncSession,
+    *,
+    config: LLMConfig,
+    limit: int = 500,
+    force: bool = False,
+) -> int:
+    if not config.enabled or not config.api_key:
+        return 0
+    stmt = (
+        select(NormalizedNewsItem)
+        .where(NormalizedNewsItem.processing_status.in_(["normalized", "deduped"]))
+        .order_by(NormalizedNewsItem.created_at.desc())
+        .limit(limit)
+    )
+    items = list((await session.scalars(stmt)).all())
+    provider = llm_provider(config)
+    completed_runs: list[tuple[str, LLMAnalysisRun]] = []
+    work_items: list[tuple[str, LLMAnalysisRun, str]] = []
+    for item in items:
+        existing_entities = list(
+            (
+                await session.scalars(
+                    select(NewsEntity).where(NewsEntity.news_item_id == item.id).limit(1)
+                )
+            ).all()
+        )
+        if existing_entities and not force:
+            continue
+        if force and existing_entities:
+            await session.execute(delete(NewsEntity).where(NewsEntity.news_item_id == item.id))
+
+        run = await _existing_llm_run(
+            session,
+            target_type="news_item",
+            target_id=item.id,
+            config=config,
+            prompt_version=CLASSIFY_PROMPT_VERSION,
+        )
+        if run is not None and run.status == "succeeded" and not force:
+            completed_runs.append((item.id, run))
+            continue
+
+        prompt = build_news_classification_prompt(item)
+        run = await _prepare_llm_run(
+            session,
+            existing_run=run,
+            target_type="news_item",
+            target_id=item.id,
+            config=config,
+            prompt_version=CLASSIFY_PROMPT_VERSION,
+            prompt=prompt,
+            input_snapshot=_news_classification_snapshot(item),
+        )
+        await session.flush()
+        work_items.append((item.id, run, prompt))
+
+    semaphore = asyncio.Semaphore(max(1, config.max_concurrency))
+
+    async def classify_with_limit(
+        item_id: str,
+        run: LLMAnalysisRun,
+        prompt: str,
+    ) -> tuple[
+        str,
+        LLMAnalysisRun,
+        LLMClassification | None,
+        dict[str, object] | None,
+        Exception | None,
+    ]:
+        async with semaphore:
+            try:
+                result, usage = await provider.classify_news_item(prompt)
+            except Exception as exc:  # noqa: BLE001 - LLM failures must not block extraction
+                return item_id, run, None, None, exc
+            return item_id, run, result, usage, None
+
+    results = await asyncio.gather(
+        *(classify_with_limit(item_id, run, prompt) for item_id, run, prompt in work_items)
+    )
+
+    extracted = 0
+    for item_id, run in completed_runs:
+        if not run.result:
+            continue
+        entities = _classification_entities(item_id=item_id, result=run.result)
+        if not entities:
+            continue
+        for entity in entities:
+            session.add(entity)
+        extracted += 1
+    for item_id, run, result, usage, error in results:
+        if error is not None:
+            run.status = "failed"
+            run.error_message = str(error)
+            run.updated_at = utcnow()
+            continue
+        if result is None:
+            run.status = "failed"
+            run.error_message = "LLM classification returned no result"
+            run.updated_at = utcnow()
+            continue
+        run.status = "succeeded"
+        run.result = result.model_dump()
+        run.usage = usage
+        run.updated_at = utcnow()
+        entities = _classification_entities(item_id=item_id, result=run.result)
+        if not entities:
+            continue
+        for entity in entities:
+            session.add(entity)
+        extracted += 1
+    return extracted
+
+
 async def summarize_event_with_llm(
     session: AsyncSession,
     *,
