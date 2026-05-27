@@ -54,7 +54,9 @@ from bot_worker.services.pipeline import (
     run_pipeline,
 )
 from bot_worker.services.retention import (
+    baseline_reset_preview,
     retention_preview,
+    run_baseline_reset,
     run_retention,
 )
 from bot_worker.services.sources import (
@@ -80,6 +82,7 @@ __all__ = [
     "CORE_JOBS",
     "add_source",
     "add_watchlist_entry",
+    "baseline_reset_preview",
     "build_event_clusters",
     "classify_news_item_with_llm",
     "digest_display_headline",
@@ -112,6 +115,7 @@ __all__ = [
     "record_job_run",
     "recluster_recent_event_clusters",
     "retention_preview",
+    "run_baseline_reset",
     "run_missed_catalyst_review",
     "run_pipeline",
     "run_retention",

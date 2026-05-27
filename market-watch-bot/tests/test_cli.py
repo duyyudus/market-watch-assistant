@@ -3,6 +3,7 @@ from typer.testing import CliRunner
 import bot_worker.cli.alerts as alert_cli
 import bot_worker.cli.events as event_cli
 import bot_worker.cli.llm as llm_cli
+import bot_worker.cli.retention as retention_cli
 import bot_worker.cli.source as source_cli
 from bot_worker.cli import app
 from bot_worker.db.models import EventCluster, LLMAnalysisRun, NormalizedNewsItem
@@ -210,6 +211,64 @@ def test_cli_source_purge_reports_deleted_counts(monkeypatch) -> None:
     assert "Purged source Investing.com News" in result.output
     assert "source_fetch_logs: 2" in result.output
     assert "event_clusters: 1" in result.output
+
+
+def test_cli_retention_reset_baseline_requires_explicit_confirmation(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_baseline_reset_preview(_session):
+        calls.append("preview")
+        return {"event_clusters": 2, "news_item_embeddings": 3}
+
+    async def fake_run_baseline_reset(_session):
+        calls.append("run")
+        return {"event_clusters": 2, "news_item_embeddings": 3}
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    monkeypatch.setattr(retention_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(retention_cli, "baseline_reset_preview", fake_baseline_reset_preview)
+    monkeypatch.setattr(retention_cli, "run_baseline_reset", fake_run_baseline_reset)
+
+    result = runner.invoke(app, ["retention", "reset-baseline"])
+
+    assert result.exit_code == 1
+    assert calls == ["preview"]
+    assert "Refusing to reset baseline without --yes; preview follows:" in result.output
+    assert '"event_clusters": 2' in result.output
+
+
+def test_cli_retention_reset_baseline_yes_reports_deleted_counts(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_baseline_reset_preview(_session):
+        calls.append("preview")
+        return {"event_clusters": 2, "news_item_embeddings": 3}
+
+    async def fake_run_baseline_reset(_session):
+        calls.append("run")
+        return {"event_clusters": 2, "news_item_embeddings": 3}
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    monkeypatch.setattr(retention_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(retention_cli, "baseline_reset_preview", fake_baseline_reset_preview)
+    monkeypatch.setattr(retention_cli, "run_baseline_reset", fake_run_baseline_reset)
+
+    result = runner.invoke(app, ["retention", "reset-baseline", "--yes"])
+
+    assert result.exit_code == 0
+    assert calls == ["run"]
+    assert '"event_clusters": 2' in result.output
+    assert '"news_item_embeddings": 3' in result.output
 
 
 def test_cli_llm_test_show_prompt_does_not_require_network(monkeypatch) -> None:

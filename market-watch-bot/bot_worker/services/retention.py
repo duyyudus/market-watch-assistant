@@ -7,13 +7,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
     AlertDecisionRecord,
+    AlertDeliveryRecord,
     EventCluster,
+    EventClusterEmbedding,
+    EventClusterItem,
+    EventScoreHistory,
+    JobRun,
+    LLMAnalysisRun,
+    MarketMove,
+    MissedCatalystReview,
+    NewsItemEmbedding,
     NormalizedNewsItem,
     RawNewsItem,
     RetentionJob,
     SourceFetchLog,
 )
 from bot_worker.retention import RetentionPolicy, retention_cutoffs
+
+BASELINE_RESET_TARGET_MODELS = (
+    AlertDeliveryRecord,
+    AlertDecisionRecord,
+    EventScoreHistory,
+    EventClusterEmbedding,
+    EventClusterItem,
+    MissedCatalystReview,
+    EventCluster,
+    NewsItemEmbedding,
+    LLMAnalysisRun,
+    MarketMove,
+    SourceFetchLog,
+    JobRun,
+    RetentionJob,
+)
+BASELINE_RESET_TARGET_TABLES = tuple(model.__tablename__ for model in BASELINE_RESET_TARGET_MODELS)
 
 
 async def retention_preview(session: AsyncSession, policy: RetentionPolicy) -> dict[str, int]:
@@ -95,4 +121,21 @@ async def run_retention(session: AsyncSession, policy: RetentionPolicy) -> dict[
     session.add(
         RetentionJob(status="success", deleted_counts=deleted, completed_at=datetime.now(UTC))
     )
+    return deleted
+
+
+async def baseline_reset_preview(session: AsyncSession) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for model in BASELINE_RESET_TARGET_MODELS:
+        counts[model.__tablename__] = (
+            await session.scalar(select(func.count()).select_from(model))
+        ) or 0
+    return counts
+
+
+async def run_baseline_reset(session: AsyncSession) -> dict[str, int]:
+    deleted: dict[str, int] = {}
+    for model in BASELINE_RESET_TARGET_MODELS:
+        result = await session.execute(delete(model))
+        deleted[model.__tablename__] = result.rowcount or 0
     return deleted

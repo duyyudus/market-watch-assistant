@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import typer
+
 from bot_worker.cli.apps import retention_app
 from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
 from bot_worker.retention import RetentionPolicy
 from bot_worker.services import (
+    baseline_reset_preview,
     retention_preview,
+    run_baseline_reset,
     run_retention,
 )
 
@@ -32,5 +36,21 @@ def retention_run() -> None:
 
     async def action(session):
         _echo_json(await run_retention(session, policy))
+
+    _run(_with_session(action))
+
+
+@retention_app.command("reset-baseline")
+def retention_reset_baseline(
+    yes: bool = typer.Option(False, "--yes", help="Confirm destructive baseline reset."),
+) -> None:
+    """Delete derived/runtime data while preserving baseline news and configuration."""
+
+    async def action(session):
+        if not yes:
+            typer.echo("Refusing to reset baseline without --yes; preview follows:")
+            _echo_json(await baseline_reset_preview(session))
+            raise typer.Exit(1)
+        _echo_json(await run_baseline_reset(session))
 
     _run(_with_session(action))
