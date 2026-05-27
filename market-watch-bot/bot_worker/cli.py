@@ -58,23 +58,29 @@ from bot_worker.services import (
 )
 from bot_worker.watchlist import match_watchlist
 
-app = typer.Typer(no_args_is_help=True, help="Market watch bot CLI")
-source_app = typer.Typer(no_args_is_help=True)
-worker_app = typer.Typer(no_args_is_help=True)
-job_app = typer.Typer(no_args_is_help=True)
-pipeline_app = typer.Typer(no_args_is_help=True)
-news_app = typer.Typer(no_args_is_help=True)
-event_app = typer.Typer(no_args_is_help=True)
-watchlist_app = typer.Typer(no_args_is_help=True)
-alert_app = typer.Typer(no_args_is_help=True)
-alert_policy_app = typer.Typer(no_args_is_help=True)
-digest_app = typer.Typer(no_args_is_help=True)
-retention_app = typer.Typer(no_args_is_help=True)
-health_app = typer.Typer(no_args_is_help=True)
-embedding_app = typer.Typer(no_args_is_help=True)
-market_app = typer.Typer(no_args_is_help=True)
-catalyst_app = typer.Typer(no_args_is_help=True)
-llm_app = typer.Typer(no_args_is_help=True)
+_CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+
+app = typer.Typer(
+    no_args_is_help=True,
+    help="Market watch bot CLI",
+    context_settings=_CONTEXT_SETTINGS,
+)
+source_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+worker_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+job_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+pipeline_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+news_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+event_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+watchlist_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+alert_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+alert_policy_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+digest_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+retention_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+health_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+embedding_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+market_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+catalyst_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+llm_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 
 app.add_typer(source_app, name="source")
 app.add_typer(worker_app, name="worker")
@@ -194,6 +200,7 @@ def source_add(
     score: Annotated[int, typer.Option("--score")] = 60,
     interval: Annotated[int, typer.Option("--interval")] = 300,
 ) -> None:
+    """Add a new data source (e.g., RSS feed) to the database."""
     async def action(session):
         source = await add_source(
             session,
@@ -217,6 +224,7 @@ def source_add(
 
 @source_app.command("list")
 def source_list(enabled: Annotated[bool, typer.Option("--enabled")] = False) -> None:
+    """List all ingestion sources, optionally filtering by enabled status."""
     async def action(session):
         rows = await list_sources(session, enabled=True if enabled else None)
         if not rows:
@@ -233,6 +241,7 @@ def source_list(enabled: Annotated[bool, typer.Option("--enabled")] = False) -> 
 
 @source_app.command("show")
 def source_show(identifier: str) -> None:
+    """Show the details and current configuration of a specific source."""
     async def action(session):
         source = await get_source(session, identifier)
         if source is None:
@@ -255,6 +264,7 @@ def source_show(identifier: str) -> None:
 
 @source_app.command("test")
 def source_test(identifier: str) -> None:
+    """Test fetching and parsing a source without saving the items to the database."""
     async def action(session):
         source = await get_source(session, identifier)
         if source is None:
@@ -268,11 +278,13 @@ def source_test(identifier: str) -> None:
 
 @source_app.command("fetch")
 def source_fetch(identifier: str) -> None:
+    """Fetch and test a source (alias for 'source test')."""
     source_test(identifier)
 
 
 @source_app.command("enable")
 def source_enable(identifier: str) -> None:
+    """Enable a specific data source by its identifier."""
     async def action(session):
         ok = await set_source_enabled(session, identifier, True)
         typer.echo("enabled" if ok else "source not found")
@@ -282,6 +294,7 @@ def source_enable(identifier: str) -> None:
 
 @source_app.command("disable")
 def source_disable(identifier: str) -> None:
+    """Disable a specific data source by its identifier."""
     async def action(session):
         ok = await set_source_enabled(session, identifier, False)
         typer.echo("disabled" if ok else "source not found")
@@ -296,6 +309,7 @@ def source_purge(
         bool, typer.Option("--yes", help="Confirm permanent deletion of the source and its data")
     ] = False,
 ) -> None:
+    """Permanently delete a source and all its associated news items and events."""
     if not yes:
         typer.echo("Refusing to purge without --yes")
         raise typer.Exit(1)
@@ -316,6 +330,7 @@ def source_purge(
 
 @source_app.command("import")
 def source_import(path: Path) -> None:
+    """Import multiple data sources from a YAML configuration file."""
     sources = import_sources_yaml(path)
 
     async def action(session):
@@ -340,6 +355,7 @@ def source_import(path: Path) -> None:
 
 @source_app.command("export")
 def source_export(out: Annotated[Path, typer.Option("--out")] = Path("sources.yaml")) -> None:
+    """Export all defined data sources to a YAML file."""
     async def action(session):
         rows = await list_sources(session)
         data = {
@@ -367,6 +383,7 @@ def source_export(out: Annotated[Path, typer.Option("--out")] = Path("sources.ya
 
 @worker_app.command("start")
 def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> None:
+    """Start the background worker process to run pipeline jobs at configured intervals."""
     jobs = only.split(",") if only else CORE_JOBS
     typer.echo(f"Starting worker loop for jobs: {', '.join(jobs)}")
     typer.echo("Use Ctrl+C to stop")
@@ -393,27 +410,32 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
 
 @worker_app.command("status")
 def worker_status() -> None:
+    """Show worker running status (MVP placeholder)."""
     typer.echo("worker status: command-driven MVP; no supervisor state recorded")
 
 
 @worker_app.command("logs")
 def worker_logs(tail: Annotated[int, typer.Option("--tail")] = 200) -> None:
+    """Retrieve logs from the worker process (MVP placeholder)."""
     typer.echo(f"worker logs are stdout/stderr in MVP (tail requested: {tail})")
 
 
 @worker_app.command("health")
 def worker_health() -> None:
+    """Check health status of the worker and active database session."""
     health_pipeline()
 
 
 @job_app.command("list")
 def job_list() -> None:
+    """List all core scheduler jobs."""
     for job in CORE_JOBS:
         typer.echo(job)
 
 
 @job_app.command("run")
 def job_run(name: str, dry_run: Annotated[bool, typer.Option("--dry-run")] = False) -> None:
+    """Run a specific background job immediately."""
     if name == "pipeline":
         pipeline_run(dry_run=dry_run)
         return
@@ -425,6 +447,7 @@ def job_run(name: str, dry_run: Annotated[bool, typer.Option("--dry-run")] = Fal
 
 @job_app.command("history")
 def job_history() -> None:
+    """View the execution history of scheduler jobs (MVP placeholder)."""
     typer.echo(
         "job history is stored in job_runs; use database queries for detailed MVP inspection"
     )
@@ -432,11 +455,13 @@ def job_history() -> None:
 
 @job_app.command("failures")
 def job_failures() -> None:
+    """List or inspect failed job executions (MVP placeholder)."""
     typer.echo("failed job retry queue is deferred in MVP")
 
 
 @pipeline_app.command("run")
 def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) -> None:
+    """Execute the complete market watch ingestion and analysis pipeline."""
     if dry_run:
         typer.echo(
             "Dry run pipeline: poll -> normalize -> dedupe -> embed -> "
@@ -464,31 +489,37 @@ def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) ->
 
 @pipeline_app.command("inspect")
 def pipeline_inspect(item: Annotated[str, typer.Option("--item")]) -> None:
+    """Inspect details of a specific pipeline run or item (MVP placeholder)."""
     typer.echo(f"Pipeline inspection for {item} is available after database ingestion")
 
 
 @pipeline_app.command("stats")
 def pipeline_stats() -> None:
+    """Show statistics and retention cutoffs for the pipeline."""
     health_pipeline()
 
 
 @news_app.command("list")
 def news_list() -> None:
+    """List ingested news items (MVP placeholder)."""
     typer.echo("news list requires database-backed normalized_news_items")
 
 
 @news_app.command("show")
 def news_show(identifier: str) -> None:
+    """Display details of a specific news item (MVP placeholder)."""
     typer.echo(f"news show {identifier} requires database-backed normalized_news_items")
 
 
 @news_app.command("search")
 def news_search(query: str) -> None:
+    """Search across ingested news items by title or content (MVP placeholder)."""
     typer.echo(f"news search for {query!r} uses title/snippet metadata in MVP")
 
 
 @event_app.command("list")
 def event_list() -> None:
+    """List active event clusters sorted by final score."""
     async def action(session):
         rows = await digest_preview(session)
         for event in rows:
@@ -501,21 +532,25 @@ def event_list() -> None:
 
 @event_app.command("show")
 def event_show(identifier: str) -> None:
+    """Show details of a specific event cluster (MVP placeholder)."""
     typer.echo(f"event show {identifier} requires event_clusters data")
 
 
 @event_app.command("merge")
 def event_merge(left: str, right: str) -> None:
+    """Manually merge two event clusters (MVP placeholder)."""
     typer.echo(f"event merge requested for {left} and {right}; manual merge is deferred in MVP")
 
 
 @event_app.command("rescore")
 def event_rescore(identifier: str) -> None:
+    """Trigger manual rescoring of an event cluster (MVP placeholder)."""
     typer.echo(f"event rescore requested for {identifier}; scoring runs during pipeline in MVP")
 
 
 @event_app.command("mark")
 def event_mark(identifier: str, status: Annotated[str, typer.Option("--status")]) -> None:
+    """Change status or category of an event cluster (MVP placeholder)."""
     typer.echo(f"event mark requested for {identifier}: {status}; direct update is deferred in MVP")
 
 
@@ -529,6 +564,7 @@ def watchlist_add(
     tier: Annotated[str, typer.Option("--tier")] = "D",
     alias: Annotated[list[str] | None, typer.Option("--alias")] = None,
 ) -> None:
+    """Add a symbol, entity, or theme to the active watchlist."""
     async def action(session):
         entry = await add_watchlist_entry(
             session,
@@ -547,6 +583,7 @@ def watchlist_add(
 
 @watchlist_app.command("list")
 def watchlist_list() -> None:
+    """List all items currently in the watchlist."""
     async def action(session):
         rows = await watchlist_entries(session)
         for row in rows:
@@ -557,11 +594,13 @@ def watchlist_list() -> None:
 
 @watchlist_app.command("show")
 def watchlist_show(identifier: str) -> None:
+    """Show details of a specific watchlist entry (MVP placeholder)."""
     typer.echo(f"watchlist show {identifier} is deferred in MVP")
 
 
 @watchlist_app.command("match")
 def watchlist_match(text_value: str) -> None:
+    """Test matching a text value against the watchlist entries."""
     async def action(session):
         matches = match_watchlist(text_value, await watchlist_entries(session))
         if not matches:
@@ -574,6 +613,7 @@ def watchlist_match(text_value: str) -> None:
 
 @alert_policy_app.command("show")
 def alert_policy_show() -> None:
+    """Display the active alerting policy and scoring thresholds."""
     settings = _settings()
     _echo_json(
         {
@@ -587,6 +627,7 @@ def alert_policy_show() -> None:
 
 @alert_policy_app.command("set")
 def alert_policy_set(key: str, value: str) -> None:
+    """Set an alerting policy parameter for this runtime (MVP placeholder)."""
     typer.echo(
         f"Policy setting {key}={value} accepted for runtime config; "
         "persistent edit is manual in MVP"
@@ -595,11 +636,13 @@ def alert_policy_set(key: str, value: str) -> None:
 
 @alert_policy_app.command("reset")
 def alert_policy_reset() -> None:
+    """Reset alerting policy to the defaults configured in settings.yml."""
     typer.echo("Alert policy reset uses defaults from settings.yml in MVP")
 
 
 @alert_app.command("test")
 def alert_test(score: Annotated[int, typer.Option("--score")] = 80) -> None:
+    """Evaluate alerting decision (immediate, watchlist, or digest) for a hypothetical score."""
     settings = _settings()
     decision = decide_alert(
         score,
@@ -617,6 +660,7 @@ def alert_list(
     limit: Annotated[int, typer.Option("--limit", min=1, max=200)] = 20,
     level: Annotated[str | None, typer.Option("--level")] = None,
 ) -> None:
+    """List recent alert decisions, optionally filtered by decision level."""
     async def action(session):
         stmt = (
             select(AlertDecisionRecord, EventCluster)
@@ -641,6 +685,7 @@ def alert_list(
 
 @alert_app.command("show")
 def alert_show(identifier: str) -> None:
+    """Display detailed reasons and metadata for a specific alert decision."""
     async def action(session):
         stmt = (
             select(AlertDecisionRecord, EventCluster)
@@ -672,6 +717,7 @@ def alert_show(identifier: str) -> None:
 
 @digest_app.command("preview")
 def digest_preview_command(limit: Annotated[int, typer.Option("--limit")] = 20) -> None:
+    """Preview event clusters compiled for the current digest window."""
     async def action(session):
         rows = await digest_preview(session, limit=limit)
         if not rows:
@@ -690,6 +736,7 @@ def digest_build(
     until_value: Annotated[str | None, typer.Option("--until")] = None,
     limit: Annotated[int, typer.Option("--limit")] = 50,
 ) -> None:
+    """Build and format digest for a specific day or date range."""
     settings = _settings()
     if date_value:
         since, until = digest_window_for_date(date_value, ZoneInfo(settings.bot.timezone))
@@ -711,17 +758,20 @@ def digest_build(
 
 @digest_app.command("history")
 def digest_history() -> None:
+    """Browse historical digest runs (MVP placeholder)."""
     typer.echo("digest history is represented by event and alert history in MVP")
 
 
 @retention_app.command("show")
 def retention_show() -> None:
+    """Display the active database retention policy configuration."""
     settings = _settings()
     _echo_json(settings.retention.model_dump())
 
 
 @retention_app.command("preview")
 def retention_preview_command() -> None:
+    """Preview which database records would be cleaned up under the retention policy."""
     settings = _settings()
     policy = RetentionPolicy(**settings.retention.model_dump())
 
@@ -733,6 +783,7 @@ def retention_preview_command() -> None:
 
 @retention_app.command("run")
 def retention_run() -> None:
+    """Execute retention cleanup to purge expired news, event, and run records."""
     settings = _settings()
     policy = RetentionPolicy(**settings.retention.model_dump())
 
@@ -747,6 +798,7 @@ def embedding_backfill(
     kind: Annotated[str, typer.Option("--kind")] = "news",
     limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
 ) -> None:
+    """Backfill vector embeddings for pending news items or event clusters."""
     settings = _settings()
     config = EmbeddingConfig.from_settings(settings)
 
@@ -768,6 +820,7 @@ def market_fetch(
     symbols: Annotated[str, typer.Option("--symbols")],
     window: Annotated[str, typer.Option("--window")] = "1d",
 ) -> None:
+    """Fetch recent market moves for watchlisted assets and store them in the database."""
     settings = _settings()
     parsed_symbols = [symbol.strip() for symbol in symbols.split(",") if symbol.strip()]
 
@@ -791,6 +844,7 @@ def market_fetch(
 
 @catalyst_app.command("review")
 def catalyst_review(window: Annotated[str, typer.Option("--window")] = "1d") -> None:
+    """Run automated review of missed catalysts over a specified window."""
     async def action(session):
         count = await run_missed_catalyst_review(session, window=window)
         _echo_json({"created": count, "window": window})
@@ -844,6 +898,7 @@ def llm_test(
     event_id: Annotated[str, typer.Option("--event")],
     show_prompt: Annotated[bool, typer.Option("--show-prompt")] = False,
 ) -> None:
+    """Test building the LLM analysis prompt for a specific event cluster."""
     async def action(session):
         event = await _event_or_exit(session, event_id)
         prompt = build_event_analysis_prompt(
@@ -861,6 +916,7 @@ def llm_test(
 
 @llm_app.command("classify")
 def llm_classify(item_id: Annotated[str, typer.Option("--item")]) -> None:
+    """Run LLM classification and category analysis on a specific news item."""
     config = _enabled_llm_config()
 
     async def action(session):
@@ -878,6 +934,7 @@ def llm_classify(item_id: Annotated[str, typer.Option("--item")]) -> None:
 
 @llm_app.command("enrich")
 def llm_enrich(event_id: Annotated[str, typer.Option("--event")]) -> None:
+    """Trigger manual LLM enrichment (entity extraction, region mapping) for an event cluster."""
     config = _enabled_llm_config()
 
     async def action(session):
@@ -915,6 +972,7 @@ def llm_enrich(event_id: Annotated[str, typer.Option("--event")]) -> None:
 
 @llm_app.command("summarize")
 def llm_summarize(event_id: Annotated[str, typer.Option("--event")]) -> None:
+    """Trigger manual LLM summary generation for a specific event cluster."""
     config = _enabled_llm_config()
 
     async def action(session):
@@ -932,6 +990,7 @@ def llm_summarize(event_id: Annotated[str, typer.Option("--event")]) -> None:
 
 @llm_app.command("score")
 def llm_score(event_id: Annotated[str, typer.Option("--event")]) -> None:
+    """Trigger manual LLM scoring (impact, severity) for a specific event cluster."""
     config = _enabled_llm_config()
 
     async def action(session):
@@ -959,6 +1018,7 @@ def _since_cutoff(value: str) -> datetime:
 
 @llm_app.command("usage")
 def llm_usage(since: Annotated[str, typer.Option("--since")] = "7d") -> None:
+    """Report total LLM token usage and run count since a specific time."""
     cutoff = _since_cutoff(since)
 
     async def action(session):
@@ -992,21 +1052,25 @@ def llm_usage(since: Annotated[str, typer.Option("--since")] = "7d") -> None:
 
 @health_app.command("sources")
 def health_sources() -> None:
+    """Check data ingestion source health and configuration."""
     source_list()
 
 
 @health_app.command("jobs")
 def health_jobs() -> None:
+    """Check the status and availability of core pipeline jobs."""
     job_list()
 
 
 @health_app.command("db")
 def health_db() -> None:
+    """Verify database connectivity, migrations, and extension compatibility."""
     doctor()
 
 
 @health_app.command("pipeline")
 def health_pipeline() -> None:
+    """Check pipeline status and show current retention timeframes."""
     typer.echo("pipeline jobs:")
     for job in CORE_JOBS:
         typer.echo(f"- {job}")
