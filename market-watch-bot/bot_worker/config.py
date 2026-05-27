@@ -50,6 +50,25 @@ class EmbeddingSettings(BaseModel):
     cluster_attach_candidate_limit: int = 20
 
 
+class LLMSettings(BaseModel):
+    enabled: bool = False
+    provider: str = "openrouter"
+    api_base_url: str = "https://openrouter.ai/api/v1"
+    model: str = "openai/gpt-4.1-mini"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    prompt_version: str = "event-v1"
+    temperature: float = 0.1
+    max_tokens: int = 700
+    timeout_seconds: int = 45
+    max_concurrency: int = Field(default=3, ge=1)
+    high_score_threshold: int = 80
+    single_source_score_threshold: int = 90
+    market_move_score_threshold: int = 70
+    relevance_score_threshold: int = 80
+    min_modifier: int = -10
+    max_modifier: int = 10
+
+
 class MarketDataConfig(BaseModel):
     vn_base_url: str = "http://192.168.100.39:8020"
     crypto_provider: str = "binance"
@@ -96,6 +115,7 @@ class Settings(BaseModel):
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     embeddings: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
     market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

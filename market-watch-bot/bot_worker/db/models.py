@@ -241,6 +241,38 @@ class EventClusterEmbedding(Base):
     )
 
 
+class LLMAnalysisRun(Base):
+    __tablename__ = "llm_analysis_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("llm"))
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    usage: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "target_type",
+            "target_id",
+            "provider",
+            "model",
+            "prompt_version",
+            name="uq_llm_analysis_runs_target_model_prompt",
+        ),
+    )
+
+
 class MarketMove(Base):
     __tablename__ = "market_moves"
 
