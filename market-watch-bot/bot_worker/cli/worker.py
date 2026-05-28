@@ -8,10 +8,13 @@ import typer
 from bot_worker.cli.apps import worker_app
 from bot_worker.cli.common import _run, _settings, _with_session
 from bot_worker.embeddings import EmbeddingConfig
+from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import LLMConfig
 from bot_worker.services import (
     CORE_JOBS,
+    AlertDeliveryConfig,
     record_job_run,
+    run_pending_investigations,
     run_pipeline,
 )
 
@@ -33,9 +36,21 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
                     freshness_hours=settings.ingestion.rss_freshness_hours,
                     embedding_config=EmbeddingConfig.from_settings(settings),
                     llm_config=LLMConfig.from_settings(settings),
+                    investigation_config=InvestigationConfig.from_settings(settings),
+                    alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
                 )
                 await record_job_run(session, "pipeline", result)
                 typer.echo(f"pipeline: {result}")
+                investigation_config = InvestigationConfig.from_settings(settings)
+                if investigation_config.enabled:
+                    pending_result = await run_pending_investigations(
+                        session,
+                        config=investigation_config,
+                        llm_config=LLMConfig.from_settings(settings),
+                        limit=investigation_config.max_concurrency,
+                    )
+                    await record_job_run(session, "agent_investigation", pending_result)
+                    typer.echo(f"agent_investigation: {pending_result}")
 
             await _with_session(action)
             await asyncio.sleep(_settings().bot.polling_interval_seconds)

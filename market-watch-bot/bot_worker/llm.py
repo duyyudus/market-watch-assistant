@@ -20,6 +20,7 @@ CLASSIFY_PROMPT_VERSION = "classify-v1"
 SCORE_PROMPT_VERSION = "score-v1"
 SUMMARY_PROMPT_VERSION = "summarize-v1"
 CLUSTER_DECISION_PROMPT_VERSION = "cluster-decision-v1"
+INVESTIGATION_PROMPT_VERSION = "investigation-v1"
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,26 @@ class LLMClusterDecision(BaseModel):
     @classmethod
     def normalize_rationale(cls, value: str) -> str:
         return normalize_text(value)
+
+
+class LLMInvestigationResult(BaseModel):
+    summary: str = Field(min_length=1)
+    confidence: int = Field(ge=0, le=100)
+    official_confirmation: str = Field(min_length=1)
+    risk_flags: list[str] = Field(default_factory=list)
+    suggested_score_modifier: int = Field(default=0)
+    suggested_alert_level: str = Field(min_length=1)
+    caveats: list[str] = Field(default_factory=list)
+
+    @field_validator("summary", "official_confirmation", "suggested_alert_level")
+    @classmethod
+    def normalize_strings(cls, value: str) -> str:
+        return normalize_text(value)
+
+    @field_validator("suggested_score_modifier")
+    @classmethod
+    def clamp_modifier(cls, value: int) -> int:
+        return clamp_score_modifier(value)
 
 
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -364,6 +385,26 @@ def build_event_score_prompt(
     )
 
 
+def build_investigation_prompt(
+    *,
+    target_type: str,
+    input_snapshot: dict[str, object],
+    evidence: list[dict[str, object]],
+) -> str:
+    return "\n".join(
+        [
+            "Investigate this market-watch target using only the supplied evidence.",
+            "Return only JSON matching the requested schema.",
+            "Do not send alerts or mutate event fields; provide advisory policy input only.",
+            "Treat search snippets as unverified unless the source is clearly official.",
+            "",
+            f"Target type: {target_type}",
+            f"Input snapshot: {json.dumps(input_snapshot, sort_keys=True, default=str)}",
+            f"Evidence: {json.dumps(evidence, sort_keys=True, default=str)}",
+        ]
+    )
+
+
 def prompt_hash(prompt: str) -> str:
     return content_hash(prompt)
 
@@ -404,6 +445,11 @@ class OpenRouterChatProvider:
     ) -> tuple[BaseModel, dict[str, object]]:
         if not self.config.api_key:
             raise ValueError(f"{self.config.api_key_env} is required for OpenRouter LLM analysis")
+        json_schema = {
+            "name": schema_name,
+            "strict": True,
+            "schema": strict_json_schema(schema_model),
+        }
         payload: dict[str, object] = {
             "model": self.config.model,
             "messages": [
@@ -417,11 +463,7 @@ class OpenRouterChatProvider:
             "max_tokens": self.config.max_tokens,
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": strict_json_schema(schema_model),
-                },
+                "json_schema": json_schema,
             },
         }
         url = f"{self.config.api_base_url.rstrip('/')}/chat/completions"
@@ -434,10 +476,30 @@ class OpenRouterChatProvider:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                body = response.text[:1000]
-                raise ValueError(
-                    f"OpenRouter chat completion failed with HTTP {response.status_code}: {body}"
-                ) from exc
+                if response.status_code == 400:
+                    fallback_schema = {
+                        "name": schema_name,
+                        "schema": strict_json_schema(schema_model),
+                    }
+                    payload["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": fallback_schema,
+                    }
+                    response = await client.post(url, headers=headers, json=payload)
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as retry_exc:
+                        body = response.text[:1000]
+                        raise ValueError(
+                            "OpenRouter chat completion failed with "
+                            f"HTTP {response.status_code}: {body}"
+                        ) from retry_exc
+                else:
+                    body = response.text[:1000]
+                    raise ValueError(
+                        "OpenRouter chat completion failed with "
+                        f"HTTP {response.status_code}: {body}"
+                    ) from exc
         data = response.json()
         content = data["choices"][0]["message"]["content"]
         analysis = schema_model.model_validate_json(content)
@@ -508,6 +570,20 @@ class OpenRouterChatProvider:
             ),
         )
         return LLMClusterDecision.model_validate(result), usage
+
+    async def investigate_event(
+        self, prompt: str
+    ) -> tuple[LLMInvestigationResult, dict[str, object]]:
+        result, usage = await self.complete_structured(
+            prompt=prompt,
+            schema_name="market_agent_investigation",
+            schema_model=LLMInvestigationResult,
+            system_message=(
+                "You are a constrained market investigator. Use only supplied evidence. "
+                "Return concise, caveated recommendations for a deterministic policy engine."
+            ),
+        )
+        return LLMInvestigationResult.model_validate(result), usage
 
 
 def llm_provider(config: LLMConfig) -> OpenRouterChatProvider:

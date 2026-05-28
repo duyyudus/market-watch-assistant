@@ -2,11 +2,19 @@ from typer.testing import CliRunner
 
 import bot_worker.cli.alerts as alert_cli
 import bot_worker.cli.events as event_cli
+import bot_worker.cli.investigate as investigate_cli
 import bot_worker.cli.llm as llm_cli
 import bot_worker.cli.retention as retention_cli
 import bot_worker.cli.source as source_cli
+import bot_worker.cli.worker as worker_cli
 from bot_worker.cli import app
-from bot_worker.db.models import EventCluster, LLMAnalysisRun, NormalizedNewsItem
+from bot_worker.db.models import (
+    AgentInvestigation,
+    AlertDecisionRecord,
+    EventCluster,
+    LLMAnalysisRun,
+    NormalizedNewsItem,
+)
 
 runner = CliRunner()
 
@@ -159,6 +167,392 @@ def test_cli_alert_dispatch_dry_run_prints_pending_counts(monkeypatch) -> None:
     assert '"pending": 2' in result.output
     assert '"attempted": 0' in result.output
     assert '"skipped": 1' in result.output
+
+
+def test_cli_investigate_event_runs_service(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    class Settings:
+        brave_search_api_key = "brave-key"
+        openrouter_api_key = "llm-key"
+
+        class investigation:
+            enabled = True
+            brave_search_api_key_env = "BRAVE_SEARCH_API_KEY"
+            max_search_results = 10
+            max_evidence_items = 12
+            local_evidence_limit = 10
+            local_evidence_lookback_days = 3
+            timeout_seconds = 20
+            max_concurrency = 2
+            auto_event_score_threshold = 80
+            auto_single_source_score_threshold = 90
+            auto_market_move_score_threshold = 70
+            min_modifier = -10
+            max_modifier = 10
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "model"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    async def fake_run_event_investigation(session, *, event_id, config, llm_config):
+        assert isinstance(session, EmptySession)
+        assert event_id == "evt_1"
+        assert config.brave_search_api_key == "brave-key"
+        assert llm_config.api_key == "llm-key"
+        return AgentInvestigation(
+            id="inv_1",
+            target_type="event_cluster",
+            target_id=event_id,
+            trigger_reason="manual",
+            status="succeeded",
+            input_snapshot={},
+            evidence=[],
+            provider="openrouter",
+            model="model",
+            prompt_version="investigation-v1",
+            prompt_hash="hash",
+            result={"summary": "checked"},
+        )
+
+    monkeypatch.setattr(investigate_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(investigate_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(
+        investigate_cli,
+        "run_event_investigation",
+        fake_run_event_investigation,
+    )
+
+    result = runner.invoke(app, ["investigate", "event", "evt_1"])
+
+    assert result.exit_code == 0
+    assert '"investigation_id": "inv_1"' in result.output
+    assert '"status": "succeeded"' in result.output
+
+
+def test_cli_investigate_pending_lists_pending_runs(monkeypatch) -> None:
+    class PendingSession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(PendingSession())
+
+    async def fake_list_pending_investigations(_session, *, limit):
+        assert limit == 10
+        return [
+            AgentInvestigation(
+                id="inv_1",
+                target_type="event_cluster",
+                target_id="evt_1",
+                trigger_reason="auto_event_uncertain",
+                status="pending",
+                input_snapshot={},
+                evidence=[],
+            )
+        ]
+
+    monkeypatch.setattr(investigate_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(
+        investigate_cli,
+        "list_pending_investigations",
+        fake_list_pending_investigations,
+    )
+
+    result = runner.invoke(app, ["investigate", "pending", "--limit", "10"])
+
+    assert result.exit_code == 0
+    assert '"id": "inv_1"' in result.output
+    assert '"target_type": "event_cluster"' in result.output
+
+
+def test_cli_investigate_run_pending_executes_pending_runs(monkeypatch) -> None:
+    class PendingSession:
+        pass
+
+    class Settings:
+        brave_search_api_key = "brave-key"
+        openrouter_api_key = "llm-key"
+
+        class investigation:
+            enabled = True
+            brave_search_api_key_env = "BRAVE_SEARCH_API_KEY"
+            max_search_results = 10
+            max_evidence_items = 12
+            local_evidence_limit = 10
+            local_evidence_lookback_days = 3
+            timeout_seconds = 20
+            max_concurrency = 2
+            auto_event_score_threshold = 80
+            auto_single_source_score_threshold = 90
+            auto_market_move_score_threshold = 70
+            min_modifier = -10
+            max_modifier = 10
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "model"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    async def fake_with_session(fn):
+        return await fn(PendingSession())
+
+    async def fake_run_pending_investigations(session, *, config, llm_config, limit):
+        assert isinstance(session, PendingSession)
+        assert config.brave_search_api_key == "brave-key"
+        assert llm_config.api_key == "llm-key"
+        assert limit == 7
+        return {"pending": 2, "completed": 1, "failed": 1}
+
+    monkeypatch.setattr(investigate_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(investigate_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(
+        investigate_cli,
+        "run_pending_investigations",
+        fake_run_pending_investigations,
+    )
+
+    result = runner.invoke(app, ["investigate", "run-pending", "--limit", "7"])
+
+    assert result.exit_code == 0
+    assert '"completed": 1' in result.output
+    assert '"failed": 1' in result.output
+
+
+def test_cli_investigate_show_reports_result(monkeypatch) -> None:
+    class ShowSession:
+        async def get(self, _model, key):
+            assert key == "inv_1"
+            return AgentInvestigation(
+                id="inv_1",
+                target_type="event_cluster",
+                target_id="evt_1",
+                trigger_reason="manual",
+                status="succeeded",
+                input_snapshot={},
+                evidence=[],
+                result={"summary": "checked"},
+            )
+
+    async def fake_with_session(fn):
+        return await fn(ShowSession())
+
+    monkeypatch.setattr(investigate_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["investigate", "show", "inv_1"])
+
+    assert result.exit_code == 0
+    assert '"id": "inv_1"' in result.output
+    assert '"summary": "checked"' in result.output
+
+
+def test_worker_loop_passes_investigation_config_and_runs_pending(monkeypatch) -> None:
+    class StopLoop(Exception):
+        pass
+
+    class Session:
+        pass
+
+    class Settings:
+        brave_search_api_key = "brave-key"
+        openrouter_api_key = "llm-key"
+        telegram_bot_token = None
+        telegram_chat_id = None
+
+        class bot:
+            polling_interval_seconds = 300
+
+        class ingestion:
+            rss_freshness_hours = 24
+
+        class alerts:
+            default_channel = "log"
+
+        class embeddings:
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "embedding-model"
+            dimensions = 1536
+            api_key_env = "OPENROUTER_API_KEY"
+            version = "v1"
+            cluster_attach_enabled = True
+            cluster_attach_lookback_days = 7
+            cluster_attach_min_similarity = 0.88
+            cluster_attach_candidate_limit = 20
+            max_concurrency = 3
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "model"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+        class investigation:
+            enabled = True
+            brave_search_api_key_env = "BRAVE_SEARCH_API_KEY"
+            max_search_results = 10
+            max_evidence_items = 12
+            local_evidence_limit = 10
+            local_evidence_lookback_days = 3
+            timeout_seconds = 20
+            max_concurrency = 2
+            auto_event_score_threshold = 80
+            auto_single_source_score_threshold = 90
+            auto_market_move_score_threshold = 70
+            min_modifier = -10
+            max_modifier = 10
+
+    async def fake_with_session(fn):
+        return await fn(Session())
+
+    async def fake_run_pipeline(session, **kwargs):
+        assert isinstance(session, Session)
+        assert kwargs["investigation_config"].enabled is True
+        return {"status": "ok"}
+
+    async def fake_run_pending(session, *, config, llm_config, limit):
+        assert isinstance(session, Session)
+        assert config.enabled is True
+        assert llm_config.enabled is True
+        assert limit == 2
+        return {"pending": 0, "completed": 0, "failed": 0}
+
+    async def fake_record_job_run(*_args, **_kwargs):
+        return None
+
+    async def stop_sleep(_seconds):
+        raise StopLoop
+
+    monkeypatch.setattr(worker_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(worker_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(worker_cli, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(worker_cli, "run_pending_investigations", fake_run_pending)
+    monkeypatch.setattr(worker_cli, "record_job_run", fake_record_job_run)
+    monkeypatch.setattr(worker_cli.asyncio, "sleep", stop_sleep)
+
+    result = runner.invoke(app, ["worker", "start"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, StopLoop)
+
+
+def test_cli_event_show_reports_event_details(monkeypatch) -> None:
+    event = EventCluster(
+        id="evt_1",
+        canonical_headline="Oil jumps after Gulf shipping disruption",
+        summary="Oil rose after reported shipping disruption.",
+        status="reported",
+        regions=["global"],
+        asset_classes=["commodity"],
+        affected_entities=["Brent"],
+        affected_tickers=["USO"],
+        source_count=2,
+        top_source_score=90,
+        final_score=82,
+    )
+    alert = AlertDecisionRecord(
+        id="alert_1",
+        event_cluster_id="evt_1",
+        decision="immediate_alert",
+        reason="score_above_immediate_threshold",
+        score_breakdown={"final_score": 82},
+    )
+    investigation = AgentInvestigation(
+        id="inv_1",
+        target_type="event_cluster",
+        target_id="evt_1",
+        trigger_reason="auto_event_uncertain",
+        status="pending",
+        input_snapshot={},
+        evidence=[],
+    )
+
+    class ShowSession:
+        async def get(self, model, key):
+            assert model is EventCluster
+            assert key == "evt_1"
+            return event
+
+        async def scalar(self, stmt):
+            text = str(stmt)
+            if "alert_decisions" in text:
+                return alert
+            if "agent_investigations" in text:
+                return investigation
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(ShowSession())
+
+    async def fake_event_report_time_range(_session, event_id):
+        assert event_id == "evt_1"
+        return None
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(event_cli, "event_report_time_range", fake_event_report_time_range)
+
+    result = runner.invoke(app, ["event", "show", "evt_1"])
+
+    assert result.exit_code == 0
+    assert '"id": "evt_1"' in result.output
+    assert '"headline": "Oil jumps after Gulf shipping disruption"' in result.output
+    assert '"latest_alert"' in result.output
+    assert '"latest_investigation"' in result.output
+    assert "requires event_clusters data" not in result.output
 
 
 def test_cli_source_purge_requires_explicit_confirmation(monkeypatch) -> None:

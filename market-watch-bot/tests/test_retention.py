@@ -15,7 +15,9 @@ from bot_worker.retention import RetentionPolicy, retention_cutoffs
 from bot_worker.services.retention import (
     BASELINE_RESET_TARGET_TABLES,
     baseline_reset_preview,
+    retention_preview,
     run_baseline_reset,
+    run_retention,
 )
 
 
@@ -56,6 +58,30 @@ class DeleteSession:
         table_name = stmt.table.name
         self.deleted_tables.append(table_name)
         return DeleteResult(self.counts[table_name])
+
+
+class RetentionCountSession:
+    def __init__(self) -> None:
+        self.counted_tables: list[str] = []
+
+    async def scalar(self, stmt: Select) -> int:
+        table_name = stmt.get_final_froms()[0].name
+        self.counted_tables.append(table_name)
+        return 1
+
+
+class RetentionDeleteSession:
+    def __init__(self) -> None:
+        self.deleted_tables: list[str] = []
+        self.added: list[object] = []
+
+    async def execute(self, stmt: Delete) -> DeleteResult:
+        table_name = stmt.table.name
+        self.deleted_tables.append(table_name)
+        return DeleteResult(1)
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
 
 
 def test_baseline_reset_preserved_tables_are_not_targeted() -> None:
@@ -99,6 +125,7 @@ async def test_run_baseline_reset_deletes_tables_in_fk_safe_order() -> None:
     assert session.deleted_tables == [
         "alert_deliveries",
         "alert_decisions",
+        "agent_investigations",
         "event_score_history",
         "event_cluster_embeddings",
         "event_cluster_items",
@@ -111,3 +138,21 @@ async def test_run_baseline_reset_deletes_tables_in_fk_safe_order() -> None:
         "job_runs",
         "retention_jobs",
     ]
+
+
+async def test_retention_preview_counts_agent_investigations() -> None:
+    session = RetentionCountSession()
+
+    preview = await retention_preview(session, RetentionPolicy())
+
+    assert preview["agent_investigations"] == 1
+    assert "agent_investigations" in session.counted_tables
+
+
+async def test_run_retention_deletes_agent_investigations() -> None:
+    session = RetentionDeleteSession()
+
+    deleted = await run_retention(session, RetentionPolicy())
+
+    assert deleted["agent_investigations"] == 1
+    assert "agent_investigations" in session.deleted_tables

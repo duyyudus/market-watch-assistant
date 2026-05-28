@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
+    AgentInvestigation,
     AlertDecisionRecord,
     AlertDeliveryRecord,
     EventCluster,
@@ -27,6 +28,7 @@ from bot_worker.retention import RetentionPolicy, retention_cutoffs
 BASELINE_RESET_TARGET_MODELS = (
     AlertDeliveryRecord,
     AlertDecisionRecord,
+    AgentInvestigation,
     EventScoreHistory,
     EventClusterEmbedding,
     EventClusterItem,
@@ -40,6 +42,24 @@ BASELINE_RESET_TARGET_MODELS = (
     RetentionJob,
 )
 BASELINE_RESET_TARGET_TABLES = tuple(model.__tablename__ for model in BASELINE_RESET_TARGET_MODELS)
+
+
+def _stale_agent_investigation_filter(cutoff: datetime):
+    event_exists = exists(
+        select(EventCluster.id).where(EventCluster.id == AgentInvestigation.target_id)
+    )
+    move_exists = exists(select(MarketMove.id).where(MarketMove.id == AgentInvestigation.target_id))
+    review_exists = exists(
+        select(MissedCatalystReview.id).where(
+            MissedCatalystReview.id == AgentInvestigation.target_id
+        )
+    )
+    return or_(
+        AgentInvestigation.created_at < cutoff,
+        (AgentInvestigation.target_type == "event_cluster") & ~event_exists,
+        (AgentInvestigation.target_type == "market_move") & ~move_exists,
+        (AgentInvestigation.target_type == "missed_catalyst_review") & ~review_exists,
+    )
 
 
 async def retention_preview(session: AsyncSession, policy: RetentionPolicy) -> dict[str, int]:
@@ -85,7 +105,17 @@ async def retention_preview(session: AsyncSession, policy: RetentionPolicy) -> d
         )
         or 0
     )
+    counts["agent_investigations"] = (
+        await session.scalar(
+            select(func.count())
+            .select_from(AgentInvestigation)
+            .where(_stale_agent_investigation_filter(cutoffs["event_clusters"]))
+        )
+        or 0
+    )
     return counts
+
+
 async def run_retention(session: AsyncSession, policy: RetentionPolicy) -> dict[str, int]:
     cutoffs = retention_cutoffs(datetime.now(UTC), policy)
     deleted: dict[str, int] = {}
@@ -115,6 +145,13 @@ async def run_retention(session: AsyncSession, policy: RetentionPolicy) -> dict[
         await session.execute(
             delete(AlertDecisionRecord).where(
                 AlertDecisionRecord.created_at < cutoffs["alert_decisions"]
+            )
+        )
+    ).rowcount or 0
+    deleted["agent_investigations"] = (
+        await session.execute(
+            delete(AgentInvestigation).where(
+                _stale_agent_investigation_filter(cutoffs["event_clusters"])
             )
         )
     ).rowcount or 0

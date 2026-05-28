@@ -26,6 +26,7 @@ embedding_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETT
 market_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 catalyst_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 llm_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+investigate_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 
 app.add_typer(source_app, name="source")
 app.add_typer(worker_app, name="worker")
@@ -44,3 +45,4 @@ app.add_typer(embedding_app, name="embedding")
 app.add_typer(market_app, name="market")
 app.add_typer(catalyst_app, name="catalyst")
 app.add_typer(llm_app, name="llm")
+app.add_typer(investigate_app, name="investigate")

@@ -11,6 +11,7 @@ def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
             [
                 "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app",
                 "OPENROUTER_API_KEY=secret-key",
+                "BRAVE_SEARCH_API_KEY=brave-key",
             ]
         ),
         encoding="utf-8",
@@ -32,6 +33,7 @@ alerts:
 
     assert settings.database_url == "postgresql+asyncpg://user:pass@db:5432/app"
     assert settings.openrouter_api_key == "secret-key"
+    assert settings.brave_search_api_key == "brave-key"
     assert settings.app.name == "custom-watch"
     assert settings.app.environment == "test"
     assert settings.bot.polling_interval_seconds == 42
@@ -60,6 +62,12 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings.llm.cluster_ambiguous_min_similarity == 0.78
     assert settings.llm.cluster_decision_min_confidence == 70
     assert settings.llm.cluster_decision_candidate_limit == 3
+    assert settings.investigation.enabled is False
+    assert settings.investigation.max_search_results == 10
+    assert settings.investigation.max_evidence_items == 12
+    assert settings.investigation.local_evidence_limit == 10
+    assert settings.investigation.local_evidence_lookback_days == 3
+    assert settings.investigation.auto_event_score_threshold == 80
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
 

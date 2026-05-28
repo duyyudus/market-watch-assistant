@@ -273,6 +273,29 @@ class LLMAnalysisRun(Base):
     )
 
 
+class AgentInvestigation(Base):
+    __tablename__ = "agent_investigations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("inv"))
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    trigger_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    input_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    evidence: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, default=list)
+    provider: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(255))
+    prompt_version: Mapped[str | None] = mapped_column(String(64))
+    prompt_hash: Mapped[str | None] = mapped_column(String(64))
+    result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    usage: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class MarketMove(Base):
     __tablename__ = "market_moves"
 

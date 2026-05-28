@@ -11,6 +11,7 @@ from bot_worker.db.models import (
 from bot_worker.embeddings import (
     EmbeddingConfig,
 )
+from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import (
     LLMConfig,
 )
@@ -19,6 +20,11 @@ from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
 from bot_worker.services.events import ClusterBuildStats, build_event_clusters
 from bot_worker.services.ingestion import mark_exact_duplicates, normalize_pending_raw_items
+from bot_worker.services.investigation import (
+    queue_event_investigation_runs,
+    queue_investigations_for_missed_catalysts,
+    run_existing_investigation,
+)
 from bot_worker.services.llm import enrich_event_clusters_with_llm, extract_entities_with_llm
 from bot_worker.services.sources import fetch_source
 
@@ -46,6 +52,7 @@ async def run_pipeline(
     freshness_hours: int = 72,
     embedding_config: EmbeddingConfig | None = None,
     llm_config: LLMConfig | None = None,
+    investigation_config: InvestigationConfig | None = None,
     alert_delivery_config: AlertDeliveryConfig | None = None,
 ) -> dict[str, int | str]:
     if dry_run:
@@ -137,6 +144,42 @@ async def run_pipeline(
         logger.info("  ⚠ LLM config disabled or not provided, skipping event enrichment")
 
     logger.info("─── [Stage 9/9] Recording Alert Decisions ───")
+    queued_investigations = 0
+    completed_investigations = 0
+    failed_investigations = 0
+    if investigation_config is not None and investigation_config.enabled:
+        try:
+            event_investigations = await queue_event_investigation_runs(
+                session,
+                config=investigation_config,
+            )
+            queued_investigations += len(event_investigations)
+            if llm_config is not None:
+                for run in event_investigations:
+                    result = await run_existing_investigation(
+                        session,
+                        run,
+                        config=investigation_config,
+                        llm_config=llm_config,
+                    )
+                    if result.status == "succeeded":
+                        completed_investigations += 1
+                    else:
+                        failed_investigations += 1
+            else:
+                failed_investigations += len(event_investigations)
+            queued_investigations += await queue_investigations_for_missed_catalysts(
+                session,
+                config=investigation_config,
+            )
+            logger.info(
+                "  ✓ Queued %d agent investigations; completed %d, failed %d",
+                queued_investigations,
+                completed_investigations,
+                failed_investigations,
+            )
+        except Exception as exc:  # noqa: BLE001 - investigation queueing must not block alerts
+            logger.error("  ❌ Failed to queue agent investigations: %s", exc)
     alerts = await record_alert_decisions(session)
     logger.info("  ✓ Recorded alert decisions for %d event clusters", alerts)
     delivered_alerts = 0
@@ -168,6 +211,9 @@ async def run_pipeline(
         "llm_cluster_attaches": cluster_stats.llm_cluster_attaches,
         "event_embeddings": event_embeddings,
         "llm_enriched": llm_enriched,
+        "queued_investigations": queued_investigations,
+        "completed_investigations": completed_investigations,
+        "failed_investigations": failed_investigations,
         "alerts": alerts,
         "delivered_alerts": delivered_alerts,
         "failed_alert_deliveries": failed_alert_deliveries,

@@ -7,6 +7,7 @@ import typer
 from bot_worker.cli.apps import pipeline_app
 from bot_worker.cli.common import _db_error, _echo_json, _run, _settings, _with_session
 from bot_worker.embeddings import EmbeddingConfig
+from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import LLMConfig
 from bot_worker.services import (
     AlertDeliveryConfig,
@@ -32,6 +33,7 @@ def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) ->
             freshness_hours=settings.ingestion.rss_freshness_hours,
             embedding_config=EmbeddingConfig.from_settings(settings),
             llm_config=LLMConfig.from_settings(settings),
+            investigation_config=InvestigationConfig.from_settings(settings),
             alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
         )
         await record_job_run(session, "pipeline", result)

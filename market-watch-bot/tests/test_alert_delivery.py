@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 import pytest
 
 import bot_worker.services.pipeline as pipeline_services
-from bot_worker.db.models import AlertDecisionRecord, AlertDeliveryRecord, EventCluster
+from bot_worker.db.models import (
+    AgentInvestigation,
+    AlertDecisionRecord,
+    AlertDeliveryRecord,
+    EventCluster,
+)
 from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
     dispatch_pending_alerts,
@@ -296,3 +302,107 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
     assert result["alerts"] == 1
     assert result["delivered_alerts"] == 2
     assert result["failed_alert_deliveries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_investigation_queue_failure_does_not_block_alerts(monkeypatch) -> None:
+    async def zero(*_args, **_kwargs) -> int:
+        return 0
+
+    async def cluster_zero(*_args, **_kwargs):
+        return pipeline_services.ClusterBuildStats()
+
+    async def one_alert(_session) -> int:
+        return 1
+
+    async def fail_queue(*_args, **_kwargs) -> int:
+        raise RuntimeError("search unavailable")
+
+    monkeypatch.setattr(pipeline_services, "normalize_pending_raw_items", zero)
+    monkeypatch.setattr(pipeline_services, "mark_exact_duplicates", zero)
+    monkeypatch.setattr(pipeline_services, "extract_entities_with_llm", zero)
+    monkeypatch.setattr(pipeline_services, "embed_pending_news_items", zero)
+    monkeypatch.setattr(pipeline_services, "embed_pending_event_clusters", zero)
+    monkeypatch.setattr(pipeline_services, "enrich_event_clusters_with_llm", zero)
+    monkeypatch.setattr(pipeline_services, "build_event_clusters", cluster_zero)
+    monkeypatch.setattr(pipeline_services, "record_alert_decisions", one_alert)
+    monkeypatch.setattr(pipeline_services, "queue_event_investigation_runs", fail_queue)
+
+    result = await pipeline_services.run_pipeline(
+        PipelineSession(),
+        investigation_config=pipeline_services.InvestigationConfig(enabled=True),
+    )
+
+    assert result["queued_investigations"] == 0
+    assert result["alerts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_runs_new_event_investigations_before_alert_decisions(
+    monkeypatch,
+    caplog,
+) -> None:
+    calls: list[str] = []
+    caplog.set_level(logging.INFO, logger="bot_worker")
+
+    async def zero(*_args, **_kwargs) -> int:
+        return 0
+
+    async def cluster_zero(*_args, **_kwargs):
+        return pipeline_services.ClusterBuildStats()
+
+    async def queue_event_runs(_session, *, config):
+        calls.append("queue_events")
+        return [
+            AgentInvestigation(
+                id="inv_1",
+                target_type="event_cluster",
+                target_id="evt_1",
+                trigger_reason="auto_event_uncertain",
+                status="pending",
+                input_snapshot={"headline": "Oil jumps"},
+                evidence=[],
+            )
+        ]
+
+    async def run_existing(_session, run, *, config, llm_config):
+        calls.append(f"run:{run.id}")
+        run.status = "succeeded"
+        run.result = {"suggested_score_modifier": -5}
+        return run
+
+    async def queue_missed(*_args, **_kwargs) -> int:
+        calls.append("queue_missed")
+        return 2
+
+    async def one_alert(_session) -> int:
+        calls.append("alerts")
+        return 1
+
+    monkeypatch.setattr(pipeline_services, "normalize_pending_raw_items", zero)
+    monkeypatch.setattr(pipeline_services, "mark_exact_duplicates", zero)
+    monkeypatch.setattr(pipeline_services, "extract_entities_with_llm", zero)
+    monkeypatch.setattr(pipeline_services, "embed_pending_news_items", zero)
+    monkeypatch.setattr(pipeline_services, "embed_pending_event_clusters", zero)
+    monkeypatch.setattr(pipeline_services, "enrich_event_clusters_with_llm", zero)
+    monkeypatch.setattr(pipeline_services, "build_event_clusters", cluster_zero)
+    monkeypatch.setattr(pipeline_services, "queue_event_investigation_runs", queue_event_runs)
+    monkeypatch.setattr(pipeline_services, "run_existing_investigation", run_existing)
+    monkeypatch.setattr(
+        pipeline_services,
+        "queue_investigations_for_missed_catalysts",
+        queue_missed,
+    )
+    monkeypatch.setattr(pipeline_services, "record_alert_decisions", one_alert)
+
+    result = await pipeline_services.run_pipeline(
+        PipelineSession(),
+        investigation_config=pipeline_services.InvestigationConfig(enabled=True),
+        llm_config=pipeline_services.LLMConfig(enabled=True, api_key="llm-key"),
+    )
+
+    assert calls == ["queue_events", "run:inv_1", "queue_missed", "alerts"]
+    assert result["queued_investigations"] == 3
+    assert result["completed_investigations"] == 1
+    assert result["failed_investigations"] == 0
+    assert "Queued 3 agent investigations; completed 1, failed 0" in caplog.text

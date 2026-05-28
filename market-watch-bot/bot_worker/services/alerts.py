@@ -10,6 +10,7 @@ from bot_worker.db.models import (
     EventCluster,
 )
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
+from bot_worker.services.investigation import latest_successful_investigation
 from bot_worker.services.llm import latest_successful_llm_analysis
 from bot_worker.services.market import market_move_score_for_cluster
 
@@ -56,6 +57,26 @@ async def record_alert_decisions(session: AsyncSession) -> int:
             }
         else:
             adjusted_final_score = score.final_score
+        investigation = await latest_successful_investigation(
+            session,
+            target_type="event_cluster",
+            target_id=cluster.id,
+        )
+        if investigation is not None and investigation.result:
+            modifier = int(investigation.result.get("suggested_score_modifier") or 0)
+            adjusted_final_score = min(100, max(0, adjusted_final_score + modifier))
+            score_breakdown.setdefault("deterministic_final_score", score.final_score)
+            score_breakdown["final_score"] = adjusted_final_score
+            score_breakdown["investigation"] = {
+                "run_id": investigation.id,
+                "summary": investigation.result.get("summary"),
+                "confidence": investigation.result.get("confidence"),
+                "official_confirmation": investigation.result.get("official_confirmation"),
+                "risk_flags": investigation.result.get("risk_flags", []),
+                "suggested_score_modifier": modifier,
+                "suggested_alert_level": investigation.result.get("suggested_alert_level"),
+                "caveats": investigation.result.get("caveats", []),
+            }
         cluster.confirmation_score = score.confidence_score
         cluster.novelty_score = score.novelty_score
         cluster.urgency_score = score.urgency_score

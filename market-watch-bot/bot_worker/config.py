@@ -74,6 +74,22 @@ class LLMSettings(BaseModel):
     cluster_decision_candidate_limit: int = 3
 
 
+class InvestigationSettings(BaseModel):
+    enabled: bool = False
+    brave_search_api_key_env: str = "BRAVE_SEARCH_API_KEY"
+    max_search_results: int = Field(default=10, ge=1)
+    max_evidence_items: int = Field(default=12, ge=1)
+    local_evidence_limit: int = Field(default=10, ge=0)
+    local_evidence_lookback_days: int = Field(default=3, ge=1)
+    timeout_seconds: int = 20
+    max_concurrency: int = Field(default=2, ge=1)
+    auto_event_score_threshold: int = 80
+    auto_single_source_score_threshold: int = 90
+    auto_market_move_score_threshold: int = 70
+    min_modifier: int = -10
+    max_modifier: int = 10
+
+
 class MarketDataConfig(BaseModel):
     vn_base_url: str = "http://192.168.100.39:8020"
     crypto_provider: str = "binance"
@@ -111,6 +127,7 @@ class LoggingConfig(BaseModel):
 class Settings(BaseModel):
     database_url: str = DEFAULT_DATABASE_URL
     openrouter_api_key: str | None = None
+    brave_search_api_key: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     api_base_url: str = "http://localhost:8000"
@@ -121,6 +138,7 @@ class Settings(BaseModel):
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     embeddings: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    investigation: InvestigationSettings = Field(default_factory=InvestigationSettings)
     market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -203,6 +221,7 @@ def _read_env(path: Path) -> dict[str, str]:
         in {
             "DATABASE_URL",
             "OPENROUTER_API_KEY",
+            "BRAVE_SEARCH_API_KEY",
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_CHAT_ID",
             "API_BASE_URL",
@@ -221,6 +240,7 @@ def load_settings(
         **yaml_data,
         "database_url": env_data.get("DATABASE_URL", DEFAULT_DATABASE_URL),
         "openrouter_api_key": env_data.get("OPENROUTER_API_KEY"),
+        "brave_search_api_key": env_data.get("BRAVE_SEARCH_API_KEY"),
         "telegram_bot_token": env_data.get("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": env_data.get("TELEGRAM_CHAT_ID"),
         "api_base_url": env_data.get("API_BASE_URL", "http://localhost:8000"),

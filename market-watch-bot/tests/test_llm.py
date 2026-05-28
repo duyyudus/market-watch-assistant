@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 
 import pytest
@@ -11,6 +12,7 @@ from bot_worker.llm import (
     LLMConfig,
     LLMEventScore,
     LLMEventSummary,
+    OpenRouterChatProvider,
     build_cluster_decision_prompt,
     build_event_analysis_prompt,
     build_event_score_prompt,
@@ -262,3 +264,83 @@ def test_normalize_usage_preserves_nested_openrouter_usage_fields() -> None:
     assert usage["completion_tokens"] == 80
     assert usage["total_tokens"] == 200
     assert usage["cost_details"] == {"upstream_inference_cost": 0.001}
+
+
+@pytest.mark.asyncio
+async def test_openrouter_structured_completion_retries_without_strict_schema_on_400(
+    monkeypatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object] | None = None) -> None:
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = "strict schema unsupported"
+            self.request = None
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                import httpx
+
+                raise httpx.HTTPStatusError(
+                    "bad request",
+                    request=self.request,
+                    response=self,
+                )
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            requests.append(deepcopy(json))
+            if len(requests) == 1:
+                return FakeResponse(400)
+            return FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": LLMAnalysis(
+                                    summary="Checked.",
+                                    event_type="policy",
+                                    status_assessment="reported",
+                                    confidence=70,
+                                    impact_rationale="Relevant.",
+                                    why_it_matters="Markets may react.",
+                                    risk_flags=[],
+                                    score_modifier=0,
+                                    modifier_reason="No change.",
+                                ).model_dump_json()
+                            }
+                        }
+                    ],
+                    "usage": {"total_tokens": 10},
+                },
+            )
+
+    monkeypatch.setattr("bot_worker.llm.httpx.AsyncClient", FakeClient)
+    provider = OpenRouterChatProvider(LLMConfig(enabled=True, api_key="key"))
+
+    result, usage = await provider.complete_structured(
+        prompt="prompt",
+        schema_name="schema",
+        schema_model=LLMAnalysis,
+        system_message="system",
+    )
+
+    assert isinstance(result, LLMAnalysis)
+    assert usage["total_tokens"] == 10
+    assert requests[0]["response_format"]["json_schema"]["strict"] is True
+    assert "strict" not in requests[1]["response_format"]["json_schema"]

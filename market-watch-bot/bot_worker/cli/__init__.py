@@ -9,6 +9,7 @@ from bot_worker.cli import (  # noqa: F401
     embeddings,
     events,
     health,
+    investigate,
     job,
     llm,
     market,

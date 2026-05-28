@@ -4,9 +4,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import typer
+from sqlalchemy import select
 
 from bot_worker.cli.apps import event_app
 from bot_worker.cli.common import _echo_json, _run, _with_session
+from bot_worker.db.models import AgentInvestigation, AlertDecisionRecord, EventCluster
 from bot_worker.services import (
     digest_preview,
     event_report_time_range,
@@ -31,8 +33,78 @@ def event_list() -> None:
     _run(_with_session(action))
 @event_app.command("show")
 def event_show(identifier: str) -> None:
-    """Show details of a specific event cluster (MVP placeholder)."""
-    typer.echo(f"event show {identifier} requires event_clusters data")
+    """Show details of a specific event cluster."""
+    async def action(session):
+        event = await session.get(EventCluster, identifier)
+        if event is None:
+            typer.echo("Event cluster not found")
+            raise typer.Exit(1)
+        latest_alert = await session.scalar(
+            select(AlertDecisionRecord)
+            .where(AlertDecisionRecord.event_cluster_id == event.id)
+            .order_by(AlertDecisionRecord.created_at.desc())
+            .limit(1)
+        )
+        latest_investigation = await session.scalar(
+            select(AgentInvestigation)
+            .where(AgentInvestigation.target_type == "event_cluster")
+            .where(AgentInvestigation.target_id == event.id)
+            .order_by(AgentInvestigation.created_at.desc())
+            .limit(1)
+        )
+        report_time = format_report_time_range(await event_report_time_range(session, event.id))
+        _echo_json(
+            {
+                "id": event.id,
+                "headline": event.canonical_headline,
+                "summary": event.summary,
+                "status": event.status,
+                "regions": event.regions,
+                "asset_classes": event.asset_classes,
+                "affected_entities": event.affected_entities,
+                "affected_tickers": event.affected_tickers,
+                "source_count": event.source_count,
+                "top_source_score": event.top_source_score,
+                "confirmation_score": event.confirmation_score,
+                "novelty_score": event.novelty_score,
+                "urgency_score": event.urgency_score,
+                "market_impact_score": event.market_impact_score,
+                "relevance_score": event.relevance_score,
+                "final_score": event.final_score,
+                "alert_level": event.alert_level,
+                "first_seen_at": event.first_seen_at,
+                "last_updated_at": event.last_updated_at,
+                "report_time": report_time,
+                "latest_alert": (
+                    {
+                        "id": latest_alert.id,
+                        "decision": latest_alert.decision,
+                        "reason": latest_alert.reason,
+                        "channel": latest_alert.channel,
+                        "sent_at": latest_alert.sent_at,
+                        "created_at": latest_alert.created_at,
+                        "score_breakdown": latest_alert.score_breakdown,
+                    }
+                    if latest_alert is not None
+                    else None
+                ),
+                "latest_investigation": (
+                    {
+                        "id": latest_investigation.id,
+                        "status": latest_investigation.status,
+                        "trigger_reason": latest_investigation.trigger_reason,
+                        "result": latest_investigation.result,
+                        "error": latest_investigation.error_message,
+                        "created_at": latest_investigation.created_at,
+                        "updated_at": latest_investigation.updated_at,
+                    }
+                    if latest_investigation is not None
+                    else None
+                ),
+            }
+        )
+
+    _run(_with_session(action))
 @event_app.command("merge")
 def event_merge(left: str, right: str) -> None:
     """Manually merge two event clusters (MVP placeholder)."""
