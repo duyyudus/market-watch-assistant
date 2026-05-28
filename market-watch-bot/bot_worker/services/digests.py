@@ -11,6 +11,19 @@ from bot_worker.db.models import (
     NormalizedNewsItem,
 )
 
+type ReportTimeRange = tuple[datetime, datetime]
+
+
+def _effective_report_time(
+    published_at: datetime | None,
+    fetched_at: datetime | None,
+    created_at: datetime,
+) -> datetime:
+    effective_time = published_at or fetched_at or created_at
+    if effective_time.tzinfo is None:
+        return effective_time.replace(tzinfo=UTC)
+    return effective_time
+
 
 def digest_time_in_window(
     *,
@@ -20,10 +33,70 @@ def digest_time_in_window(
     since: datetime,
     until: datetime,
 ) -> bool:
-    effective_time = published_at or fetched_at or created_at
-    if effective_time.tzinfo is None:
-        effective_time = effective_time.replace(tzinfo=UTC)
+    effective_time = _effective_report_time(published_at, fetched_at, created_at)
     return since <= effective_time < until
+
+
+def select_report_time_range(
+    members: list[tuple[datetime | None, datetime | None, datetime]],
+) -> ReportTimeRange | None:
+    if not members:
+        return None
+    times = [
+        _effective_report_time(published_at, fetched_at, created_at)
+        for published_at, fetched_at, created_at in members
+    ]
+    return min(times), max(times)
+
+
+def _format_report_timestamp(value: datetime) -> str:
+    value = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+    return f"{value:%b} {value.day} {value:%H:%M}"
+
+
+def format_report_time_range(report_time_range: ReportTimeRange | None) -> str:
+    if report_time_range is None:
+        return ""
+    reported_at, latest_report_at = report_time_range
+    if reported_at == latest_report_at:
+        return f"reported {_format_report_timestamp(reported_at)}"
+    return (
+        f"reports {_format_report_timestamp(reported_at)}"
+        f" - {_format_report_timestamp(latest_report_at)}"
+    )
+
+
+def format_report_time_span(report_time_range: ReportTimeRange | None) -> str:
+    if report_time_range is None:
+        return ""
+    reported_at, latest_report_at = report_time_range
+    if reported_at == latest_report_at:
+        return _format_report_timestamp(reported_at)
+    return f"{_format_report_timestamp(reported_at)} - {_format_report_timestamp(latest_report_at)}"
+
+
+async def event_report_time_range(
+    session: AsyncSession,
+    event_cluster_id: str,
+) -> ReportTimeRange | None:
+    rows = list(
+        (
+            await session.execute(
+                select(
+                    NormalizedNewsItem.published_at,
+                    NormalizedNewsItem.fetched_at,
+                    NormalizedNewsItem.created_at,
+                )
+                .join(EventClusterItem, EventClusterItem.news_item_id == NormalizedNewsItem.id)
+                .where(EventClusterItem.event_cluster_id == event_cluster_id)
+            )
+        ).all()
+    )
+    return select_report_time_range(
+        [(published_at, fetched_at, created_at) for published_at, fetched_at, created_at in rows]
+    )
+
+
 def select_digest_headline(
     *,
     canonical_headline: str,
@@ -33,9 +106,7 @@ def select_digest_headline(
 ) -> str:
     in_window: list[tuple[str, datetime]] = []
     for title, published_at, fetched_at, created_at in members:
-        effective_time = published_at or fetched_at or created_at
-        if effective_time.tzinfo is None:
-            effective_time = effective_time.replace(tzinfo=UTC)
+        effective_time = _effective_report_time(published_at, fetched_at, created_at)
         if since <= effective_time < until:
             in_window.append((title, effective_time))
     if not in_window:

@@ -9,6 +9,8 @@ from bot_worker.cli.apps import event_app
 from bot_worker.cli.common import _echo_json, _run, _with_session
 from bot_worker.services import (
     digest_preview,
+    event_report_time_range,
+    format_report_time_range,
     recluster_recent_event_clusters,
 )
 
@@ -19,8 +21,11 @@ def event_list() -> None:
     async def action(session):
         rows = await digest_preview(session)
         for event in rows:
+            report_time = format_report_time_range(await event_report_time_range(session, event.id))
+            time_suffix = f"\t{report_time}" if report_time else ""
             typer.echo(
-                f"{event.id}\t{event.final_score}\t{event.status}\t{event.canonical_headline}"
+                f"{event.id}\t{event.final_score}\t{event.status}{time_suffix}"
+                f"\t{event.canonical_headline}"
             )
 
     _run(_with_session(action))

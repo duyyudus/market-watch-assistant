@@ -23,11 +23,18 @@ class ExecuteRows:
 
 
 class DeliverySession:
-    def __init__(self, rows: list[tuple[AlertDecisionRecord, EventCluster]]) -> None:
+    def __init__(
+        self,
+        rows: list[tuple[AlertDecisionRecord, EventCluster]],
+        report_rows: list[tuple[datetime | None, datetime | None, datetime]] | None = None,
+    ) -> None:
         self.rows = rows
+        self.report_rows = report_rows or []
         self.added: list[object] = []
 
-    async def execute(self, _stmt):
+    async def execute(self, stmt):
+        if "normalized_news_items" in str(stmt):
+            return ExecuteRows(self.report_rows)
         return ExecuteRows(self.rows)
 
     def add(self, value: object) -> None:
@@ -73,7 +80,14 @@ def _alert(**overrides: object) -> AlertDecisionRecord:
 
 
 def test_format_alert_message_uses_deterministic_fallback() -> None:
-    message = format_alert_message(_alert(), _event())
+    message = format_alert_message(
+        _alert(),
+        _event(),
+        report_time_range=(
+            datetime(2026, 5, 26, 9, 5, tzinfo=UTC),
+            datetime(2026, 5, 28, 14, 10, tzinfo=UTC),
+        ),
+    )
 
     assert "[Immediate Market Alert]" in message
     assert "Oil jumps after reported shipping incident near Hormuz" in message
@@ -81,6 +95,7 @@ def test_format_alert_message_uses_deterministic_fallback() -> None:
     assert "Affected:\nBrent, WTI, USO" in message
     assert "Score:\n86" in message
     assert "Sources:\n3 report(s)" in message
+    assert "Reports:\nMay 26 09:05 - May 28 14:10" in message
     assert "score_above_immediate_threshold" in message
 
 
@@ -111,7 +126,14 @@ async def test_dispatch_pending_alerts_sends_only_unsent_immediate_alerts() -> N
             (immediate, _event(id="evt_send")),
             (digest, _event(id="evt_digest")),
             (already_sent, _event(id="evt_sent")),
-        ]
+        ],
+        report_rows=[
+            (
+                datetime(2026, 5, 26, 9, 5, tzinfo=UTC),
+                datetime(2026, 5, 26, 9, 6, tzinfo=UTC),
+                datetime(2026, 5, 26, 9, 6, tzinfo=UTC),
+            )
+        ],
     )
     sent_messages: list[tuple[str, str, str]] = []
 
@@ -132,6 +154,7 @@ async def test_dispatch_pending_alerts_sends_only_unsent_immediate_alerts() -> N
     deliveries = [value for value in session.added if isinstance(value, AlertDeliveryRecord)]
     assert result == {"pending": 0, "attempted": 1, "sent": 1, "failed": 0, "skipped": 2}
     assert len(sent_messages) == 1
+    assert "Reports:\nMay 26 09:05" in sent_messages[0][2]
     assert deliveries[0].status == "sent"
     assert deliveries[0].alert_decision_id == "alert_send"
     assert immediate.sent_at is not None

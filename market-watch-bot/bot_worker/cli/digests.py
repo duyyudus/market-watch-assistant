@@ -12,6 +12,8 @@ from bot_worker.digest import digest_window_for_date
 from bot_worker.services import (
     digest_display_headline,
     digest_preview,
+    event_report_time_range,
+    format_report_time_range,
 )
 
 
@@ -24,7 +26,9 @@ def digest_preview_command(limit: Annotated[int, typer.Option("--limit")] = 20) 
             typer.echo("No digest events")
         for event in rows:
             section = event.regions[0] if event.regions else "global"
-            typer.echo(f"[{section}] {event.final_score} {event.canonical_headline}")
+            report_time = format_report_time_range(await event_report_time_range(session, event.id))
+            time_part = f" | {report_time}" if report_time else ""
+            typer.echo(f"[{section}] {event.final_score}{time_part} {event.canonical_headline}")
 
     _run(_with_session(action))
 @digest_app.command("build")
@@ -49,7 +53,9 @@ def digest_build(
         for event in rows:
             section = event.regions[0] if event.regions else "global"
             headline = await digest_display_headline(session, event, since=since, until=until)
-            typer.echo(f"[{section}] {event.final_score} {event.status} {headline}")
+            report_time = format_report_time_range(await event_report_time_range(session, event.id))
+            time_part = f" | {report_time}" if report_time else ""
+            typer.echo(f"[{section}] {event.final_score} {event.status}{time_part} {headline}")
 
     _run(_with_session(action))
 @digest_app.command("history")

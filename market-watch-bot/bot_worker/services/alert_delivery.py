@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.config import Settings
 from bot_worker.db.models import AlertDecisionRecord, AlertDeliveryRecord, EventCluster
+from bot_worker.services.digests import (
+    ReportTimeRange,
+    event_report_time_range,
+    format_report_time_span,
+)
 
 DeliveryCounts = dict[str, int]
 TelegramSender = Callable[["AlertDeliveryConfig", str, str], Awaitable[dict[str, Any]]]
@@ -48,7 +53,12 @@ def delivery_config_error(config: AlertDeliveryConfig) -> str | None:
     return None
 
 
-def format_alert_message(alert: AlertDecisionRecord, event: EventCluster) -> str:
+def format_alert_message(
+    alert: AlertDecisionRecord,
+    event: EventCluster,
+    *,
+    report_time_range: ReportTimeRange | None = None,
+) -> str:
     llm = alert.score_breakdown.get("llm") if isinstance(alert.score_breakdown, dict) else None
     llm_data = llm if isinstance(llm, dict) else {}
     alert_message = str(llm_data.get("alert_message") or "").strip()
@@ -71,6 +81,9 @@ def format_alert_message(alert: AlertDecisionRecord, event: EventCluster) -> str
     ]
     if affected:
         lines.extend(["", "Affected:", affected])
+    report_time = format_report_time_span(report_time_range)
+    if report_time:
+        lines.extend(["", "Reports:", report_time])
     lines.extend(["", "Score:", str(event.final_score)])
     lines.extend(["", "Sources:", f"{event.source_count} report(s)"])
     if why_it_matters:
@@ -175,7 +188,8 @@ async def dispatch_pending_alerts(
             counts["skipped"] += 1
             continue
         counts["pending"] += 1
-        message = format_alert_message(alert, event)
+        report_time_range = await event_report_time_range(session, event.id)
+        message = format_alert_message(alert, event, report_time_range=report_time_range)
         if dry_run:
             continue
         counts["attempted"] += 1

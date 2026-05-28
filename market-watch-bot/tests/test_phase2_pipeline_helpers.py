@@ -2,7 +2,13 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from bot_worker.digest import digest_window_for_date
-from bot_worker.services import digest_time_in_window, is_rss_item_fresh, select_digest_headline
+from bot_worker.services import (
+    digest_time_in_window,
+    format_report_time_range,
+    is_rss_item_fresh,
+    select_digest_headline,
+    select_report_time_range,
+)
 
 
 def test_rss_freshness_cutoff_rejects_old_published_items() -> None:
@@ -99,3 +105,61 @@ def test_select_digest_headline_uses_fetched_at_when_published_missing() -> None
     )
 
     assert headline == "Fresh undated feed item"
+
+
+def test_select_report_time_range_uses_earliest_and_latest_effective_member_time() -> None:
+    reported_at, latest_report_at = select_report_time_range(
+        [
+            (
+                datetime(2026, 5, 26, 9, 5, tzinfo=UTC),
+                datetime(2026, 5, 28, 1, tzinfo=UTC),
+                datetime(2026, 5, 28, 1, tzinfo=UTC),
+            ),
+            (
+                datetime(2026, 5, 28, 14, 10, tzinfo=UTC),
+                datetime(2026, 5, 28, 14, 12, tzinfo=UTC),
+                datetime(2026, 5, 28, 14, 12, tzinfo=UTC),
+            ),
+        ]
+    )
+
+    assert reported_at == datetime(2026, 5, 26, 9, 5, tzinfo=UTC)
+    assert latest_report_at == datetime(2026, 5, 28, 14, 10, tzinfo=UTC)
+
+
+def test_select_report_time_range_falls_back_to_fetched_then_created_at() -> None:
+    reported_at, latest_report_at = select_report_time_range(
+        [
+            (
+                None,
+                datetime(2026, 5, 27, 10, tzinfo=UTC),
+                datetime(2026, 5, 27, 9, tzinfo=UTC),
+            ),
+            (
+                None,
+                None,
+                datetime(2026, 5, 26, 8, tzinfo=UTC),
+            ),
+        ]
+    )
+
+    assert reported_at == datetime(2026, 5, 26, 8, tzinfo=UTC)
+    assert latest_report_at == datetime(2026, 5, 27, 10, tzinfo=UTC)
+
+
+def test_format_report_time_range_collapses_single_timestamp() -> None:
+    value = datetime(2026, 5, 28, 9, 5, tzinfo=UTC)
+
+    assert format_report_time_range((value, value)) == "reported May 28 09:05"
+
+
+def test_format_report_time_range_displays_range() -> None:
+    assert (
+        format_report_time_range(
+            (
+                datetime(2026, 5, 26, 9, 5, tzinfo=UTC),
+                datetime(2026, 5, 28, 14, 10, tzinfo=UTC),
+            )
+        )
+        == "reports May 26 09:05 - May 28 14:10"
+    )
