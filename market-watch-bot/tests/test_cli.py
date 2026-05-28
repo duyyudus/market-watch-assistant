@@ -28,6 +28,7 @@ from bot_worker.db.models import (
     MissedCatalystReview,
     NewsEntity,
     NewsItemEmbedding,
+    NewsSource,
     NormalizedNewsItem,
     RawNewsItem,
     WatchlistEntity,
@@ -1247,6 +1248,87 @@ def test_cli_watchlist_show_and_remove(monkeypatch) -> None:
     assert '"name": "Bitcoin"' in show.output
     assert remove.exit_code == 0
     assert deleted == ["watch_1"]
+
+
+def test_cli_source_import_skips_existing_url_after_normalization(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "sources.yaml"
+    path.write_text(
+        """
+sources:
+  - name: Existing Feed
+    url: " https://example.test/feed.xml "
+    region: global
+    category: global_macro
+""",
+        encoding="utf-8",
+    )
+    added = []
+
+    class SourceSession:
+        async def scalar(self, stmt):
+            params = stmt.compile().params
+            if params.get("url_1") == "https://example.test/feed.xml":
+                return NewsSource(name="Existing Feed", url="https://example.test/feed.xml")
+            return None
+
+        def add(self, obj):
+            added.append(obj)
+
+        async def flush(self):
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(SourceSession())
+
+    monkeypatch.setattr(source_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["source", "import", str(path)])
+
+    assert result.exit_code == 0
+    assert "Imported 0 sources (skipped 1 duplicates)" in result.output
+    assert added == []
+
+
+def test_cli_watchlist_import_skips_existing_symbol_after_normalization(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        """
+watchlist:
+  - name: Bitcoin
+    symbol: " btc "
+    type: crypto
+    tier: A
+  - name: " bitcoin "
+    type: crypto
+    tier: A
+""",
+        encoding="utf-8",
+    )
+    added = []
+
+    class WatchlistSession:
+        async def scalar(self, stmt):
+            params = stmt.compile().params
+            if "BTC" in params.values() or "bitcoin" in params.values():
+                return WatchlistEntity(symbol="BTC", name="Bitcoin", entity_type="crypto", tier="A")
+            return None
+
+        def add(self, obj):
+            added.append(obj)
+
+    async def fake_with_session(fn):
+        return await fn(WatchlistSession())
+
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["watchlist", "import", str(path)])
+
+    assert result.exit_code == 0
+    assert '"imported": 0' in result.output
+    assert '"skipped": 2' in result.output
+    assert added == []
 
 
 def test_cli_event_mark_updates_status(monkeypatch) -> None:

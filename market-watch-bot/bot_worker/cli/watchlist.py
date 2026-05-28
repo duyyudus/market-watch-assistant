@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 import yaml
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from bot_worker.cli.apps import watchlist_app
 from bot_worker.cli.common import _echo_json, _run, _with_session
@@ -153,13 +153,29 @@ def watchlist_import(path: Path) -> None:
 
     async def action(session):
         count = 0
+        skipped = 0
         for row in rows:
             if not isinstance(row, dict) or not row.get("name"):
                 continue
+            raw_symbol = row.get("symbol")
+            symbol = str(raw_symbol).strip().upper() if raw_symbol else None
+            name = str(row["name"]).strip()
+            existing = None
+            if symbol:
+                existing = await session.scalar(
+                    select(WatchlistEntity).where(func.upper(WatchlistEntity.symbol) == symbol)
+                )
+            if not existing:
+                existing = await session.scalar(
+                    select(WatchlistEntity).where(func.lower(WatchlistEntity.name) == name.lower())
+                )
+            if existing is not None:
+                skipped += 1
+                continue
             session.add(
                 WatchlistEntity(
-                    name=str(row["name"]),
-                    symbol=row.get("symbol"),
+                    name=name,
+                    symbol=symbol,
                     entity_type=str(row.get("entity_type", row.get("type", "macro_theme"))),
                     tier=str(row.get("tier", "D")),
                     region=row.get("region"),
@@ -169,7 +185,7 @@ def watchlist_import(path: Path) -> None:
                 )
             )
             count += 1
-        _echo_json({"imported": count})
+        _echo_json({"imported": count, "skipped": skipped})
 
     _run(_with_session(action))
 

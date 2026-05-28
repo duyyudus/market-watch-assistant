@@ -147,12 +147,21 @@ def source_import(path: Path) -> None:
     sources = import_sources_yaml(path)
 
     async def action(session):
+        from sqlalchemy import select
+
+        from bot_worker.db.models import NewsSource
         count = 0
+        skipped = 0
         for source in sources:
+            url = str(source["url"]).strip()
+            existing = await session.scalar(select(NewsSource).where(NewsSource.url == url))
+            if existing is not None:
+                skipped += 1
+                continue
             await add_source(
                 session,
-                name=str(source["name"]),
-                url=str(source["url"]),
+                name=str(source["name"]).strip(),
+                url=url,
                 region=str(source.get("region", "global")),
                 category=str(source.get("category", "global_macro")),
                 source_type=str(source.get("type", "rss")),
@@ -161,7 +170,7 @@ def source_import(path: Path) -> None:
                 interval=int(source.get("interval", 300)),
             )
             count += 1
-        typer.echo(f"Imported {count} sources")
+        typer.echo(f"Imported {count} sources (skipped {skipped} duplicates)")
 
     _run(_with_session(action))
 @source_app.command("export")
