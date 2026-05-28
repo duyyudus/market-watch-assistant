@@ -1,19 +1,36 @@
 from typer.testing import CliRunner
 
 import bot_worker.cli.alerts as alert_cli
+import bot_worker.cli.catalysts as catalyst_cli
+import bot_worker.cli.embeddings as embedding_cli
 import bot_worker.cli.events as event_cli
+import bot_worker.cli.health as health_cli
 import bot_worker.cli.investigate as investigate_cli
+import bot_worker.cli.job as job_cli
 import bot_worker.cli.llm as llm_cli
+import bot_worker.cli.market as market_cli
+import bot_worker.cli.news as news_cli
+import bot_worker.cli.pipeline as pipeline_cli
 import bot_worker.cli.retention as retention_cli
 import bot_worker.cli.source as source_cli
+import bot_worker.cli.watchlist as watchlist_cli
 import bot_worker.cli.worker as worker_cli
 from bot_worker.cli import app
 from bot_worker.db.models import (
     AgentInvestigation,
     AlertDecisionRecord,
+    AlertDeliveryRecord,
     EventCluster,
+    EventClusterItem,
+    JobRun,
     LLMAnalysisRun,
+    MarketMove,
+    MissedCatalystReview,
+    NewsEntity,
+    NewsItemEmbedding,
     NormalizedNewsItem,
+    RawNewsItem,
+    WatchlistEntity,
 )
 
 runner = CliRunner()
@@ -965,3 +982,349 @@ def test_cli_llm_score_uses_event_score_task(monkeypatch) -> None:
     assert result.exit_code == 0
     assert '"task": "score"' in result.output
     assert '"score_modifier": 4' in result.output
+
+
+def test_cli_news_show_reports_pipeline_metadata(monkeypatch) -> None:
+    item = NormalizedNewsItem(
+        id="news_1",
+        source_id="src_1",
+        raw_item_id="raw_1",
+        title="Oil jumps",
+        snippet="Shipping disruption",
+        url="https://example.test/oil",
+        source_name="Example",
+        source_type="rss",
+        source_score=90,
+        region="global",
+        asset_classes=["commodity"],
+        title_hash="title",
+        normalized_text_hash="text",
+    )
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def all(self):
+            return self.rows
+
+    class ShowSession:
+        async def get(self, model, key):
+            assert model is NormalizedNewsItem
+            assert key == "news_1"
+            return item
+
+        async def scalars(self, stmt):
+            text = str(stmt)
+            if "news_entities" in text:
+                return ScalarResult([
+                    NewsEntity(
+                        news_item_id="news_1",
+                        entity_type="asset",
+                        raw_text="Brent",
+                        normalized_name="Brent",
+                        ticker="BZ",
+                    )
+                ])
+            if "event_cluster_items" in text:
+                return ScalarResult([
+                    EventClusterItem(event_cluster_id="evt_1", news_item_id="news_1")
+                ])
+            return ScalarResult([])
+
+        async def scalar(self, stmt):
+            if "news_item_embeddings" in str(stmt):
+                return NewsItemEmbedding(
+                    news_item_id="news_1",
+                    provider="local",
+                    embedding_model="local",
+                    embedding_version="v1",
+                    embedding_text_hash="hash",
+                    vector=[0.0] * 1536,
+                )
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(ShowSession())
+
+    monkeypatch.setattr(news_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["news", "show", "news_1"])
+
+    assert result.exit_code == 0
+    assert '"id": "news_1"' in result.output
+    assert '"embedding": {' in result.output
+    assert '"event_cluster_id": "evt_1"' in result.output
+    assert '"normalized_name": "Brent"' in result.output
+
+
+def test_cli_pipeline_inspect_accepts_raw_item(monkeypatch) -> None:
+    raw = RawNewsItem(
+        id="raw_1",
+        source_id="src_1",
+        raw_title="Oil jumps",
+        raw_url="https://example.test/oil",
+        content_hash="hash",
+    )
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+    class InspectSession:
+        async def get(self, model, key):
+            if model is RawNewsItem and key == "raw_1":
+                return raw
+            return None
+
+        async def scalars(self, _stmt):
+            return ScalarResult([])
+
+        async def scalar(self, _stmt):
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(InspectSession())
+
+    monkeypatch.setattr(pipeline_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["pipeline", "inspect", "--item", "raw_1"])
+
+    assert result.exit_code == 0
+    assert '"target_type": "raw_news_item"' in result.output
+    assert '"raw_item_id": "raw_1"' in result.output
+
+
+def test_cli_job_history_lists_recent_runs(monkeypatch) -> None:
+    class ExecuteResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [
+                JobRun(
+                    id="jobrun_1",
+                    job_name="pipeline",
+                    status="success",
+                    result={"items": 2},
+                )
+            ]
+
+    class JobSession:
+        async def execute(self, _stmt):
+            return ExecuteResult()
+
+    async def fake_with_session(fn):
+        return await fn(JobSession())
+
+    monkeypatch.setattr(job_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["job", "history", "--limit", "5"])
+
+    assert result.exit_code == 0
+    assert "jobrun_1" in result.output
+    assert "pipeline" in result.output
+
+
+def test_cli_job_run_rejects_registered_jobs_without_direct_runner() -> None:
+    result = runner.invoke(app, ["job", "run", "poll_sources"])
+
+    assert result.exit_code == 1
+    assert "No direct runner is implemented for job poll_sources" in result.output
+
+
+def test_cli_catalyst_resolve_updates_review(monkeypatch) -> None:
+    review = MissedCatalystReview(
+        id="review_1",
+        asset_symbol="BTCUSDT",
+        asset_class="crypto",
+        move_window="1d",
+        price_change_pct=5.2,
+    )
+
+    class CatalystSession:
+        async def get(self, model, key):
+            assert model is MissedCatalystReview
+            assert key == "review_1"
+            return review
+
+    async def fake_with_session(fn):
+        return await fn(CatalystSession())
+
+    monkeypatch.setattr(catalyst_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(
+        app,
+        [
+            "catalyst",
+            "resolve",
+            "review_1",
+            "--status",
+            "no_clear_catalyst",
+            "--summary",
+            "No official catalyst",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert review.status == "no_clear_catalyst"
+    assert review.agent_summary == "No official catalyst"
+    assert '"id": "review_1"' in result.output
+
+
+def test_cli_health_alerts_reports_delivery_counts(monkeypatch) -> None:
+    class HealthSession:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def scalar(self, _stmt):
+            self.calls += 1
+            if self.calls == 1:
+                return 2
+            if self.calls == 2:
+                return 1
+            return AlertDeliveryRecord(
+                id="delivery_1",
+                channel="telegram",
+                recipient="chat",
+                status="failed",
+                message_text="msg",
+                error_message="timeout",
+            )
+
+    async def fake_with_session(fn):
+        return await fn(HealthSession())
+
+    class Settings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat"
+
+        class alerts:
+            default_channel = "telegram"
+
+    monkeypatch.setattr(health_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(health_cli, "_settings", lambda: Settings())
+
+    result = runner.invoke(app, ["health", "alerts"])
+
+    assert result.exit_code == 0
+    assert '"pending_immediate_alerts": 2' in result.output
+    assert '"failed_deliveries": 1' in result.output
+
+
+def test_cli_watchlist_show_and_remove(monkeypatch) -> None:
+    entry = WatchlistEntity(
+        id="watch_1",
+        symbol="BTC",
+        name="Bitcoin",
+        entity_type="crypto",
+        tier="A",
+        aliases=["BTCUSDT"],
+    )
+    deleted = []
+
+    class WatchSession:
+        async def get(self, model, key):
+            assert model is WatchlistEntity
+            assert key == "watch_1"
+            return entry
+
+        async def delete(self, obj):
+            deleted.append(obj.id)
+
+    async def fake_with_session(fn):
+        return await fn(WatchSession())
+
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+
+    show = runner.invoke(app, ["watchlist", "show", "watch_1"])
+    remove = runner.invoke(app, ["watchlist", "remove", "watch_1", "--yes"])
+
+    assert show.exit_code == 0
+    assert '"name": "Bitcoin"' in show.output
+    assert remove.exit_code == 0
+    assert deleted == ["watch_1"]
+
+
+def test_cli_event_mark_updates_status(monkeypatch) -> None:
+    event = EventCluster(id="evt_1", canonical_headline="Oil jumps", status="reported")
+
+    class EventSession:
+        async def get(self, model, key):
+            assert model is EventCluster
+            assert key == "evt_1"
+            return event
+
+    async def fake_with_session(fn):
+        return await fn(EventSession())
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["event", "mark", "evt_1", "--status", "stale"])
+
+    assert result.exit_code == 0
+    assert event.status == "stale"
+    assert '"status": "stale"' in result.output
+
+
+def test_cli_market_movers_lists_stored_moves(monkeypatch) -> None:
+    class ExecuteResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [
+                MarketMove(
+                    id="move_1",
+                    asset_symbol="BTCUSDT",
+                    asset_class="crypto",
+                    timestamp=EventCluster().created_at,
+                    window="1d",
+                    price_change_pct=5.5,
+                    z_score=80,
+                )
+            ]
+
+    class MarketSession:
+        async def execute(self, _stmt):
+            return ExecuteResult()
+
+    async def fake_with_session(fn):
+        return await fn(MarketSession())
+
+    monkeypatch.setattr(market_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["market", "movers", "--limit", "5"])
+
+    assert result.exit_code == 0
+    assert "move_1" in result.output
+    assert "BTCUSDT" in result.output
+
+
+def test_cli_embedding_status_reports_counts(monkeypatch) -> None:
+    class EmbeddingSession:
+        async def scalar(self, stmt):
+            text = str(stmt)
+            if "normalized_news_items" in text:
+                return 3
+            if "news_item_embeddings" in text:
+                return 2
+            if "event_clusters" in text:
+                return 4
+            if "event_cluster_embeddings" in text:
+                return 1
+            return 0
+
+    async def fake_with_session(fn):
+        return await fn(EmbeddingSession())
+
+    monkeypatch.setattr(embedding_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["embedding", "status"])
+
+    assert result.exit_code == 0
+    assert '"news_items": 3' in result.output
+    assert '"news_embeddings": 2' in result.output

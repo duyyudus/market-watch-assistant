@@ -8,11 +8,18 @@ from sqlalchemy import select
 
 from bot_worker.cli.apps import event_app
 from bot_worker.cli.common import _echo_json, _run, _with_session
-from bot_worker.db.models import AgentInvestigation, AlertDecisionRecord, EventCluster
+from bot_worker.db.models import (
+    AgentInvestigation,
+    AlertDecisionRecord,
+    EventCluster,
+    EventScoreHistory,
+)
+from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services import (
     digest_preview,
     event_report_time_range,
     format_report_time_range,
+    market_move_score_for_cluster,
     recluster_recent_event_clusters,
 )
 
@@ -106,9 +113,55 @@ def event_show(identifier: str) -> None:
 
     _run(_with_session(action))
 @event_app.command("merge")
-def event_merge(left: str, right: str) -> None:
-    """Manually merge two event clusters (MVP placeholder)."""
-    typer.echo(f"event merge requested for {left} and {right}; manual merge is deferred in MVP")
+def event_merge(
+    left: str,
+    right: str,
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+) -> None:
+    """Manually mark two event clusters as merged."""
+    if not confirm:
+        typer.echo("Use --confirm to merge event clusters.")
+        raise typer.Exit(1)
+
+    async def action(session):
+        left_event = await session.get(EventCluster, left)
+        right_event = await session.get(EventCluster, right)
+        if left_event is None or right_event is None:
+            typer.echo("Event cluster not found")
+            raise typer.Exit(1)
+        left_event.source_count = max(
+            left_event.source_count,
+            left_event.source_count + right_event.source_count,
+        )
+        left_event.top_source_score = max(left_event.top_source_score, right_event.top_source_score)
+        left_event.confirmation_score = max(
+            left_event.confirmation_score, right_event.confirmation_score
+        )
+        left_event.market_impact_score = max(
+            left_event.market_impact_score, right_event.market_impact_score
+        )
+        left_event.relevance_score = max(left_event.relevance_score, right_event.relevance_score)
+        left_event.final_score = max(left_event.final_score, right_event.final_score)
+        left_event.regions = sorted({*left_event.regions, *right_event.regions})
+        left_event.asset_classes = sorted({*left_event.asset_classes, *right_event.asset_classes})
+        left_event.affected_entities = sorted(
+            {*left_event.affected_entities, *right_event.affected_entities}
+        )
+        left_event.affected_tickers = sorted(
+            {*left_event.affected_tickers, *right_event.affected_tickers}
+        )
+        right_event.status = "merged"
+        right_event.summary = f"Merged into {left_event.id}"
+        _echo_json(
+            {
+                "merged_into": left_event.id,
+                "merged_from": right_event.id,
+                "status": right_event.status,
+                "final_score": left_event.final_score,
+            }
+        )
+
+    _run(_with_session(action))
 
 
 def _since_cutoff(value: str) -> datetime:
@@ -146,9 +199,62 @@ def event_recluster(
     _run(_with_session(action))
 @event_app.command("rescore")
 def event_rescore(identifier: str) -> None:
-    """Trigger manual rescoring of an event cluster (MVP placeholder)."""
-    typer.echo(f"event rescore requested for {identifier}; scoring runs during pipeline in MVP")
+    """Trigger manual rescoring of an event cluster."""
+    async def action(session):
+        event = await session.get(EventCluster, identifier)
+        if event is None:
+            typer.echo("Event cluster not found")
+            raise typer.Exit(1)
+        market_score = await market_move_score_for_cluster(session, event)
+        breakdown = score_event(
+            ScoreInput(
+                top_source_score=event.top_source_score,
+                source_count=event.source_count,
+                watchlist_tier="D",
+                is_duplicate=False,
+                is_stale=event.status == "stale",
+                status=event.status,
+                market_move_score=market_score,
+            )
+        )
+        event.market_impact_score = breakdown.market_move_score
+        event.confirmation_score = breakdown.confidence_score
+        event.novelty_score = breakdown.novelty_score
+        event.urgency_score = breakdown.urgency_score
+        event.relevance_score = breakdown.relevance_score
+        event.final_score = breakdown.final_score
+        session.add(
+            EventScoreHistory(
+                event_cluster_id=event.id,
+                score_breakdown=breakdown.__dict__,
+                final_score=breakdown.final_score,
+            )
+        )
+        _echo_json(
+            {
+                "id": event.id,
+                "final_score": event.final_score,
+                "score_breakdown": breakdown.__dict__,
+            }
+        )
+
+    _run(_with_session(action))
+
+
 @event_app.command("mark")
 def event_mark(identifier: str, status: Annotated[str, typer.Option("--status")]) -> None:
-    """Change status or category of an event cluster (MVP placeholder)."""
-    typer.echo(f"event mark requested for {identifier}: {status}; direct update is deferred in MVP")
+    """Change status of an event cluster."""
+    allowed = {"reported", "confirmed", "official", "stale", "false_signal", "merged"}
+    if status not in allowed:
+        typer.echo(f"status must be one of: {', '.join(sorted(allowed))}")
+        raise typer.Exit(1)
+
+    async def action(session):
+        event = await session.get(EventCluster, identifier)
+        if event is None:
+            typer.echo("Event cluster not found")
+            raise typer.Exit(1)
+        event.status = status
+        _echo_json({"id": event.id, "status": event.status})
+
+    _run(_with_session(action))

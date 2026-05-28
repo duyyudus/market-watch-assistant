@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Annotated
 
 import typer
+from sqlalchemy import select
 
 from bot_worker.cli.apps import worker_app
-from bot_worker.cli.common import _run, _settings, _with_session
+from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
+from bot_worker.db.models import JobRun
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import LLMConfig
@@ -58,12 +61,41 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
     _run(loop())
 @worker_app.command("status")
 def worker_status() -> None:
-    """Show worker running status (MVP placeholder)."""
-    typer.echo("worker status: command-driven MVP; no supervisor state recorded")
+    """Show worker status from recent job activity."""
+    async def action(session):
+        latest = await session.scalar(select(JobRun).order_by(JobRun.started_at.desc()).limit(1))
+        _echo_json(
+            {
+                "mode": "foreground_or_process_manager",
+                "supervisor_state_recorded": False,
+                "latest_job": (
+                    {
+                        "id": latest.id,
+                        "job_name": latest.job_name,
+                        "status": latest.status,
+                        "started_at": latest.started_at,
+                        "completed_at": latest.completed_at,
+                        "error": latest.error_message,
+                    }
+                    if latest is not None
+                    else None
+                ),
+            }
+        )
+
+    _run(_with_session(action))
+
+
 @worker_app.command("logs")
 def worker_logs(tail: Annotated[int, typer.Option("--tail")] = 200) -> None:
-    """Retrieve logs from the worker process (MVP placeholder)."""
-    typer.echo(f"worker logs are stdout/stderr in MVP (tail requested: {tail})")
+    """Retrieve recent runtime log lines when the configured log file exists."""
+    log_path = Path(".log/market-watch-bot.log")
+    if not log_path.exists():
+        typer.echo("worker logs are stdout/stderr; .log/market-watch-bot.log not found")
+        return
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    for line in lines[-tail:]:
+        typer.echo(line)
 @worker_app.command("health")
 def worker_health() -> None:
     """Check health status of the worker and active database session."""
