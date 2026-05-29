@@ -20,6 +20,50 @@ from bot_worker.services import (
     run_pending_investigations,
     run_pipeline,
 )
+from bot_worker.services.bot_commands import process_pending_bot_commands
+
+COMMAND_POLL_INTERVAL_SECONDS = 2
+COMMAND_DRAIN_LIMIT = 25
+
+
+async def run_worker_tick(
+    session,
+    settings,
+    *,
+    last_pipeline_run_at: float,
+    now: float,
+) -> float:
+    commands = await process_pending_bot_commands(
+        session,
+        settings=settings,
+        limit=COMMAND_DRAIN_LIMIT,
+    )
+    for command in commands:
+        typer.echo(f"bot_command: {command.id} {command.command_type} {command.status}")
+    if now - last_pipeline_run_at < settings.bot.polling_interval_seconds:
+        return last_pipeline_run_at
+
+    result = await run_pipeline(
+        session,
+        freshness_hours=settings.ingestion.rss_freshness_hours,
+        embedding_config=EmbeddingConfig.from_settings(settings),
+        llm_config=LLMConfig.from_settings(settings),
+        investigation_config=InvestigationConfig.from_settings(settings),
+        alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
+    )
+    await record_job_run(session, "pipeline", result)
+    typer.echo(f"pipeline: {result}")
+    investigation_config = InvestigationConfig.from_settings(settings)
+    if investigation_config.enabled:
+        pending_result = await run_pending_investigations(
+            session,
+            config=investigation_config,
+            llm_config=LLMConfig.from_settings(settings),
+            limit=investigation_config.max_concurrency,
+        )
+        await record_job_run(session, "agent_investigation", pending_result)
+        typer.echo(f"agent_investigation: {pending_result}")
+    return now
 
 
 @worker_app.command("start")
@@ -30,33 +74,26 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
     typer.echo("Use Ctrl+C to stop")
 
     async def loop() -> None:
+        last_pipeline_run_at = asyncio.get_running_loop().time()
         while True:
+            settings = _settings()
+            now = asyncio.get_running_loop().time()
 
-            async def action(session):
-                settings = _settings()
-                result = await run_pipeline(
+            async def action(
+                session,
+                settings=settings,
+                last_pipeline_run_at=last_pipeline_run_at,
+                now=now,
+            ):
+                return await run_worker_tick(
                     session,
-                    freshness_hours=settings.ingestion.rss_freshness_hours,
-                    embedding_config=EmbeddingConfig.from_settings(settings),
-                    llm_config=LLMConfig.from_settings(settings),
-                    investigation_config=InvestigationConfig.from_settings(settings),
-                    alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
+                    settings,
+                    last_pipeline_run_at=last_pipeline_run_at,
+                    now=now,
                 )
-                await record_job_run(session, "pipeline", result)
-                typer.echo(f"pipeline: {result}")
-                investigation_config = InvestigationConfig.from_settings(settings)
-                if investigation_config.enabled:
-                    pending_result = await run_pending_investigations(
-                        session,
-                        config=investigation_config,
-                        llm_config=LLMConfig.from_settings(settings),
-                        limit=investigation_config.max_concurrency,
-                    )
-                    await record_job_run(session, "agent_investigation", pending_result)
-                    typer.echo(f"agent_investigation: {pending_result}")
 
-            await _with_session(action)
-            await asyncio.sleep(_settings().bot.polling_interval_seconds)
+            last_pipeline_run_at = await _with_session(action)
+            await asyncio.sleep(COMMAND_POLL_INTERVAL_SECONDS)
 
     _run(loop())
 @worker_app.command("status")

@@ -7,12 +7,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
     AlertDecisionRecord,
+    AppSetting,
     EventCluster,
 )
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
 from bot_worker.services.investigation import latest_successful_investigation
 from bot_worker.services.llm import latest_successful_llm_analysis
 from bot_worker.services.market import market_move_score_for_cluster
+
+
+async def alert_thresholds_from_settings(
+    session: AsyncSession,
+) -> tuple[AlertThresholds, str]:
+    if not hasattr(session, "execute"):
+        return AlertThresholds(), "log"
+    result = await session.execute(select(AppSetting).where(AppSetting.key == "alert_policy"))
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        return AlertThresholds(), "log"
+    value = setting.value
+    return (
+        AlertThresholds(
+            immediate=int(value.get("immediate_threshold", 80)),
+            watchlist=int(value.get("watchlist_threshold", 55)),
+            digest=int(value.get("digest_threshold", 30)),
+        ),
+        str(value.get("default_channel", "log")),
+    )
 
 
 async def record_alert_decisions(session: AsyncSession) -> int:
@@ -22,6 +43,7 @@ async def record_alert_decisions(session: AsyncSession) -> int:
         .where(AlertDecisionRecord.id.is_(None))
     )
     clusters = list((await session.scalars(stmt)).all())
+    thresholds, channel = await alert_thresholds_from_settings(session)
     count = 0
     for cluster in clusters:
         move_score = await market_move_score_for_cluster(session, cluster)
@@ -83,14 +105,14 @@ async def record_alert_decisions(session: AsyncSession) -> int:
         cluster.market_impact_score = max(score.impact_score, score.market_move_score)
         cluster.relevance_score = score.relevance_score
         cluster.final_score = adjusted_final_score
-        decision = decide_alert(adjusted_final_score, AlertThresholds())
+        decision = decide_alert(adjusted_final_score, thresholds)
         session.add(
             AlertDecisionRecord(
                 event_cluster_id=cluster.id,
                 decision=decision.decision,
                 reason=decision.reason,
                 score_breakdown=score_breakdown,
-                channel="log",
+                channel=channel,
             )
         )
         count += 1

@@ -14,14 +14,13 @@ from bot_worker.db.models import (
     EventCluster,
     EventScoreHistory,
 )
-from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services import (
     digest_preview,
     event_report_time_range,
     format_report_time_range,
-    market_move_score_for_cluster,
     recluster_recent_event_clusters,
 )
+from bot_worker.services.bot_commands import apply_event_score, score_event_cluster
 
 
 @event_app.command("list")
@@ -205,24 +204,8 @@ def event_rescore(identifier: str) -> None:
         if event is None:
             typer.echo("Event cluster not found")
             raise typer.Exit(1)
-        market_score = await market_move_score_for_cluster(session, event)
-        breakdown = score_event(
-            ScoreInput(
-                top_source_score=event.top_source_score,
-                source_count=event.source_count,
-                watchlist_tier="D",
-                is_duplicate=False,
-                is_stale=event.status == "stale",
-                status=event.status,
-                market_move_score=market_score,
-            )
-        )
-        event.market_impact_score = breakdown.market_move_score
-        event.confirmation_score = breakdown.confidence_score
-        event.novelty_score = breakdown.novelty_score
-        event.urgency_score = breakdown.urgency_score
-        event.relevance_score = breakdown.relevance_score
-        event.final_score = breakdown.final_score
+        breakdown = await score_event_cluster(session, event)
+        apply_event_score(event, breakdown)
         session.add(
             EventScoreHistory(
                 event_cluster_id=event.id,

@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #121214;
+}
+
+.nav-button {
+  align-items: center;
+  display: flex;
+  gap: 0.625rem;
+  min-height: 2.25rem;
+  padding: 0 0.75rem;
+  width: 100%;
+}

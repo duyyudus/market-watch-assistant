@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+import pytest
 from typer.testing import CliRunner
 
 import bot_worker.cli.alerts as alert_cli
@@ -402,10 +405,8 @@ def test_cli_investigate_show_reports_result(monkeypatch) -> None:
     assert '"summary": "checked"' in result.output
 
 
-def test_worker_loop_passes_investigation_config_and_runs_pending(monkeypatch) -> None:
-    class StopLoop(Exception):
-        pass
-
+@pytest.mark.asyncio
+async def test_worker_tick_runs_command_drain_without_scheduled_pipeline(monkeypatch) -> None:
     class Session:
         pass
 
@@ -474,8 +475,107 @@ def test_worker_loop_passes_investigation_config_and_runs_pending(monkeypatch) -
             min_modifier = -10
             max_modifier = 10
 
-    async def fake_with_session(fn):
-        return await fn(Session())
+    processed_commands = []
+    pipeline_calls = []
+
+    async def fake_process_pending(session, *, settings, limit):
+        assert isinstance(session, Session)
+        assert isinstance(settings, Settings)
+        assert limit == 25
+        processed_commands.append("cmd_1")
+        return [SimpleNamespace(id="cmd_1", command_type="pipeline.run", status="succeeded")]
+
+    async def fake_run_pipeline(*_args, **_kwargs):
+        pipeline_calls.append("pipeline")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(worker_cli, "process_pending_bot_commands", fake_process_pending)
+    monkeypatch.setattr(worker_cli, "run_pipeline", fake_run_pipeline)
+
+    last_run = await worker_cli.run_worker_tick(
+        Session(),
+        Settings(),
+        last_pipeline_run_at=100.0,
+        now=101.0,
+    )
+
+    assert processed_commands == ["cmd_1"]
+    assert pipeline_calls == []
+    assert last_run == 100.0
+
+
+@pytest.mark.asyncio
+async def test_worker_tick_runs_scheduled_pipeline_when_interval_elapsed(monkeypatch) -> None:
+    class Session:
+        pass
+
+    class Settings:
+        brave_search_api_key = "brave-key"
+        openrouter_api_key = "llm-key"
+        telegram_bot_token = None
+        telegram_chat_id = None
+
+        class bot:
+            polling_interval_seconds = 300
+
+        class ingestion:
+            rss_freshness_hours = 24
+
+        class alerts:
+            default_channel = "log"
+
+        class embeddings:
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "embedding-model"
+            dimensions = 1536
+            api_key_env = "OPENROUTER_API_KEY"
+            version = "v1"
+            cluster_attach_enabled = True
+            cluster_attach_lookback_days = 7
+            cluster_attach_min_similarity = 0.88
+            cluster_attach_candidate_limit = 20
+            max_concurrency = 3
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "model"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+        class investigation:
+            enabled = True
+            brave_search_api_key_env = "BRAVE_SEARCH_API_KEY"
+            max_search_results = 10
+            max_evidence_items = 12
+            local_evidence_limit = 10
+            local_evidence_lookback_days = 3
+            timeout_seconds = 20
+            max_concurrency = 2
+            auto_event_score_threshold = 80
+            auto_single_source_score_threshold = 90
+            auto_market_move_score_threshold = 70
+            min_modifier = -10
+            max_modifier = 10
+
+    async def fake_process_pending(_session, *, settings, limit):
+        return []
 
     async def fake_run_pipeline(session, **kwargs):
         assert isinstance(session, Session)
@@ -492,20 +592,19 @@ def test_worker_loop_passes_investigation_config_and_runs_pending(monkeypatch) -
     async def fake_record_job_run(*_args, **_kwargs):
         return None
 
-    async def stop_sleep(_seconds):
-        raise StopLoop
-
-    monkeypatch.setattr(worker_cli, "_settings", lambda: Settings())
-    monkeypatch.setattr(worker_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(worker_cli, "process_pending_bot_commands", fake_process_pending)
     monkeypatch.setattr(worker_cli, "run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(worker_cli, "run_pending_investigations", fake_run_pending)
     monkeypatch.setattr(worker_cli, "record_job_run", fake_record_job_run)
-    monkeypatch.setattr(worker_cli.asyncio, "sleep", stop_sleep)
 
-    result = runner.invoke(app, ["worker", "start"])
+    last_run = await worker_cli.run_worker_tick(
+        Session(),
+        Settings(),
+        last_pipeline_run_at=100.0,
+        now=401.0,
+    )
 
-    assert result.exit_code == 1
-    assert isinstance(result.exception, StopLoop)
+    assert last_run == 401.0
 
 
 def test_cli_event_show_reports_event_details(monkeypatch) -> None:

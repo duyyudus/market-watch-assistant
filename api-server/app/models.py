@@ -3,10 +3,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import UserDefinedType
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db import Base
 
 
 def new_id(prefix: str) -> str:
@@ -17,41 +17,6 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-class Base(DeclarativeBase):
-    pass
-
-
-class Vector(UserDefinedType):
-    cache_ok = True
-
-    def __init__(self, dimensions: int) -> None:
-        self.dimensions = dimensions
-
-    def get_col_spec(self, **_kw: object) -> str:
-        return f"vector({self.dimensions})"
-
-    def bind_processor(self, _dialect):
-        def process(value: list[float] | None) -> str | None:
-            if value is None:
-                return None
-            return "[" + ",".join(str(float(item)) for item in value) + "]"
-
-        return process
-
-    def result_processor(self, _dialect, _coltype):
-        def process(value: object | None) -> list[float] | None:
-            if value is None:
-                return None
-            if isinstance(value, list):
-                return [float(item) for item in value]
-            text = str(value).strip("[]")
-            if not text:
-                return []
-            return [float(item) for item in text.split(",")]
-
-        return process
-
-
 class NewsSource(Base):
     __tablename__ = "news_sources"
 
@@ -60,7 +25,7 @@ class NewsSource(Base):
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="rss")
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     region: Mapped[str] = mapped_column(String(64), nullable=False)
-    asset_classes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    asset_classes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(String(16), nullable=False, default="en")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -73,8 +38,6 @@ class NewsSource(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
-
-    __table_args__ = (UniqueConstraint("url", name="uq_news_sources_url"),)
 
 
 class SourceFetchLog(Base):
@@ -91,32 +54,12 @@ class SourceFetchLog(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64))
 
 
-class RawNewsItem(Base):
-    __tablename__ = "raw_news_items"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("raw"))
-    source_id: Mapped[str] = mapped_column(ForeignKey("news_sources.id"), nullable=False)
-    raw_title: Mapped[str | None] = mapped_column(Text)
-    raw_description: Mapped[str | None] = mapped_column(Text)
-    raw_content: Mapped[str | None] = mapped_column(Text)
-    raw_url: Mapped[str | None] = mapped_column(Text)
-    raw_published_at: Mapped[str | None] = mapped_column(String(255))
-    raw_author: Mapped[str | None] = mapped_column(String(255))
-    raw_payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("source_id", "content_hash", name="uq_raw_news_source_hash"),
-    )
-
-
 class NormalizedNewsItem(Base):
     __tablename__ = "normalized_news_items"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("news"))
     source_id: Mapped[str] = mapped_column(ForeignKey("news_sources.id"), nullable=False)
-    raw_item_id: Mapped[str | None] = mapped_column(ForeignKey("raw_news_items.id"))
+    raw_item_id: Mapped[str | None] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(Text, nullable=False)
     snippet: Mapped[str | None] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -128,12 +71,9 @@ class NormalizedNewsItem(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     language: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
     region: Mapped[str] = mapped_column(String(64), nullable=False)
-    asset_classes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    asset_classes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     is_paywalled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     full_text_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    title_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    canonical_url_hash: Mapped[str | None] = mapped_column(String(64))
-    normalized_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     processing_status: Mapped[str] = mapped_column(String(32), nullable=False, default="new")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -145,9 +85,7 @@ class NewsEntity(Base):
     __tablename__ = "news_entities"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("ent"))
-    news_item_id: Mapped[str] = mapped_column(
-        ForeignKey("normalized_news_items.id"), nullable=False
-    )
+    news_item_id: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     raw_text: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -166,10 +104,10 @@ class EventCluster(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="reported")
-    regions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    asset_classes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    affected_entities: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    affected_tickers: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    regions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    asset_classes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    affected_entities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    affected_tickers: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     top_source_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     confirmation_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -189,10 +127,8 @@ class EventCluster(Base):
 class EventClusterItem(Base):
     __tablename__ = "event_cluster_items"
 
-    event_cluster_id: Mapped[str] = mapped_column(ForeignKey("event_clusters.id"), primary_key=True)
-    news_item_id: Mapped[str] = mapped_column(
-        ForeignKey("normalized_news_items.id"), primary_key=True
-    )
+    event_cluster_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    news_item_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="related")
     similarity_score: Mapped[int | None] = mapped_column(Integer)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -202,75 +138,10 @@ class EventScoreHistory(Base):
     __tablename__ = "event_score_history"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("score"))
-    event_cluster_id: Mapped[str] = mapped_column(ForeignKey("event_clusters.id"), nullable=False)
-    score_breakdown: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    event_cluster_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    score_breakdown: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     final_score: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class NewsItemEmbedding(Base):
-    __tablename__ = "news_item_embeddings"
-
-    news_item_id: Mapped[str] = mapped_column(
-        ForeignKey("normalized_news_items.id"), primary_key=True
-    )
-    provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
-    embedding_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=1536)
-    embedding_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    vector: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class EventClusterEmbedding(Base):
-    __tablename__ = "event_cluster_embeddings"
-
-    event_cluster_id: Mapped[str] = mapped_column(
-        ForeignKey("event_clusters.id"), primary_key=True
-    )
-    provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
-    embedding_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=1536)
-    embedding_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    vector: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
-
-
-class LLMAnalysisRun(Base):
-    __tablename__ = "llm_analysis_runs"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("llm"))
-    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    model: Mapped[str] = mapped_column(String(255), nullable=False)
-    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    input_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
-    result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    error_message: Mapped[str | None] = mapped_column(Text)
-    usage: Mapped[dict[str, object] | None] = mapped_column(JSONB)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "target_type",
-            "target_id",
-            "provider",
-            "model",
-            "prompt_version",
-            name="uq_llm_analysis_runs_target_model_prompt",
-        ),
-    )
 
 
 class AgentInvestigation(Base):
@@ -281,14 +152,11 @@ class AgentInvestigation(Base):
     target_id: Mapped[str] = mapped_column(String(64), nullable=False)
     trigger_reason: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    input_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
-    evidence: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, default=list)
+    input_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    evidence: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False, default=list)
     provider: Mapped[str | None] = mapped_column(String(64))
     model: Mapped[str | None] = mapped_column(String(255))
-    prompt_version: Mapped[str | None] = mapped_column(String(64))
-    prompt_hash: Mapped[str | None] = mapped_column(String(64))
-    result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
-    usage: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -305,57 +173,39 @@ class MarketMove(Base):
     exchange: Mapped[str | None] = mapped_column(String(64))
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window: Mapped[str] = mapped_column(String(16), nullable=False)
-    price_change_pct: Mapped[float] = mapped_column(nullable=False)
-    volume_change_pct: Mapped[float | None] = mapped_column()
-    value_traded_change_pct: Mapped[float | None] = mapped_column()
-    z_score: Mapped[float | None] = mapped_column()
+    price_change_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    volume_change_pct: Mapped[float | None] = mapped_column(Float)
+    value_traded_change_pct: Mapped[float | None] = mapped_column(Float)
+    z_score: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class MissedCatalystReview(Base):
-    __tablename__ = "missed_catalyst_reviews"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("review"))
-    asset_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
-    asset_class: Mapped[str] = mapped_column(String(64), nullable=False)
-    move_window: Mapped[str] = mapped_column(String(16), nullable=False)
-    price_change_pct: Mapped[float] = mapped_column(nullable=False)
-    volume_change_pct: Mapped[float | None] = mapped_column()
-    detected_event_cluster_id: Mapped[str | None] = mapped_column(ForeignKey("event_clusters.id"))
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    agent_summary: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
-
-
-class AlertDecisionRecord(Base):
+class AlertDecision(Base):
     __tablename__ = "alert_decisions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("alert"))
-    event_cluster_id: Mapped[str] = mapped_column(ForeignKey("event_clusters.id"), nullable=False)
+    event_cluster_id: Mapped[str] = mapped_column(String(64), nullable=False)
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    score_breakdown: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    score_breakdown: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     channel: Mapped[str | None] = mapped_column(String(32))
     suppression_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-class AlertDeliveryRecord(Base):
+class AlertDelivery(Base):
     __tablename__ = "alert_deliveries"
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: new_id("delivery")
     )
-    alert_decision_id: Mapped[str | None] = mapped_column(ForeignKey("alert_decisions.id"))
+    alert_decision_id: Mapped[str | None] = mapped_column(String(64))
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
-    provider_response: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    provider_response: Mapped[dict[str, object] | None] = mapped_column(JSON)
     error_message: Mapped[str | None] = mapped_column(Text)
     attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -371,7 +221,7 @@ class WatchlistEntity(Base):
     tier: Mapped[str] = mapped_column(String(1), nullable=False, default="D")
     region: Mapped[str | None] = mapped_column(String(64))
     asset_class: Mapped[str | None] = mapped_column(String(64))
-    aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    aliases: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -387,27 +237,15 @@ class JobRun(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
     error_message: Mapped[str | None] = mapped_column(Text)
-
-
-class RetentionJob(Base):
-    __tablename__ = "retention_jobs"
-
-    id: Mapped[str] = mapped_column(
-        String(64), primary_key=True, default=lambda: new_id("retention")
-    )
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
-    deleted_counts: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False, default=dict)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
-    value: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    value: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
@@ -419,8 +257,8 @@ class BotCommand(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("cmd"))
     command_type: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
-    payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
-    result: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
     error_message: Mapped[str | None] = mapped_column(Text)
     requested_by: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
