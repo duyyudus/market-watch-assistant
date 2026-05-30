@@ -108,6 +108,76 @@ class MarketDataConfig(BaseModel):
     )
 
 
+class SourcePresetConfig(BaseModel):
+    source_types: list[str] = Field(
+        default_factory=lambda: [
+            "rss",
+            "api",
+            "crawler",
+            "official",
+            "newsletter",
+            "social",
+            "market_data",
+        ]
+    )
+    regions: list[str] = Field(
+        default_factory=lambda: ["global", "asia", "us", "vietnam", "china", "crypto", "other"]
+    )
+    categories: list[str] = Field(
+        default_factory=lambda: [
+            "global_macro",
+            "us_equity",
+            "vietnam_equity",
+            "crypto",
+            "commodity",
+            "fx",
+            "rates",
+            "geopolitics",
+            "company_disclosure",
+            "exchange_announcement",
+        ]
+    )
+    languages: list[str] = Field(default_factory=lambda: ["en", "vi", "zh", "ja", "multi"])
+
+
+class WatchlistPresetConfig(BaseModel):
+    entity_types: list[str] = Field(
+        default_factory=lambda: [
+            "equity",
+            "etf",
+            "crypto",
+            "macro_theme",
+            "commodity",
+            "currency",
+            "sector",
+            "company",
+            "index",
+        ]
+    )
+    tiers: list[str] = Field(default_factory=lambda: ["S", "A", "B", "C", "D"])
+    regions: list[str] = Field(
+        default_factory=lambda: ["global", "asia", "us", "vietnam", "china", "crypto", "other"]
+    )
+    asset_classes: list[str] = Field(
+        default_factory=lambda: [
+            "equity",
+            "crypto",
+            "global_macro",
+            "vietnam_equity",
+            "us_equity",
+            "commodity",
+            "fx",
+            "rates",
+            "credit",
+        ]
+    )
+
+
+class ConfigurationPresetConfig(BaseModel):
+    sources: SourcePresetConfig = Field(default_factory=SourcePresetConfig)
+    watchlist: WatchlistPresetConfig = Field(default_factory=WatchlistPresetConfig)
+
+
 class RetentionConfig(BaseModel):
     fetch_logs_days: int = 14
     raw_news_items_days: int = 60
@@ -140,6 +210,9 @@ class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     investigation: InvestigationSettings = Field(default_factory=InvestigationSettings)
     market_data: MarketDataConfig = Field(default_factory=MarketDataConfig)
+    configuration_presets: ConfigurationPresetConfig = Field(
+        default_factory=ConfigurationPresetConfig
+    )
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

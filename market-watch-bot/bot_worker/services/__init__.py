@@ -85,6 +85,7 @@ from bot_worker.services.sources import (
     import_sources_yaml,
     list_sources,
     purge_source,
+    seed_configuration_presets,
     seed_starter_sources,
     set_source_enabled,
 )
@@ -153,6 +154,7 @@ __all__ = [
     "run_pipeline",
     "run_retention",
     "score_event_with_llm",
+    "seed_configuration_presets",
     "seed_starter_sources",
     "select_digest_headline",
     "select_report_time_range",

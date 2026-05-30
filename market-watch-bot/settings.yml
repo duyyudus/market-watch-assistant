@@ -80,6 +80,28 @@ market_data:
     GLD: GLD
     USO: USO
 
+configuration_presets:
+  sources:
+    source_types: [rss, api, crawler, official, newsletter, social, market_data]
+    regions: [global, asia, us, vietnam, china, crypto, other]
+    categories:
+      - global_macro
+      - us_equity
+      - vietnam_equity
+      - crypto
+      - commodity
+      - fx
+      - rates
+      - geopolitics
+      - company_disclosure
+      - exchange_announcement
+    languages: [en, vi, zh, ja, multi]
+  watchlist:
+    entity_types: [equity, etf, crypto, macro_theme, commodity, currency, sector, company, index]
+    tiers: [S, A, B, C, D]
+    regions: [global, asia, us, vietnam, china, crypto, other]
+    asset_classes: [equity, crypto, global_macro, vietnam_equity, us_equity, commodity, fx, rates, credit]
+
 retention:
   fetch_logs_days: 14
   raw_news_items_days: 60

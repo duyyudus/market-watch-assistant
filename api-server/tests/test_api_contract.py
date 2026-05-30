@@ -11,6 +11,7 @@ from app.db import Base, get_session
 from app.main import app
 from app.models import (
     AlertDecision,
+    AppSetting,
     EventCluster,
     JobRun,
     NewsSource,
@@ -93,7 +94,63 @@ async def client():
             aliases=["SPDR S&P 500"],
             enabled=True,
         )
-        session.add_all([source, event, news, alert, job, watch])
+        presets = AppSetting(
+            key="configuration_presets",
+            value={
+                "sources": {
+                    "source_types": [
+                        "rss",
+                        "api",
+                        "crawler",
+                        "official",
+                        "newsletter",
+                        "social",
+                        "market_data",
+                    ],
+                    "regions": ["global", "asia", "us", "vietnam", "china", "crypto", "other"],
+                    "categories": [
+                        "global_macro",
+                        "us_equity",
+                        "vietnam_equity",
+                        "crypto",
+                        "commodity",
+                        "fx",
+                        "rates",
+                        "geopolitics",
+                        "company_disclosure",
+                        "exchange_announcement",
+                    ],
+                    "languages": ["en", "vi", "zh", "ja", "multi"],
+                },
+                "watchlist": {
+                    "entity_types": [
+                        "equity",
+                        "etf",
+                        "crypto",
+                        "macro_theme",
+                        "commodity",
+                        "currency",
+                        "sector",
+                        "company",
+                        "index",
+                    ],
+                    "tiers": ["S", "A", "B", "C", "D"],
+                    "regions": ["global", "asia", "us", "vietnam", "china", "crypto", "other"],
+                    "asset_classes": [
+                        "equity",
+                        "crypto",
+                        "global_macro",
+                        "vietnam_equity",
+                        "us_equity",
+                        "commodity",
+                        "fx",
+                        "rates",
+                        "credit",
+                    ],
+                },
+            },
+        )
+        session.add_all([source, event, news, alert, job, watch, presets])
         await session.commit()
 
     async def override_session():
@@ -201,6 +258,110 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
     cancelled = await client.post(f"/bot/commands/{command.json()['id']}/cancel")
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_safe_configuration_mutations_normalize_tier_and_delete_watchlist(
+    client: AsyncClient,
+) -> None:
+    patched_source = await client.patch(
+        "/sources/src_1",
+        json={
+            "name": "Federal Reserve Watch",
+            "url": "https://example.com/fed-watch",
+            "category": "rates",
+            "source_score": 95,
+            "enabled": False,
+        },
+    )
+
+    assert patched_source.status_code == 200
+    assert patched_source.json()["name"] == "Federal Reserve Watch"
+    assert patched_source.json()["category"] == "rates"
+    assert patched_source.json()["asset_classes"] == ["rates"]
+    assert patched_source.json()["enabled"] is False
+
+    created_watch = await client.post(
+        "/watchlist",
+        json={
+            "symbol": "btc",
+            "name": "Bitcoin",
+            "entity_type": "crypto",
+            "tier": "s",
+            "region": "global",
+            "asset_class": "crypto",
+            "aliases": ["digital gold"],
+            "enabled": True,
+        },
+    )
+
+    assert created_watch.status_code == 201
+    assert created_watch.json()["tier"] == "S"
+    watch_id = created_watch.json()["id"]
+
+    updated_watch = await client.patch(
+        f"/watchlist/{watch_id}",
+        json={"tier": "a", "aliases": ["BTC"]},
+    )
+
+    assert updated_watch.status_code == 200
+    assert updated_watch.json()["tier"] == "A"
+    assert updated_watch.json()["aliases"] == ["BTC"]
+
+    deleted_watch = await client.delete(f"/watchlist/{watch_id}")
+    assert deleted_watch.status_code == 204
+
+    missing_watch = await client.get("/watchlist")
+    assert all(row["id"] != watch_id for row in missing_watch.json()["items"])
+
+
+@pytest.mark.asyncio
+async def test_alert_policy_defaults_and_updates(client: AsyncClient) -> None:
+    default_policy = await client.get("/settings/alert-policy")
+
+    assert default_policy.status_code == 200
+    assert default_policy.json() == {
+        "immediate_threshold": 80,
+        "watchlist_threshold": 55,
+        "digest_threshold": 30,
+        "default_channel": "log",
+    }
+
+    updated_policy = await client.patch(
+        "/settings/alert-policy",
+        json={
+            "immediate_threshold": 85,
+            "watchlist_threshold": 60,
+            "digest_threshold": 35,
+            "default_channel": "telegram",
+        },
+    )
+
+    assert updated_policy.status_code == 200
+    assert updated_policy.json()["default_channel"] == "telegram"
+
+
+@pytest.mark.asyncio
+async def test_configuration_presets_are_served_by_api(client: AsyncClient) -> None:
+    response = await client.get("/settings/presets")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources"]["source_types"] == [
+        "rss",
+        "api",
+        "crawler",
+        "official",
+        "newsletter",
+        "social",
+        "market_data",
+    ]
+    assert "vietnam" in payload["sources"]["regions"]
+    assert "crypto" in payload["sources"]["categories"]
+    assert payload["sources"]["languages"] == ["en", "vi", "zh", "ja", "multi"]
+    assert payload["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
+    assert "etf" in payload["watchlist"]["entity_types"]
+    assert "equity" in payload["watchlist"]["asset_classes"]
 
 
 @pytest.mark.asyncio

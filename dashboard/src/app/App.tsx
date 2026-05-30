@@ -3,8 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import type {
   AlertDecision,
+  AlertPolicy,
   BotCommand,
   BotStatus,
+  ConfigurationPresets,
   EventCluster,
   JobRun,
   NewsItem,
@@ -56,6 +58,8 @@ export function App() {
       settle("jobs", api.jobs()),
       settle("watchlist", api.watchlist()),
       settle("commands", api.commands()),
+      settle("alertPolicy", api.alertPolicy()),
+      settle("presets", api.presets()),
     ]);
     const nextErrors: ResourceErrors = {};
     const nextState: DashboardState = { ...emptyState };
@@ -87,6 +91,8 @@ export function App() {
       if (result.key === "commands") {
         nextState.commands = normalizeListResponse<BotCommand>(result.value).items;
       }
+      if (result.key === "alertPolicy") nextState.alertPolicy = result.value as AlertPolicy;
+      if (result.key === "presets") nextState.presets = result.value as ConfigurationPresets;
     }
 
     setState(nextState);
@@ -112,8 +118,10 @@ export function App() {
       .includes(query.toLowerCase()),
   );
   const errorCount = Object.keys(resourceErrors).length;
-  const apiBadgeLabel = errorCount === 0 ? "API ok" : errorCount === 8 ? "API offline" : "API degraded";
-  const apiBadgeTone = errorCount === 0 ? "success" : errorCount === 8 ? "error" : "warning";
+  const apiResourceCount = 10;
+  const apiBadgeLabel =
+    errorCount === 0 ? "API ok" : errorCount === apiResourceCount ? "API offline" : "API degraded";
+  const apiBadgeTone = errorCount === 0 ? "success" : errorCount === apiResourceCount ? "error" : "warning";
 
   async function queue(commandType: string, payload: Record<string, unknown>) {
     await api.createCommand(commandType, payload);
@@ -284,9 +292,19 @@ export function App() {
               <AlertsTable rows={state.alerts} error={resourceErrors.alerts} retry={load} />
             </Panel>
           ) : view === "sources" ? (
-            <SourcesTable rows={state.sources} error={resourceErrors.sources} reload={load} />
+            <SourcesTable
+              rows={state.sources}
+              error={resourceErrors.sources}
+              presets={state.presets?.sources ?? null}
+              reload={load}
+            />
           ) : view === "watchlist" ? (
-            <WatchlistTable rows={state.watchlist} error={resourceErrors.watchlist} retry={load} />
+            <WatchlistTable
+              rows={state.watchlist}
+              error={resourceErrors.watchlist}
+              presets={state.presets?.watchlist ?? null}
+              retry={load}
+            />
           ) : view === "commands" ? (
             <Panel title="Command queue">
               <CommandsTable
@@ -302,6 +320,7 @@ export function App() {
               alerts={state.alerts}
               sources={state.sources}
               errors={resourceErrors}
+              alertPolicy={state.alertPolicy}
               queue={queue}
               retry={load}
             />
@@ -311,4 +330,3 @@ export function App() {
     </div>
   );
 }
-

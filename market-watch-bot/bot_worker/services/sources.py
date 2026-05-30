@@ -9,9 +9,10 @@ from sqlalchemy import Select, delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot_worker.config import STARTER_SOURCES, StarterSource
+from bot_worker.config import STARTER_SOURCES, Settings, StarterSource
 from bot_worker.db.models import (
     AlertDecisionRecord,
+    AppSetting,
     EventCluster,
     EventClusterEmbedding,
     EventClusterItem,
@@ -98,6 +99,20 @@ async def seed_starter_sources(session: AsyncSession) -> int:
         result = await session.execute(stmt)
         changed += result.rowcount or 0
     return changed
+
+
+async def seed_configuration_presets(session: AsyncSession, settings: Settings) -> bool:
+    value = settings.configuration_presets.model_dump()
+    existing = await session.get(AppSetting, "configuration_presets")
+    if existing is None:
+        session.add(AppSetting(key="configuration_presets", value=value))
+        return True
+    if existing.value == value:
+        return False
+    existing.value = value
+    return True
+
+
 async def add_source(
     session: AsyncSession,
     *,

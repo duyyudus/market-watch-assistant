@@ -14,6 +14,14 @@ const apiMock = vi.hoisted(() => ({
   commands: vi.fn(),
   createCommand: vi.fn(),
   setSourceEnabled: vi.fn(),
+  createSource: vi.fn(),
+  updateSource: vi.fn(),
+  createWatchlistEntry: vi.fn(),
+  updateWatchlistEntry: vi.fn(),
+  deleteWatchlistEntry: vi.fn(),
+  alertPolicy: vi.fn(),
+  updateAlertPolicy: vi.fn(),
+  presets: vi.fn(),
 }));
 
 vi.mock("./api", async () => {
@@ -139,6 +147,79 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     ]),
   );
   apiMock.commands.mockResolvedValue(envelope([]));
+  apiMock.alertPolicy.mockResolvedValue({
+    immediate_threshold: 80,
+    watchlist_threshold: 55,
+    digest_threshold: 30,
+    default_channel: "log",
+  });
+  apiMock.presets.mockResolvedValue({
+    sources: {
+      source_types: ["rss", "official"],
+      regions: ["global", "us", "vietnam", "crypto"],
+      categories: ["global_macro", "crypto", "vietnam_equity"],
+      languages: ["en", "vi"],
+    },
+    watchlist: {
+      entity_types: ["equity", "etf", "crypto"],
+      tiers: ["S", "A", "B", "C", "D"],
+      regions: ["global", "us", "vietnam", "crypto"],
+      asset_classes: ["equity", "crypto", "global_macro"],
+    },
+  });
+  apiMock.createSource.mockResolvedValue({
+    id: "src_2",
+    name: "CoinDesk",
+    source_type: "rss",
+    category: "crypto",
+    region: "global",
+    url: "https://example.com/coindesk",
+    language: "en",
+    enabled: true,
+    polling_interval_seconds: 600,
+    source_score: 75,
+  });
+  apiMock.updateSource.mockResolvedValue({
+    id: "src_1",
+    name: "Federal Reserve Watch",
+    source_type: "official",
+    category: "rates",
+    region: "us",
+    url: "https://example.com/rss",
+    language: "en",
+    enabled: true,
+    polling_interval_seconds: 900,
+    source_score: 95,
+  });
+  apiMock.createWatchlistEntry.mockResolvedValue({
+    id: "watch_2",
+    symbol: "BTC",
+    name: "Bitcoin",
+    entity_type: "crypto",
+    tier: "S",
+    region: "global",
+    asset_class: "crypto",
+    aliases: ["digital gold"],
+    enabled: true,
+  });
+  apiMock.updateWatchlistEntry.mockResolvedValue({
+    id: "watch_1",
+    symbol: "SPY",
+    name: "SPDR S&P 500 ETF",
+    entity_type: "etf",
+    tier: "A",
+    region: "us",
+    asset_class: "equity",
+    aliases: ["SPDR"],
+    enabled: true,
+  });
+  apiMock.deleteWatchlistEntry.mockResolvedValue(undefined);
+  apiMock.updateAlertPolicy.mockResolvedValue({
+    immediate_threshold: 85,
+    watchlist_threshold: 60,
+    digest_threshold: 35,
+    default_channel: "telegram",
+  });
   Object.assign(apiMock, overrides);
 }
 
@@ -201,13 +282,143 @@ describe("App data states", () => {
     expect(screen.getByText("news unavailable")).toBeInTheDocument();
   });
 
-  it("keeps the watchlist page read-only in Phase 1", async () => {
+  it("renders Phase 2 watchlist configuration controls", async () => {
     await renderLoadedApp();
     switchTo("watchlist");
 
     expect(await screen.findByText("SPY")).toBeInTheDocument();
     const main = screen.getByRole("main");
-    expect(within(main).queryByRole("button", { name: /add|create|edit|delete|remove/i })).not.toBeInTheDocument();
+    expect(within(main).getByRole("button", { name: /add watchlist entry/i })).toBeInTheDocument();
+    expect(within(main).getByRole("button", { name: /edit SPY/i })).toBeInTheDocument();
+  });
+
+  it("creates and edits sources from the dashboard", async () => {
+    await renderLoadedApp();
+    switchTo("sources");
+
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    const main = screen.getByRole("main");
+    expect(within(main).getByRole("combobox", { name: "Source type" })).toBeInTheDocument();
+    expect(within(main).getByRole("combobox", { name: "Region" })).toBeInTheDocument();
+    expect(within(main).getByRole("combobox", { name: "Category" })).toBeInTheDocument();
+    expect(within(main).getByRole("combobox", { name: "Language" })).toBeInTheDocument();
+    expect(within(main).queryByRole("option", { name: "blog" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "CoinDesk" } });
+    fireEvent.change(screen.getByLabelText("Source URL"), {
+      target: { value: "https://example.com/coindesk" },
+    });
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "global" } });
+    fireEvent.change(screen.getByLabelText("Category"), { target: { value: "crypto" } });
+    fireEvent.change(screen.getByLabelText("Source score"), { target: { value: "75" } });
+    fireEvent.change(screen.getByLabelText("Polling interval"), { target: { value: "600" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save source$/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createSource).toHaveBeenCalledWith({
+        name: "CoinDesk",
+        url: "https://example.com/coindesk",
+        source_type: "rss",
+        category: "crypto",
+        region: "global",
+        language: "en",
+        source_score: 75,
+        polling_interval_seconds: 600,
+        enabled: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit Federal Reserve/i }));
+    fireEvent.change(screen.getByLabelText("Source name"), {
+      target: { value: "Federal Reserve Watch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save source$/i }));
+
+    await waitFor(() =>
+      expect(apiMock.updateSource).toHaveBeenCalledWith(
+        "src_1",
+        expect.objectContaining({ name: "Federal Reserve Watch" }),
+      ),
+    );
+  });
+
+  it("creates edits and deletes watchlist entries from the dashboard", async () => {
+    await renderLoadedApp();
+    switchTo("watchlist");
+
+    fireEvent.click(screen.getByRole("button", { name: /add watchlist entry/i }));
+    const main = screen.getByRole("main");
+    expect(within(main).getByRole("combobox", { name: "Entity type" })).toBeInTheDocument();
+    expect(within(main).getByRole("combobox", { name: "Tier" })).toBeInTheDocument();
+    expect(within(main).getByRole("combobox", { name: "Region" })).toBeInTheDocument();
+    expect(within(main).getByRole("combobox", { name: "Asset class" })).toBeInTheDocument();
+    expect(within(main).queryByRole("option", { name: "commodity" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Symbol"), { target: { value: "BTC" } });
+    fireEvent.change(screen.getByLabelText("Entity name"), { target: { value: "Bitcoin" } });
+    fireEvent.change(screen.getByLabelText("Entity type"), { target: { value: "crypto" } });
+    fireEvent.change(screen.getByLabelText("Tier"), { target: { value: "S" } });
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "global" } });
+    fireEvent.change(screen.getByLabelText("Asset class"), { target: { value: "crypto" } });
+    fireEvent.change(screen.getByLabelText("Aliases"), { target: { value: "digital gold" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save watchlist entry$/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createWatchlistEntry).toHaveBeenCalledWith({
+        symbol: "BTC",
+        name: "Bitcoin",
+        entity_type: "crypto",
+        tier: "S",
+        region: "global",
+        asset_class: "crypto",
+        aliases: ["digital gold"],
+        enabled: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit SPY/i }));
+    fireEvent.change(screen.getByLabelText("Entity name"), {
+      target: { value: "SPDR S&P 500 ETF" },
+    });
+    fireEvent.change(screen.getByLabelText("Tier"), { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save watchlist entry$/i }));
+
+    await waitFor(() =>
+      expect(apiMock.updateWatchlistEntry).toHaveBeenCalledWith(
+        "watch_1",
+        expect.objectContaining({ name: "SPDR S&P 500 ETF", tier: "A" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /delete SPY/i }));
+
+    // Verify modal is open and click the delete confirm button inside it
+    const modal = screen.getByRole("dialog");
+    expect(within(modal).getByText("Delete watchlist entry?")).toBeInTheDocument();
+    const confirmButton = within(modal).getByRole("button", { name: /^delete$/i });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(apiMock.deleteWatchlistEntry).toHaveBeenCalledWith("watch_1"));
+  });
+
+  it("saves alert policy settings from operations", async () => {
+    await renderLoadedApp();
+    switchTo("operations");
+
+    fireEvent.change(screen.getByLabelText("Immediate threshold"), { target: { value: "85" } });
+    fireEvent.change(screen.getByLabelText("Watchlist threshold"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("Digest threshold"), { target: { value: "35" } });
+    fireEvent.change(screen.getByLabelText("Default channel"), {
+      target: { value: "telegram" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save alert policy/i }));
+
+    await waitFor(() =>
+      expect(apiMock.updateAlertPolicy).toHaveBeenCalledWith({
+        immediate_threshold: 85,
+        watchlist_threshold: 60,
+        digest_threshold: 35,
+        default_channel: "telegram",
+      }),
+    );
   });
 });
 

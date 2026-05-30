@@ -6,6 +6,13 @@
   color-scheme: dark;
 }
 
+/* Custom modal display helper to bypass daisyUI's automatic root scroll-locking layout shift */
+.modal-visible {
+  pointer-events: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
 body {
   margin: 0;
   min-width: 320px;

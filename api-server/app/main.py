@@ -34,6 +34,7 @@ from app.schemas import (
     AlertRead,
     BotCommandCreate,
     BotCommandRead,
+    ConfigurationPresets,
     EntityRead,
     EventRead,
     JobRunRead,
@@ -547,6 +548,17 @@ async def update_alert_policy(
         setting.value = payload.model_dump()
     await session.commit()
     return payload
+
+
+@app.get("/settings/presets", response_model=ConfigurationPresets)
+async def get_configuration_presets(session: SessionDep) -> ConfigurationPresets:
+    setting = await session.get(AppSetting, "configuration_presets")
+    if setting is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Configuration presets are not initialized; run market-watch migrate",
+        )
+    return ConfigurationPresets.model_validate(setting.value)
 
 
 @app.post("/bot/commands", response_model=BotCommandRead, status_code=status.HTTP_201_CREATED)

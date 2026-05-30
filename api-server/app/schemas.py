@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 ALLOWED_COMMAND_TYPES = {
     "pipeline.run",
@@ -165,6 +165,11 @@ class WatchlistCreate(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     enabled: bool = True
 
+    @field_validator("tier", mode="before")
+    @classmethod
+    def normalize_tier(cls, value: str) -> str:
+        return value.upper()
+
 
 class WatchlistUpdate(BaseModel):
     symbol: str | None = Field(default=None, max_length=64)
@@ -175,6 +180,11 @@ class WatchlistUpdate(BaseModel):
     asset_class: str | None = Field(default=None, max_length=64)
     aliases: list[str] | None = None
     enabled: bool | None = None
+
+    @field_validator("tier", mode="before")
+    @classmethod
+    def normalize_tier(cls, value: str | None) -> str | None:
+        return value.upper() if value is not None else None
 
 
 class WatchlistRead(WatchlistCreate):
@@ -190,6 +200,25 @@ class AlertPolicy(BaseModel):
     watchlist_threshold: int = Field(default=55, ge=0, le=100)
     digest_threshold: int = Field(default=30, ge=0, le=100)
     default_channel: str = Field(default="log", min_length=1, max_length=32)
+
+
+class SourcePresets(BaseModel):
+    source_types: list[str]
+    regions: list[str]
+    categories: list[str]
+    languages: list[str]
+
+
+class WatchlistPresets(BaseModel):
+    entity_types: list[str]
+    tiers: list[str]
+    regions: list[str]
+    asset_classes: list[str]
+
+
+class ConfigurationPresets(BaseModel):
+    sources: SourcePresets
+    watchlist: WatchlistPresets
 
 
 class BotCommandCreate(BaseModel):

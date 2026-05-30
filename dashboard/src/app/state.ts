@@ -9,7 +9,8 @@ export const emptyState: DashboardState = {
   jobs: [],
   watchlist: [],
   commands: [],
+  alertPolicy: null,
+  presets: null,
 };
 
 export const emptyErrors: ResourceErrors = {};
-

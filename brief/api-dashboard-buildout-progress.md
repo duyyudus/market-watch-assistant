@@ -49,7 +49,7 @@ Implemented:
 
 ## Phase 2: Safe Configuration UI
 
-Status: partially implemented.
+Status: implementation complete.
 
 Implemented:
 
@@ -67,13 +67,11 @@ Implemented:
   - `PATCH /settings/alert-policy`
 - Bot alert decisions can read `app_settings.alert_policy` overrides.
 - Dashboard supports source enable/disable.
-
-Remaining:
-
-- Source create/edit forms in dashboard.
-- Watchlist create/edit/delete UI.
-- Alert policy settings UI.
-- Validation polish for existing tier values such as `S`.
+- Dashboard supports source create/edit forms.
+- Dashboard supports watchlist create/edit/delete UI with explicit delete confirmation.
+- Dashboard supports alert policy settings.
+- Watchlist tier `S` is supported as the highest scoring tier, and API watchlist tier input is normalized to uppercase.
+- Source/watchlist form presets are owned by bot settings, seeded into shared `app_settings.configuration_presets` by `market-watch migrate`, exposed by `GET /settings/presets`, and consumed by the dashboard.
 
 ## Phase 3: Command Queue And Manual Controls
 
@@ -142,6 +140,22 @@ Backend:
 
 Frontend:
 
+- `dashboard`: `npm run test`
+- `dashboard`: `npm run build`
+
+Phase 2 completion checks on 2026-05-30:
+
+- `api-server`: `uv run pytest`
+- `api-server`: `uv run ruff check .`
+- `market-watch-bot`: `uv run pytest tests/test_scoring.py tests/test_watchlist.py tests/test_alert_policy_settings.py`
+- `market-watch-bot`: `uv run ruff check .`
+- `dashboard`: `npm run test`
+- `dashboard`: `npm run build`
+
+Additional preset ownership checks on 2026-05-30:
+
+- `market-watch-bot`: `uv run pytest`
+- `api-server`: `uv run pytest`
 - `dashboard`: `npm run test`
 - `dashboard`: `npm run build`
 

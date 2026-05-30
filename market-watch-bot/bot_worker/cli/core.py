@@ -12,6 +12,7 @@ from bot_worker.cli.common import _db_error, _run, _settings, _with_session
 from bot_worker.config import starter_sources_yaml, write_default_files
 from bot_worker.db.session import make_engine
 from bot_worker.services import (
+    seed_configuration_presets,
     seed_starter_sources,
 )
 
@@ -38,7 +39,13 @@ def migrate() -> None:
     if result.returncode == 0:
         async def action(session):
             added = await seed_starter_sources(session)
+            presets_changed = await seed_configuration_presets(session, _settings())
             typer.echo(f"Seeded {added} starter sources")
+            typer.echo(
+                "Seeded configuration presets"
+                if presets_changed
+                else "Configuration presets already current"
+            )
 
         try:
             _run(_with_session(action))

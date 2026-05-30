@@ -1,7 +1,9 @@
 import type {
+  AlertPolicy,
   AlertDecision,
   BotCommand,
   BotStatus,
+  ConfigurationPresets,
   EventCluster,
   JobRun,
   NewsItem,
@@ -28,6 +30,8 @@ export type DashboardState = {
   jobs: JobRun[];
   watchlist: WatchlistEntry[];
   commands: BotCommand[];
+  alertPolicy: AlertPolicy | null;
+  presets: ConfigurationPresets | null;
 };
 
 export type ResourceKey =
@@ -38,9 +42,10 @@ export type ResourceKey =
   | "alerts"
   | "jobs"
   | "watchlist"
-  | "commands";
+  | "commands"
+  | "alertPolicy"
+  | "presets";
 
 export type ResourceErrors = Partial<Record<ResourceKey, string>>;
 
 export type QueueCommand = (type: string, payload: Record<string, unknown>) => Promise<void>;
-

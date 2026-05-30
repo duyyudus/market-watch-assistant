@@ -19,6 +19,21 @@ def test_score_event_combines_source_relevance_novelty_confidence_and_penalties(
     assert score.final_score >= 80
 
 
+def test_score_event_treats_s_tier_as_highest_relevance() -> None:
+    score = score_event(
+        ScoreInput(
+            top_source_score=90,
+            source_count=2,
+            watchlist_tier="S",
+            is_duplicate=False,
+            is_stale=False,
+            status="reported",
+        )
+    )
+
+    assert score.relevance_score == 100
+
+
 def test_decide_alert_uses_thresholds_and_suppression() -> None:
     immediate = decide_alert(82, AlertThresholds())
     suppressed = decide_alert(82, AlertThresholds(), suppression_reason="cooldown")

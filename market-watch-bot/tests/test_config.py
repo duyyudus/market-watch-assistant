@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from bot_worker.config import STARTER_SOURCES, load_settings
+from bot_worker.config import STARTER_SOURCES, Settings, load_settings
+from bot_worker.db.models import AppSetting
+from bot_worker.services.sources import seed_configuration_presets
 
 
 def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
@@ -70,6 +72,43 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings.investigation.auto_event_score_threshold == 80
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
+    assert settings.configuration_presets.sources.source_types[0] == "rss"
+    assert "official" in settings.configuration_presets.sources.source_types
+    assert settings.configuration_presets.watchlist.tiers == ["S", "A", "B", "C", "D"]
+
+
+class PresetSeedSession:
+    def __init__(self, existing: AppSetting | None = None) -> None:
+        self.existing = existing
+        self.added: list[AppSetting] = []
+
+    async def get(self, _model, key: str) -> AppSetting | None:
+        assert key == "configuration_presets"
+        return self.existing
+
+    def add(self, value: AppSetting) -> None:
+        self.added.append(value)
+
+
+async def test_seed_configuration_presets_writes_bot_settings_to_shared_app_settings() -> None:
+    session = PresetSeedSession()
+
+    changed = await seed_configuration_presets(session, Settings())
+
+    assert changed is True
+    assert session.added[0].key == "configuration_presets"
+    assert session.added[0].value["sources"]["source_types"][0] == "rss"
+    assert session.added[0].value["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
+
+
+async def test_seed_configuration_presets_updates_existing_shared_app_setting() -> None:
+    existing = AppSetting(key="configuration_presets", value={"sources": {}, "watchlist": {}})
+    session = PresetSeedSession(existing)
+
+    changed = await seed_configuration_presets(session, Settings())
+
+    assert changed is True
+    assert existing.value["sources"]["categories"][0] == "global_macro"
 
 
 def test_vietnam_starter_source_points_to_real_rss_feed() -> None:

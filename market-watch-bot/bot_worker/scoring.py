@@ -43,7 +43,7 @@ class AlertDecision:
 
 
 def score_event(input_data: ScoreInput) -> ScoreBreakdown:
-    relevance_by_tier = {"A": 95, "B": 75, "C": 55, "D": 35}
+    relevance_by_tier = {"S": 100, "A": 95, "B": 75, "C": 55, "D": 35}
     source_score = min(100, max(0, input_data.top_source_score))
     confidence = min(95, 45 + (input_data.source_count * 15))
     if input_data.status in {"confirmed", "official"}:

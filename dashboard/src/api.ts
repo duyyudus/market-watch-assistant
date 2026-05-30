@@ -24,6 +24,18 @@ export type Source = {
   source_score: number;
 };
 
+export type SourcePayload = {
+  name: string;
+  url: string;
+  source_type: string;
+  category: string;
+  region: string;
+  language: string;
+  source_score: number;
+  polling_interval_seconds: number;
+  enabled: boolean;
+};
+
 export type EventCluster = {
   id: string;
   canonical_headline: string;
@@ -88,6 +100,39 @@ export type WatchlistEntry = {
   enabled: boolean;
 };
 
+export type WatchlistPayload = {
+  symbol?: string | null;
+  name: string;
+  entity_type: string;
+  tier: string;
+  region?: string | null;
+  asset_class?: string | null;
+  aliases: string[];
+  enabled: boolean;
+};
+
+export type AlertPolicy = {
+  immediate_threshold: number;
+  watchlist_threshold: number;
+  digest_threshold: number;
+  default_channel: string;
+};
+
+export type ConfigurationPresets = {
+  sources: {
+    source_types: string[];
+    regions: string[];
+    categories: string[];
+    languages: string[];
+  };
+  watchlist: {
+    entity_types: string[];
+    tiers: string[];
+    regions: string[];
+    asset_classes: string[];
+  };
+};
+
 export type BotCommand = {
   id: string;
   command_type: string;
@@ -142,7 +187,26 @@ export const api = {
   alerts: () => request<ListEnvelope<AlertDecision>>("/alerts?limit=100"),
   jobs: () => request<ListEnvelope<JobRun>>("/jobs/runs?limit=50"),
   watchlist: () => request<ListEnvelope<WatchlistEntry>>("/watchlist"),
+  alertPolicy: () => request<AlertPolicy>("/settings/alert-policy"),
+  presets: () => request<ConfigurationPresets>("/settings/presets"),
   commands: () => request<ListEnvelope<BotCommand>>("/bot/commands"),
+  createSource: (payload: SourcePayload) =>
+    request<Source>("/sources", { method: "POST", body: JSON.stringify(payload) }),
+  updateSource: (id: string, payload: SourcePayload) =>
+    request<Source>(`/sources/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  createWatchlistEntry: (payload: WatchlistPayload) =>
+    request<WatchlistEntry>("/watchlist", { method: "POST", body: JSON.stringify(payload) }),
+  updateWatchlistEntry: (id: string, payload: WatchlistPayload) =>
+    request<WatchlistEntry>(`/watchlist/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteWatchlistEntry: (id: string) => request<void>(`/watchlist/${id}`, { method: "DELETE" }),
+  updateAlertPolicy: (payload: AlertPolicy) =>
+    request<AlertPolicy>("/settings/alert-policy", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   createCommand: (command_type: string, payload: Record<string, unknown>) =>
     request<BotCommand>("/bot/commands", {
       method: "POST",
