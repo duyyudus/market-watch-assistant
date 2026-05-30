@@ -293,6 +293,8 @@ async def gather_investigation_evidence(
         client = BraveSearchClient(
             api_key=config.brave_search_api_key,
             timeout_seconds=config.timeout_seconds,
+            official_domains=config.official_domains,
+            high_quality_domains=config.high_quality_domains,
         )
     if client is None:
         return evidence

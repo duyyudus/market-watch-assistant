@@ -24,10 +24,24 @@ class BotConfig(BaseModel):
     polling_interval_seconds: int = 300
     default_retention_days: int = 60
     timezone: str = "Asia/Ho_Chi_Minh"
+    command_poll_interval_seconds: int = 2
+    command_drain_limit: int = 25
 
 
 class IngestionConfig(BaseModel):
     rss_freshness_hours: int = 72
+    tracking_params: list[str] = Field(
+        default_factory=lambda: [
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "utm_term",
+            "fbclid",
+            "gclid",
+            "ref",
+        ]
+    )
 
 
 class AlertConfig(BaseModel):
@@ -88,6 +102,27 @@ class InvestigationSettings(BaseModel):
     auto_market_move_score_threshold: int = 70
     min_modifier: int = -10
     max_modifier: int = 10
+    official_domains: list[str] = Field(
+        default_factory=lambda: [
+            "sec.gov",
+            "federalreserve.gov",
+            "treasury.gov",
+            "sbv.gov.vn",
+            "ssc.gov.vn",
+            "hsx.vn",
+            "hnx.vn",
+        ]
+    )
+    high_quality_domains: list[str] = Field(
+        default_factory=lambda: [
+            "reuters.com",
+            "bloomberg.com",
+            "ft.com",
+            "wsj.com",
+            "coindesk.com",
+            "cointelegraph.com",
+        ]
+    )
 
 
 class MarketDataConfig(BaseModel):

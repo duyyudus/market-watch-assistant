@@ -47,6 +47,7 @@ def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) ->
             llm_config=LLMConfig.from_settings(settings),
             investigation_config=InvestigationConfig.from_settings(settings),
             alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
+            tracking_params=getattr(settings.ingestion, "tracking_params", None),
         )
         await record_job_run(session, "pipeline", result)
         _echo_json(result)

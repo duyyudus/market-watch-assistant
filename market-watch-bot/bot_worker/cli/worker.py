@@ -36,7 +36,7 @@ async def run_worker_tick(
     commands = await process_pending_bot_commands(
         session,
         settings=settings,
-        limit=COMMAND_DRAIN_LIMIT,
+        limit=getattr(settings.bot, "command_drain_limit", 25),
     )
     for command in commands:
         typer.echo(f"bot_command: {command.id} {command.command_type} {command.status}")
@@ -50,6 +50,7 @@ async def run_worker_tick(
         llm_config=LLMConfig.from_settings(settings),
         investigation_config=InvestigationConfig.from_settings(settings),
         alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
+        tracking_params=getattr(settings.ingestion, "tracking_params", None),
     )
     await record_job_run(session, "pipeline", result)
     typer.echo(f"pipeline: {result}")
@@ -93,7 +94,7 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
                 )
 
             last_pipeline_run_at = await _with_session(action)
-            await asyncio.sleep(COMMAND_POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(getattr(settings.bot, "command_poll_interval_seconds", 2))
 
     _run(loop())
 @worker_app.command("status")

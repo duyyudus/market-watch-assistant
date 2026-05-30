@@ -6,9 +6,20 @@ bot:
   polling_interval_seconds: 300
   default_retention_days: 60
   timezone: Asia/Ho_Chi_Minh
+  command_poll_interval_seconds: 2
+  command_drain_limit: 25
 
 ingestion:
   rss_freshness_hours: 168
+  tracking_params:
+    - utm_source
+    - utm_medium
+    - utm_campaign
+    - utm_content
+    - utm_term
+    - fbclid
+    - gclid
+    - ref
 
 alerts:
   immediate_threshold: 80
@@ -65,11 +76,26 @@ investigation:
   auto_market_move_score_threshold: 70
   min_modifier: -10
   max_modifier: 10
+  official_domains:
+    - sec.gov
+    - federalreserve.gov
+    - treasury.gov
+    - sbv.gov.vn
+    - ssc.gov.vn
+    - hsx.vn
+    - hnx.vn
+  high_quality_domains:
+    - reuters.com
+    - bloomberg.com
+    - ft.com
+    - wsj.com
+    - coindesk.com
+    - cointelegraph.com
 
 market_data:
   vn_base_url: http://192.168.100.39:8020
-  crypto_provider: binance
-  crypto_fallback_provider: coingecko
+  crypto_provider: coingecko
+  crypto_fallback_provider: binance
   global_provider: yahoo
   symbol_map:
     BTC: bitcoin

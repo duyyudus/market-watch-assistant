@@ -70,6 +70,11 @@ def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
     assert settings.investigation.local_evidence_limit == 10
     assert settings.investigation.local_evidence_lookback_days == 3
     assert settings.investigation.auto_event_score_threshold == 80
+    assert settings.bot.command_poll_interval_seconds == 2
+    assert settings.bot.command_drain_limit == 25
+    assert "utm_source" in settings.ingestion.tracking_params
+    assert "sec.gov" in settings.investigation.official_domains
+    assert "reuters.com" in settings.investigation.high_quality_domains
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
     assert settings.configuration_presets.sources.source_types[0] == "rss"

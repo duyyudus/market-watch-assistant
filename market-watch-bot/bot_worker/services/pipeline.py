@@ -54,6 +54,7 @@ async def run_pipeline(
     llm_config: LLMConfig | None = None,
     investigation_config: InvestigationConfig | None = None,
     alert_delivery_config: AlertDeliveryConfig | None = None,
+    tracking_params: list[str] | None = None,
 ) -> dict[str, int | str]:
     if dry_run:
         return {"status": "dry_run", "jobs": len(CORE_JOBS)}
@@ -88,7 +89,9 @@ async def run_pipeline(
             logger.error("  ❌ Failed to fetch source %s: %s", source.name, result.get("error"))
 
     logger.info("─── [Stage 2/9] Normalizing Raw Items ───")
-    normalized = await normalize_pending_raw_items(session, freshness_hours=freshness_hours)
+    normalized = await normalize_pending_raw_items(
+        session, freshness_hours=freshness_hours, tracking_params=tracking_params
+    )
     logger.info("  ✓ Normalized %d news items", normalized)
 
     logger.info("─── [Stage 3/9] Deduplicating News Items ───")

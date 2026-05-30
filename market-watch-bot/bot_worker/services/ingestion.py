@@ -44,7 +44,11 @@ def raw_item_from_parsed(source: NewsSource, item: ParsedFeedItem) -> RawNewsIte
         content_hash=content_hash(raw_text),
     )
 async def normalize_pending_raw_items(
-    session: AsyncSession, *, limit: int = 500, freshness_hours: int = 72
+    session: AsyncSession,
+    *,
+    limit: int = 500,
+    freshness_hours: int = 72,
+    tracking_params: list[str] | set[str] | None = None,
 ) -> int:
     stmt = (
         select(RawNewsItem, NewsSource)
@@ -69,7 +73,10 @@ async def normalize_pending_raw_items(
         ):
             continue
         snippet = normalize_text(raw.raw_description)
-        canonical_url = canonicalize_url(raw.raw_url)
+        canonical_url = canonicalize_url(
+            raw.raw_url,
+            tracking_params=set(tracking_params) if tracking_params is not None else None,
+        )
         item = NormalizedNewsItem(
             source_id=source.id,
             raw_item_id=raw.id,

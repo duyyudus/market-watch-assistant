@@ -745,3 +745,66 @@ async def test_run_existing_investigation_records_db_failure_without_pending_rol
 
     assert result.status == "failed"
     assert "database read failed" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_brave_search_client_uses_custom_official_and_high_quality_domains() -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "web": {
+                    "results": [
+                        {
+                            "title": "Custom official",
+                            "url": "https://custom-official.com/announcement",
+                            "description": "Custom official announcement",
+                        },
+                        {
+                            "title": "Custom high quality",
+                            "url": "https://custom-hq.com/article",
+                            "description": "Custom HQ article",
+                        },
+                        {
+                            "title": "Standard official",
+                            "url": "https://www.sec.gov/news/press-release",
+                            "description": "Standard SEC news",
+                        }
+                    ]
+                }
+            }
+
+    class FakeHttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, params, headers):
+            return FakeResponse()
+
+    # Use standard default fallback domains first:
+    client_default = BraveSearchClient(
+        api_key="brave-key",
+        http_client_factory=lambda **_: FakeHttpClient(),
+    )
+    results_default = await client_default.search("test", count=3)
+    assert results_default[0].source_quality == "media"  # not in default domains
+    assert results_default[1].source_quality == "media"  # not in default domains
+    assert results_default[2].source_quality == "official"  # sec.gov in default domains
+
+    # Now use custom defined domains:
+    client_custom = BraveSearchClient(
+        api_key="brave-key",
+        http_client_factory=lambda **_: FakeHttpClient(),
+        official_domains=("custom-official.com",),
+        high_quality_domains=("custom-hq.com",),
+    )
+    results_custom = await client_custom.search("test", count=3)
+    assert results_custom[0].source_quality == "official"  # custom-official.com in custom official
+    assert results_custom[1].source_quality == "high_quality"  # custom-hq.com in custom HQ
+    assert results_custom[2].source_quality == "media"  # sec.gov not in custom lists
+

@@ -31,12 +31,13 @@ def normalize_text(value: str | None) -> str:
     return text
 
 
-def canonicalize_url(url: str) -> str:
+def canonicalize_url(url: str, tracking_params: set[str] | None = None) -> str:
     parsed = urlsplit(url.strip())
+    params = tracking_params if tracking_params is not None else TRACKING_PARAMS
     query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.lower() not in TRACKING_PARAMS
+        if key.lower() not in params
     ]
     return urlunsplit(
         (

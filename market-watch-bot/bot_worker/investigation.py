@@ -50,6 +50,8 @@ class InvestigationConfig:
     auto_market_move_score_threshold: int = 70
     min_modifier: int = -10
     max_modifier: int = 10
+    official_domains: tuple[str, ...] = OFFICIAL_DOMAINS
+    high_quality_domains: tuple[str, ...] = HIGH_QUALITY_DOMAINS
 
     @classmethod
     def from_settings(cls, settings: Settings) -> InvestigationConfig:
@@ -73,6 +75,12 @@ class InvestigationConfig:
             auto_market_move_score_threshold=settings.investigation.auto_market_move_score_threshold,
             min_modifier=settings.investigation.min_modifier,
             max_modifier=settings.investigation.max_modifier,
+            official_domains=tuple(
+                getattr(settings.investigation, "official_domains", OFFICIAL_DOMAINS)
+            ),
+            high_quality_domains=tuple(
+                getattr(settings.investigation, "high_quality_domains", HIGH_QUALITY_DOMAINS)
+            ),
         )
 
 
@@ -93,13 +101,17 @@ class BraveSearchResult:
         }
 
 
-def source_quality_for_url(url: str) -> str:
+def source_quality_for_url(
+    url: str,
+    official_domains: tuple[str, ...] = OFFICIAL_DOMAINS,
+    high_quality_domains: tuple[str, ...] = HIGH_QUALITY_DOMAINS,
+) -> str:
     hostname = urlparse(url).hostname or ""
     hostname = hostname.lower().removeprefix("www.")
-    if any(hostname == domain or hostname.endswith(f".{domain}") for domain in OFFICIAL_DOMAINS):
+    if any(hostname == domain or hostname.endswith(f".{domain}") for domain in official_domains):
         return "official"
     if any(
-        hostname == domain or hostname.endswith(f".{domain}") for domain in HIGH_QUALITY_DOMAINS
+        hostname == domain or hostname.endswith(f".{domain}") for domain in high_quality_domains
     ):
         return "high_quality"
     if hostname:
@@ -114,10 +126,14 @@ class BraveSearchClient:
         api_key: str,
         timeout_seconds: int = 20,
         http_client_factory: Any = httpx.AsyncClient,
+        official_domains: tuple[str, ...] = OFFICIAL_DOMAINS,
+        high_quality_domains: tuple[str, ...] = HIGH_QUALITY_DOMAINS,
     ) -> None:
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self.http_client_factory = http_client_factory
+        self.official_domains = official_domains
+        self.high_quality_domains = high_quality_domains
 
     async def search(self, query: str, *, count: int) -> list[BraveSearchResult]:
         async with self.http_client_factory(timeout=self.timeout_seconds) as client:
@@ -144,7 +160,11 @@ class BraveSearchClient:
                     title=str(item.get("title") or ""),
                     url=url,
                     description=str(item.get("description") or ""),
-                    source_quality=source_quality_for_url(url),
+                    source_quality=source_quality_for_url(
+                        url,
+                        official_domains=self.official_domains,
+                        high_quality_domains=self.high_quality_domains,
+                    ),
                 )
             )
         return normalized

@@ -28,3 +28,16 @@ def test_normalize_datetime_handles_rss_struct_and_iso_string() -> None:
     assert normalize_datetime((2026, 5, 25, 10, 0, 0, 0, 145, 0)) == datetime(
         2026, 5, 25, 10, 0, tzinfo=UTC
     )
+
+
+def test_canonicalize_url_supports_custom_tracking_params() -> None:
+    url = "https://example.com/News/Item?custom_click_id=xyz&b=2&a=1"
+
+    # Without custom tracking params, custom_click_id is NOT removed:
+    assert canonicalize_url(url) == "https://example.com/News/Item?a=1&b=2&custom_click_id=xyz"
+
+    # With custom tracking params, custom_click_id IS removed:
+    assert (
+        canonicalize_url(url, tracking_params={"custom_click_id"})
+        == "https://example.com/News/Item?a=1&b=2"
+    )
