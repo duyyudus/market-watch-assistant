@@ -1,0 +1,17 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Query
+
+from app.api.dependencies import SessionDep
+from app.services import operations as operation_service
+
+router = APIRouter()
+
+
+@router.get("/market/moves")
+async def market_moves(
+    session: SessionDep,
+    limit: int = Query(50, ge=1, le=200),
+) -> dict[str, object]:
+    rows, total = await operation_service.list_market_moves(session, limit=limit)
+    return {"items": [row.__dict__ for row in rows], "total": total}
