@@ -15,9 +15,16 @@ from common.db.models import (
 from common.db.models import (
     AppSetting,
     EventCluster,
+    EventClusterEmbedding,
+    EventScoreHistory,
     JobRun,
+    LLMAnalysisRun,
+    MissedCatalystReview,
+    NewsItemEmbedding,
     NewsSource,
     NormalizedNewsItem,
+    RetentionJob,
+    SourceFetchLog,
     WatchlistEntity,
 )
 
@@ -154,7 +161,66 @@ async def client():
                 },
             },
         )
-        session.add_all([source, event, news, alert, job, watch, presets])
+        fetch_log = SourceFetchLog(
+            id="fetch_1",
+            source_id="src_1",
+            status="success",
+            duration_ms=120,
+            item_count=5,
+        )
+        score_history = EventScoreHistory(
+            id="score_1",
+            event_cluster_id="evt_1",
+            score_breakdown={"relevance": 10},
+            final_score=84,
+        )
+        catalyst = MissedCatalystReview(
+            id="review_1",
+            asset_symbol="SPY",
+            asset_class="equity",
+            move_window="1h",
+            price_change_pct=5.5,
+            status="pending",
+        )
+        news_embedding = NewsItemEmbedding(
+            news_item_id="news_1",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_1",
+            vector=[0.1]*1536,
+        )
+        event_embedding = EventClusterEmbedding(
+            event_cluster_id="evt_1",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_2",
+            vector=[0.2]*1536,
+        )
+        llm_run = LLMAnalysisRun(
+            id="llm_1",
+            target_type="event",
+            target_id="evt_1",
+            provider="openai",
+            model="gpt-4o",
+            prompt_version="1",
+            prompt_hash="phash",
+            status="succeeded",
+            usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        )
+        retention = RetentionJob(
+            id="retention_1",
+            status="completed",
+            deleted_counts={"news": 10},
+        )
+        session.add_all([
+            source, event, news, alert, job, watch, presets,
+            fetch_log, score_history, catalyst, news_embedding,
+            event_embedding, llm_run, retention
+        ])
         await session.commit()
 
     async def override_session():
@@ -524,3 +590,70 @@ async def test_creating_command_returns_503_when_table_missing() -> None:
 
     assert response.status_code == 503
     assert "migrate" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_maintenance_endpoints(client: AsyncClient) -> None:
+    # 1. Fetch Logs
+    response = await client.get("/maintenance/fetch-logs")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == "fetch_1"
+    assert data["items"][0]["status"] == "success"
+    assert data["items"][0]["source_id"] == "src_1"
+
+    # 2. Score History
+    response = await client.get("/maintenance/score-history")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == "score_1"
+    assert data["items"][0]["final_score"] == 84
+    assert data["items"][0]["score_breakdown"] == {"relevance": 10}
+
+    # 3. Missed Catalysts
+    response = await client.get("/maintenance/catalysts")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == "review_1"
+    assert data["items"][0]["asset_symbol"] == "SPY"
+    assert data["items"][0]["price_change_pct"] == 5.5
+
+    # 4. Embeddings Status
+    response = await client.get("/maintenance/embeddings/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert "total_news_items" in data
+    assert data["news_items_with_embeddings"] == 1
+    assert data["embedding_coverage_pct"] == 100.0
+    assert data["event_clusters_with_embeddings"] == 1
+    assert data["cluster_embedding_coverage_pct"] == 100.0
+    assert "openai" in data["news_providers"]
+    assert "text-embedding-3-small" in data["news_models"]
+
+    # 5. LLM Diagnostics
+    response = await client.get("/maintenance/llm-runs")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == "llm_1"
+    assert data["items"][0]["model"] == "gpt-4o"
+    assert data["items"][0]["usage"]["total_tokens"] == 150
+
+    # 6. Retention Logs
+    response = await client.get("/maintenance/retention-jobs")
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == "retention_1"
+    assert data["items"][0]["status"] == "completed"
+    assert data["items"][0]["deleted_counts"] == {"news": 10}
+

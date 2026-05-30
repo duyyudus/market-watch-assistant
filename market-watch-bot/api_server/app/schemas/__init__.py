@@ -8,6 +8,14 @@ from api_server.app.schemas.bot import (
 from api_server.app.schemas.common import ListEnvelope
 from api_server.app.schemas.events import EventRead
 from api_server.app.schemas.jobs import JobRunRead
+from api_server.app.schemas.maintenance import (
+    CatalystReviewRead,
+    EmbeddingStats,
+    FetchLogRead,
+    LLMRunRead,
+    RetentionJobRead,
+    ScoreHistoryRead,
+)
 from api_server.app.schemas.news import EntityRead, NewsRead
 from api_server.app.schemas.settings import AlertPolicy, ConfigurationPresets
 from api_server.app.schemas.sources import SourceCreate, SourceRead, SourceUpdate
@@ -19,12 +27,18 @@ __all__ = [
     "AlertRead",
     "BotCommandCreate",
     "BotCommandRead",
+    "CatalystReviewRead",
     "ConfigurationPresets",
+    "EmbeddingStats",
     "EntityRead",
     "EventRead",
+    "FetchLogRead",
     "JobRunRead",
+    "LLMRunRead",
     "ListEnvelope",
     "NewsRead",
+    "RetentionJobRead",
+    "ScoreHistoryRead",
     "SourceCreate",
     "SourceRead",
     "SourceUpdate",
@@ -33,3 +47,4 @@ __all__ = [
     "WatchlistUpdate",
     "validate_command_payload",
 ]
+

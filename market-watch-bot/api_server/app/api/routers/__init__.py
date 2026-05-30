@@ -8,6 +8,7 @@ from api_server.app.api.routers import (
     health,
     investigations,
     jobs,
+    maintenance,
     market,
     news,
     settings,
@@ -28,5 +29,7 @@ router.include_router(market.router)
 router.include_router(investigations.router)
 router.include_router(watchlist.router)
 router.include_router(settings.router)
+router.include_router(maintenance.router)
 
 __all__ = ["router"]
+

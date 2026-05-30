@@ -19,7 +19,9 @@ export type View =
   | "sources"
   | "watchlist"
   | "commands"
-  | "operations";
+  | "operations"
+  | "maintenance";
+
 
 export type DashboardState = {
   status: BotStatus | null;

@@ -155,6 +155,83 @@ export type BotStatus = {
   command_queue_available?: boolean;
 };
 
+export type FetchLog = {
+  id: string;
+  source_id: string;
+  fetched_at: string;
+  status: string;
+  http_status?: number | null;
+  error_message?: string | null;
+  item_count?: number | null;
+  duration_ms: number;
+  content_hash?: string | null;
+};
+
+export type ScoreHistory = {
+  id: string;
+  event_cluster_id: string;
+  score_breakdown: Record<string, any>;
+  final_score: number;
+  created_at: string;
+};
+
+export type CatalystReview = {
+  id: string;
+  asset_symbol: string;
+  asset_class: string;
+  move_window: string;
+  price_change_pct: number;
+  volume_change_pct?: number | null;
+  detected_event_cluster_id?: string | null;
+  status: string;
+  agent_summary?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
+export type EmbeddingStats = {
+  total_news_items: number;
+  news_items_with_embeddings: number;
+  embedding_coverage_pct: number;
+  total_event_clusters: number;
+  event_clusters_with_embeddings: number;
+  cluster_embedding_coverage_pct: number;
+  news_providers: string[];
+  news_models: string[];
+  cluster_providers: string[];
+  cluster_models: string[];
+};
+
+export type LLMRun = {
+  id: string;
+  target_type: string;
+  target_id: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  prompt_hash: string;
+  input_snapshot: Record<string, any>;
+  result?: Record<string, any> | null;
+  status: string;
+  error_message?: string | null;
+  usage?: {
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    total_tokens?: number | null;
+    [key: string]: any;
+  } | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
+export type RetentionJob = {
+  id: string;
+  status: string;
+  deleted_counts: Record<string, number>;
+  started_at: string;
+  completed_at?: string | null;
+};
+
 export function normalizeListResponse<T>(value: unknown): ListEnvelope<T> {
   if (Array.isArray(value)) {
     return { items: value as T[], total: value.length };
@@ -219,4 +296,17 @@ export const api = {
     request<Source>(`/sources/${id}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
   cancelCommand: (id: string) =>
     request<BotCommand>(`/bot/commands/${id}/cancel`, { method: "POST" }),
+  maintenanceFetchLogs: (limit?: number, offset?: number) =>
+    request<ListEnvelope<FetchLog>>(`/maintenance/fetch-logs?limit=${limit || 100}&offset=${offset || 0}`),
+  maintenanceScoreHistory: (limit?: number, offset?: number) =>
+    request<ListEnvelope<ScoreHistory>>(`/maintenance/score-history?limit=${limit || 100}&offset=${offset || 0}`),
+  maintenanceCatalysts: (limit?: number, offset?: number) =>
+    request<ListEnvelope<CatalystReview>>(`/maintenance/catalysts?limit=${limit || 100}&offset=${offset || 0}`),
+  maintenanceEmbeddingStats: () =>
+    request<EmbeddingStats>("/maintenance/embeddings/stats"),
+  maintenanceLLMRuns: (limit?: number, offset?: number) =>
+    request<ListEnvelope<LLMRun>>(`/maintenance/llm-runs?limit=${limit || 100}&offset=${offset || 0}`),
+  maintenanceRetentionJobs: (limit?: number, offset?: number) =>
+    request<ListEnvelope<RetentionJob>>(`/maintenance/retention-jobs?limit=${limit || 100}&offset=${offset || 0}`),
 };
+

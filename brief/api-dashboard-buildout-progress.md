@@ -109,16 +109,17 @@ Allowed command types:
 
 ## Phase 4: Operational Depth
 
-Status: not started, except for a few API stubs.
+Status: completed (2026-05-30)
 
 Planned:
 
-- Retention preview/run page.
-- Embeddings status page.
-- LLM usage/runs diagnostics.
-- Catalyst review page.
-- Source fetch log page.
-- Event score history/timeline.
+- A central maintenance page contain tabs/sub-pages including:
+  - Source fetch log page.
+  - Event score history/timeline. 
+  - Catalyst review page.
+  - Embeddings status page.
+  - LLM usage/runs diagnostics.
+  - Retention preview/run page.
 
 
 ## Current Assumptions

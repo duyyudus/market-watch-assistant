@@ -24,6 +24,7 @@ import { Operations } from "../features/operations/Operations";
 import { Overview } from "../features/overview/Overview";
 import { SourcesTable } from "../features/sources/SourcesTable";
 import { WatchlistTable } from "../features/watchlist/WatchlistTable";
+import { Maintenance } from "../features/maintenance/Maintenance";
 import { classNames } from "../lib/classNames";
 import { settle } from "../lib/errors";
 import type { DashboardState, ResourceErrors, View } from "../types/dashboard";
@@ -317,7 +318,7 @@ export function App() {
                 events={state.events}
               />
             </Panel>
-          ) : (
+          ) : view === "operations" ? (
             <Operations
               jobs={state.jobs}
               alerts={state.alerts}
@@ -326,6 +327,8 @@ export function App() {
               queue={queue}
               retry={load}
             />
+          ) : (
+            <Maintenance />
           )}
         </section>
       </main>
