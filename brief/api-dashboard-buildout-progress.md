@@ -12,7 +12,7 @@ Status: implementation polish complete;
 
 Implemented:
 
-- `api-server/` FastAPI app with independent configuration, DB session, schemas, and models.
+- Integrated `api_server/` FastAPI app inside the `market-watch-bot/` package, sharing models, configurations, sessions, and logging via a unified `common` module.
 - Health and monitoring endpoints:
   - `GET /health`
   - `GET /bot/status`
@@ -125,7 +125,7 @@ Planned:
 
 - Personal/local deployment, no authentication in v1.
 - API and bot share Postgres.
-- API must not import `bot_worker` internals.
+- API must remain decoupled from bot execution (no in-process bot jobs during HTTP cycles). It can import shared constants, DB models, schemas, and configurations from `bot_worker` or `common`, but all runtime bot triggering must be asynchronous via the `bot_commands` database queue.
 - Dashboard must go through API only.
 - Bot-triggering actions must flow through `bot_commands`.
 - Existing bot Alembic history remains the shared migration source for now.

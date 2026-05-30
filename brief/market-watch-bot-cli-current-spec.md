@@ -135,6 +135,9 @@ market-watch
     db
     alerts
     pipeline
+
+  server
+    start
 ```
 
 ---

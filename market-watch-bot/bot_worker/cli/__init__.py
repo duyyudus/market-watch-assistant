@@ -16,6 +16,7 @@ from bot_worker.cli import (  # noqa: F401
     news,
     pipeline,
     retention,
+    server,
     source,
     watchlist,
     worker,

@@ -4,12 +4,14 @@
 
 Build a personal market watch assistant covering global markets, Vietnam markets, and crypto. The app should collect and process market-related news/signals, organize them into useful alerts and summaries, and expose configuration/monitoring through a web dashboard.
 
-The system has three main components:
+The system is structured as follows:
 
 ```txt
 market-watch-assistant/
   market-watch-bot/
-  api-server/
+    bot_worker/
+    api_server/
+    common/
   dashboard/
   docker-compose.yml
 ```
@@ -30,7 +32,7 @@ Separate app settings .yml per component (for python apps only)
 
 ## Purpose
 
-The `market-watch-bot` is a standalone background service responsible for market monitoring jobs. It should run independently from the API server and dashboard.
+The `market-watch worker` is a standalone background service responsible for market monitoring jobs. It should run independently from the API server and dashboard.
 
 It handles:
 
@@ -70,37 +72,29 @@ market-watch-bot/
   uv.lock
   .env
   settings.yml
+  alembic.ini
+  alembic/
   bot_worker/
-    cli.py
-    main.py
+    cli/
+    ...
+  api_server/
+    app/
+      main.py
+      schemas/
+      routers/
+      services/
+  common/
     config.py
+    logging.py
     db/
-    jobs/
-    sources/
-    alerts/
-    embeddings/
-    services/
+      models.py
+      session.py
 ```
 
 ## CLI Support
 
 The bot should provide a CLI for essential operations. See more details here: [market-watch-bot-cli manual](market-watch-bot-cli-manual.md)
 
-## Runtime Modes
-
-The bot should support:
-
-```txt
-Long-running mode:
-  market-watch-bot run
-
-One-off job mode:
-  market-watch-bot watch run-once
-  market-watch-bot digest generate
-  market-watch-bot cleanup
-```
-
-This makes the worker usable both as a Docker service and as a manual debugging/admin tool.
 
 ---
 
@@ -143,18 +137,9 @@ YAML config
 ## Directory
 
 ```txt
-api-server/
-  pyproject.toml
-  uv.lock
-  .env
-  settings.yml
-  alembic.ini
-  alembic/
+market-watch-bot/api_server/
   app/
     main.py
-    config.py
-    db/
-    models/
     schemas/
     routers/
     services/
@@ -295,9 +280,9 @@ The dashboard should call the API server only. It should not connect directly to
 
 # Database
 
-Use one shared Postgres database for both `api-server` and `market-watch-bot`.
+Use one shared Postgres database for both `api_server` and `bot_worker` under the `market-watch-bot` repository.
 
-Database URL is configured in each `.env` of api-server and market-watch-bot (they should share the same URL). Use this DB: `postgresql+asyncpg://postgres:postgres@192.168.100.39:5432/market_watch_assistant`
+Database URL is configured in the unified `market-watch-bot/.env` file and read by the shared `common` module. Use this DB: `postgresql+asyncpg://postgres:postgres@192.168.100.39:5432/market_watch_assistant`
 
 Required extensions:
 
@@ -314,8 +299,8 @@ Use Alembic for database migrations.
 Recommended ownership:
 
 ```txt
-api-server owns Alembic migrations
-market-watch-bot imports/uses shared DB schema
+market-watch-bot/alembic owns database migrations
+Both api_server and bot_worker import and use shared schemas from common.db.models
 ```
 
 This avoids migration conflicts between services.
@@ -380,7 +365,6 @@ Use Docker Compose for local and personal production deployment.
 Example services:
 
 ```txt
-api-server
 market-watch-bot
 dashboard
 ```
@@ -401,7 +385,6 @@ Note: postgres already run in its own separate container stack, no need to setup
 ```txt
 docker-compose.yml
 .env
-api-server/
 market-watch-bot/
 dashboard/
 ```
@@ -409,13 +392,13 @@ dashboard/
 The Market-watch Bot should run as:
 
 ```bash
-market-watch-bot run
+uv run market-watch worker start
 ```
 
 The API server should run as:
 
 ```bash
-uv run fastapi run app/main.py
+uv run market-watch server start
 ```
 
 The dashboard should run as a standard React app build/server.
@@ -427,10 +410,10 @@ The dashboard should run as a standard React app build/server.
 Keep the system separated by responsibility:
 
 ```txt
-market-watch-bot:
+bot_worker:
   does market monitoring work
 
-api-server:
+api_server:
   manages data, configuration, and commands
 
 dashboard:
