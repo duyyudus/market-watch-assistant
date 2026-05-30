@@ -1,8 +1,6 @@
-import { Radio } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api, type AlertDecision, type AlertPolicy, type Source } from "../../api";
-import { EmptyState } from "../../components/EmptyState";
+import { api, type AlertDecision, type AlertPolicy } from "../../api";
 import { Panel } from "../../components/Panel";
 import { SectionError } from "../../components/SectionError";
 import type { QueueCommand, ResourceErrors } from "../../types/dashboard";
@@ -12,7 +10,6 @@ import type { JobRun } from "../../api";
 export function Operations({
   jobs,
   alerts,
-  sources,
   errors,
   alertPolicy,
   queue,
@@ -20,7 +17,6 @@ export function Operations({
 }: {
   jobs: JobRun[];
   alerts: AlertDecision[];
-  sources: Source[];
   errors: ResourceErrors;
   alertPolicy: AlertPolicy | null;
   queue: QueueCommand;
@@ -52,34 +48,10 @@ export function Operations({
           </div>
         )}
       </Panel>
-      <Panel title="Source actions">
-        {errors.sources ? (
-          <SectionError title="Source actions unavailable" message={errors.sources} retry={retry} />
-        ) : sources.length === 0 ? (
-          <EmptyState
-            icon={Radio}
-            title="No source actions available"
-            body="Fetch controls appear after sources are configured."
-          />
-        ) : (
-          <div className="space-y-2">
-            {sources.slice(0, 6).map((source) => (
-              <button
-                key={source.id}
-                className="btn btn-sm btn-ghost w-full justify-between text-sm"
-                onClick={() => queue("source.fetch", { source_id: source.id })}
-                type="button"
-              >
-                <span>{source.name}</span>
-                <Radio className="h-4 w-4" />
-              </button>
-            ))}
-          </div>
-        )}
-      </Panel>
     </div>
   );
 }
+
 
 function AlertPolicyForm({
   policy,

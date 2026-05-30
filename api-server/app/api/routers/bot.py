@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.dependencies import SessionDep
 from app.schemas import BotCommandCreate, BotCommandRead, ListEnvelope
@@ -19,9 +20,17 @@ async def create_bot_command(
     payload: BotCommandCreate,
     session: SessionDep,
 ) -> BotCommandRead:
-    command = await bot_service.create_bot_command(session, payload)
-    if command is None:
-        raise HTTPException(status_code=422, detail="Unsupported bot command")
+    try:
+        command = await bot_service.create_bot_command(session, payload)
+    except SQLAlchemyError as err:
+        await session.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Command queue unavailable. "
+                "Run: cd market-watch-bot && uv run market-watch migrate"
+            ),
+        ) from err
     return BotCommandRead.model_validate(command)
 
 

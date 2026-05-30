@@ -1,5 +1,10 @@
 from app.schemas.alerts import AlertRead
-from app.schemas.bot import ALLOWED_COMMAND_TYPES, BotCommandCreate, BotCommandRead
+from app.schemas.bot import (
+    ALLOWED_COMMAND_TYPES,
+    BotCommandCreate,
+    BotCommandRead,
+    validate_command_payload,
+)
 from app.schemas.common import ListEnvelope
 from app.schemas.events import EventRead
 from app.schemas.jobs import JobRunRead
@@ -26,4 +31,5 @@ __all__ = [
     "WatchlistCreate",
     "WatchlistRead",
     "WatchlistUpdate",
+    "validate_command_payload",
 ]

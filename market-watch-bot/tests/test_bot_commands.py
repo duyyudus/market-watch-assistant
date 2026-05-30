@@ -34,6 +34,9 @@ class CommandSession:
         pending.sort(key=lambda command: command.created_at or datetime.now(UTC))
         return ScalarResult(pending)
 
+    async def flush(self):
+        pass
+
 
 @pytest.mark.asyncio
 async def test_claim_pending_bot_command_marks_oldest_command_running() -> None:
@@ -212,3 +215,78 @@ async def test_process_pending_bot_commands_stops_at_limit(monkeypatch) -> None:
 
     assert [command.id for command in processed] == ["cmd_1", "cmd_2"]
     assert [command.status for command in commands] == ["succeeded", "succeeded", "pending"]
+
+
+@pytest.mark.asyncio
+async def test_execute_bot_command_rejects_unsupported_type() -> None:
+    command = BotCommand(command_type="shell.exec", payload={})
+
+    with pytest.raises(ValueError, match="Unsupported bot command"):
+        await execute_bot_command(
+            SimpleNamespace(),
+            command,
+            settings=SimpleNamespace(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_event_mark_rejects_invalid_status() -> None:
+    event = EventCluster(
+        id="evt_1",
+        canonical_headline="Test event",
+        status="reported",
+        source_count=1,
+        top_source_score=50,
+    )
+
+    class MarkSession:
+        async def get(self, model, key):
+            return event
+
+        async def flush(self):
+            pass
+
+    command = BotCommand(
+        command_type="event.mark",
+        payload={"event_id": "evt_1", "status": "invalid_status"},
+    )
+
+    with pytest.raises(ValueError, match="Unsupported event status"):
+        await execute_bot_command(
+            MarkSession(),
+            command,
+            settings=SimpleNamespace(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_event_mark_applies_valid_status() -> None:
+    event = EventCluster(
+        id="evt_1",
+        canonical_headline="Test event",
+        status="reported",
+        source_count=1,
+        top_source_score=50,
+    )
+
+    class MarkSession:
+        async def get(self, model, key):
+            return event
+
+        async def flush(self):
+            pass
+
+    command = BotCommand(
+        command_type="event.mark",
+        payload={"event_id": "evt_1", "status": "confirmed"},
+    )
+
+    result = await execute_bot_command(
+        MarkSession(),
+        command,
+        settings=SimpleNamespace(),
+    )
+
+    assert result == {"event_id": "evt_1", "status": "confirmed"}
+    assert event.status == "confirmed"
+

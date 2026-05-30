@@ -54,6 +54,7 @@ async def claim_pending_bot_command(session: AsyncSession) -> BotCommand | None:
         .where(BotCommand.status == "pending")
         .order_by(BotCommand.created_at.asc())
         .limit(1)
+        .with_for_update(skip_locked=True)
     )
     command = result.first()
     if command is None:
@@ -61,6 +62,7 @@ async def claim_pending_bot_command(session: AsyncSession) -> BotCommand | None:
     command.status = "running"
     command.started_at = utcnow()
     command.error_message = None
+    await session.flush()
     return command
 
 

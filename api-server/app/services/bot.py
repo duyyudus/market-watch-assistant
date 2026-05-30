@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BotCommand, JobRun
-from app.schemas import ALLOWED_COMMAND_TYPES, BotCommandCreate, JobRunRead
+from app.schemas import BotCommandCreate, JobRunRead
 
 
 async def latest_job_for_status(session: AsyncSession) -> tuple[JobRun | None, bool]:
@@ -46,9 +46,7 @@ async def get_bot_status(session: AsyncSession) -> dict[str, object]:
     }
 
 
-async def create_bot_command(session: AsyncSession, payload: BotCommandCreate) -> BotCommand | None:
-    if payload.command_type not in ALLOWED_COMMAND_TYPES:
-        return None
+async def create_bot_command(session: AsyncSession, payload: BotCommandCreate) -> BotCommand:
     command = BotCommand(
         command_type=payload.command_type,
         payload=payload.payload,

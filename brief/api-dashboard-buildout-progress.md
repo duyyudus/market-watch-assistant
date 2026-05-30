@@ -75,21 +75,25 @@ Implemented:
 
 ## Phase 3: Command Queue And Manual Controls
 
-Status: scaffolded.
+Status: complete.
 
 Implemented:
 
 - New shared `bot_commands` model and Alembic migration:
   - `market-watch-bot/alembic/versions/0007_bot_commands.py`
-- API endpoints:
-  - `POST /bot/commands`
+- API endpoints with strict command-specific payload validation and graceful degradation:
+  - `POST /bot/commands` (validates schemas per command type, returning `422` on errors, and returns `503` if `bot_commands` table is missing)
   - `GET /bot/commands`
   - `GET /bot/commands/{id}`
   - `POST /bot/commands/{id}/cancel`
-- Dashboard command center and command buttons.
-- Worker polling hook for pending bot commands.
+- Dashboard manual control center with complete selectors and buttons:
+  - Supports dry-run and live pipeline run, alert dispatch preview/live send, event rescore/investigate/mark dropdown forms, recluster preview/apply, source fetch, and retention preview/run.
+  - Safe confirmation modal/dialog (`ConfirmDialog.tsx`) using daisyUI styles for all destructive/mutating actions.
+  - Displays queue-unavailable state gracefully on Overview and Commands pages with explicit migration instructions when database has not been migrated.
+  - Command table displays detailed timestamps (`started_at`, `completed_at`), dynamic status badges, expandable JSON results, and error message blocks.
+- Robust worker polling with row-level locking (`with_for_update(skip_locked=True)`) to ensure single-claiming in concurrent scenarios.
 - Command lifecycle helpers for claim, complete, and fail.
-- API degrades gracefully before `bot_commands` migration exists.
+- Automated API, worker, and dashboard test suites verifying correct operation, validation, database robustness, and dialog flows.
 
 Allowed command types:
 
@@ -103,19 +107,6 @@ Allowed command types:
 - `retention.preview`
 - `retention.run`
 
-Remaining:
-
-- Run migration in the shared DB before using command buttons:
-
-  ```bash
-  cd market-watch-bot
-  uv run market-watch migrate
-  ```
-
-- Live-test each command path against the real worker and database.
-- Add command-specific dashboard confirmation states for mutating actions.
-- Add clearer UI message when command queue is unavailable because migration has not run.
-
 ## Phase 4: Operational Depth
 
 Status: not started, except for a few API stubs.
@@ -128,72 +119,6 @@ Planned:
 - Catalyst review page.
 - Source fetch log page.
 - Event score history/timeline.
-
-## Verification So Far
-
-Backend:
-
-- `market-watch-bot`: `uv run pytest`
-- `market-watch-bot`: `uv run ruff check .`
-- `api-server`: `uv run pytest`
-- `api-server`: `uv run ruff check .`
-
-Frontend:
-
-- `dashboard`: `npm run test`
-- `dashboard`: `npm run build`
-
-Phase 2 completion checks on 2026-05-30:
-
-- `api-server`: `uv run pytest`
-- `api-server`: `uv run ruff check .`
-- `market-watch-bot`: `uv run pytest tests/test_scoring.py tests/test_watchlist.py tests/test_alert_policy_settings.py`
-- `market-watch-bot`: `uv run ruff check .`
-- `dashboard`: `npm run test`
-- `dashboard`: `npm run build`
-
-Additional preset ownership checks on 2026-05-30:
-
-- `market-watch-bot`: `uv run pytest`
-- `api-server`: `uv run pytest`
-- `dashboard`: `npm run test`
-- `dashboard`: `npm run build`
-
-Runtime smoke checks performed:
-
-- API health endpoint reachable.
-- API CORS works for localhost and private-network Vite origins.
-- Dashboard dev server starts on `5173`.
-
-Runtime checks on 2026-05-29:
-
-- `market-watch-bot`: `uv run market-watch migrate` completed against the configured database and seeded 0 starter sources.
-- API server started with `./run-server.sh` on `http://localhost:8000`.
-- Dashboard dev server started with `./run-ui.sh` on `http://localhost:5173`.
-- `curl -s http://localhost:8000/health` returned `{"status":"ok","service":"market-watch-api","environment":"development"}`.
-- `curl -s http://localhost:5173` returned the Vite HTML shell.
-- **Rendered Browser QA**: Fully completed and verified via Playwright in a headless Chromium session.
-  - **Date**: 2026-05-29
-  - **Local Services Used**:
-    - PostgreSQL database with `pgvector` extension
-    - FastAPI `api-server` (running on port 8000)
-    - React/TypeScript/Vite/daisyUI `dashboard` (running on port 5173)
-  - **Pages Checked (Desktop & Mobile Viewports)**:
-    - **Overview**: Verified. Correctly renders responsive layout, metric panels, priority events list, recent alerts, recent jobs, command queue, and manual controls.
-    - **Events**: Verified. Renders a correct and friendly empty state ("No priority events yet" / "No event clusters match the current data set") when database is freshly seeded.
-    - **News**: Verified. Renders a correct empty state ("No normalized news yet") when database is freshly seeded.
-    - **Alerts**: Verified. Renders a correct empty state ("No alert decisions yet") when database is freshly seeded.
-    - **Sources**: Verified. Renders configured sources list and supports toggling enabled/disabled state correctly.
-    - **Watchlist**: Verified. Strictly read-only visual rendering confirmed (0 input or mutating elements found). Correctly displays `0 assets watched` empty state.
-    - **Commands**: Verified. Displays action buttons and queued commands list accurately.
-    - **Operations**: Verified. Accurately shows jobs history, alerts history, and source action triggers.
-  - **UI/Layout Checks**:
-    - Verified no blank panels or broken layouts.
-    - Checked desktop width (1280x800) and narrow mobile width (375x667) — verified fluid response, clean panels, no overlapping text, and beautiful mobile-responsive select navigation.
-    - Confirmed refresh button functions correctly and pulls fresh data.
-  - **Known Limitations**:
-    - Watchlist and sources creation/editing forms remain CLI-driven in Phase 1 and are planned for Phase 2.
-    - Manual commands in the dashboard are queued in the database but require the bot worker background service to run to process them.
 
 
 ## Current Assumptions

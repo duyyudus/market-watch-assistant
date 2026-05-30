@@ -13,6 +13,7 @@ const apiMock = vi.hoisted(() => ({
   watchlist: vi.fn(),
   commands: vi.fn(),
   createCommand: vi.fn(),
+  cancelCommand: vi.fn(),
   setSourceEnabled: vi.fn(),
   createSource: vi.fn(),
   updateSource: vi.fn(),
@@ -214,6 +215,13 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     enabled: true,
   });
   apiMock.deleteWatchlistEntry.mockResolvedValue(undefined);
+  apiMock.cancelCommand.mockResolvedValue({
+    id: "cmd_cancelled",
+    command_type: "pipeline.run",
+    status: "cancelled",
+    payload: {},
+    created_at: "2026-05-29T13:00:00Z",
+  });
   apiMock.updateAlertPolicy.mockResolvedValue({
     immediate_threshold: 85,
     watchlist_threshold: 60,
@@ -453,5 +461,142 @@ describe("compareValues utility", () => {
     expect(compareValues(false, true)).toBeLessThan(0);
     expect(compareValues(true, false)).toBeGreaterThan(0);
     expect(compareValues(true, true)).toBe(0);
+  });
+});
+
+describe("Phase 3 command center", () => {
+  it("shows migration guidance when command queue is unavailable", async () => {
+    mockSuccessfulLoad({
+      botStatus: vi.fn().mockResolvedValue({
+        mode: "shared_database",
+        latest_job: null,
+        latest_job_available: true,
+        pending_commands: 0,
+        running_commands: 0,
+        command_queue_available: false,
+      }),
+    });
+
+    await renderLoadedApp();
+    switchTo("commands");
+
+    expect(await screen.findByText("Command queue unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/uv run market-watch migrate/)).toBeInTheDocument();
+  });
+
+  it("disables command buttons when queue is unavailable", async () => {
+    mockSuccessfulLoad({
+      botStatus: vi.fn().mockResolvedValue({
+        mode: "shared_database",
+        latest_job: null,
+        latest_job_available: true,
+        pending_commands: 0,
+        running_commands: 0,
+        command_queue_available: false,
+      }),
+    });
+
+    await renderLoadedApp();
+    switchTo("commands");
+
+    await waitFor(() => expect(screen.getByText("Command queue unavailable")).toBeInTheDocument());
+
+    const liveButton = screen.getByRole("button", { name: /live run/i });
+    expect(liveButton).toBeDisabled();
+  });
+
+  it("queues a source fetch command using source selector", async () => {
+    apiMock.createCommand.mockResolvedValue({
+      id: "cmd_src",
+      command_type: "source.fetch",
+      status: "pending",
+      payload: { source_id: "src_1" },
+      created_at: "2026-05-30T01:00:00Z",
+    });
+
+    await renderLoadedApp();
+    switchTo("commands");
+
+    const sourceSelect = await screen.findByLabelText("Select source");
+    fireEvent.change(sourceSelect, { target: { value: "src_1" } });
+
+    const fetchButton = screen.getByRole("button", { name: /fetch/i });
+    fireEvent.click(fetchButton);
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("source.fetch", {
+        source_id: "src_1",
+      }),
+    );
+  });
+
+  it("requires confirmation for live pipeline run", async () => {
+    await renderLoadedApp();
+    switchTo("commands");
+
+    const liveButton = await screen.findByRole("button", { name: /live run/i });
+    fireEvent.click(liveButton);
+
+    expect(apiMock.createCommand).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/run live pipeline/i)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /execute/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("pipeline.run", { dry_run: false }),
+    );
+  });
+
+  it("requires confirmation for retention run", async () => {
+    await renderLoadedApp();
+    switchTo("commands");
+
+    const retentionButton = await screen.findByRole("button", { name: /run retention/i });
+    fireEvent.click(retentionButton);
+
+    expect(apiMock.createCommand).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/permanently delete/i)).toBeInTheDocument();
+  });
+
+  it("displays command statuses with proper badges", async () => {
+    apiMock.commands.mockResolvedValue(
+      envelope([
+        {
+          id: "cmd_1",
+          command_type: "pipeline.run",
+          status: "succeeded",
+          payload: { dry_run: true },
+          result: { clusters: 3 },
+          created_at: "2026-05-30T01:00:00Z",
+          completed_at: "2026-05-30T01:01:00Z",
+        },
+        {
+          id: "cmd_2",
+          command_type: "retention.run",
+          status: "failed",
+          payload: {},
+          error_message: "connection refused",
+          created_at: "2026-05-30T00:30:00Z",
+        },
+        {
+          id: "cmd_3",
+          command_type: "source.fetch",
+          status: "pending",
+          payload: { source_id: "src_1" },
+          created_at: "2026-05-30T00:20:00Z",
+        },
+      ]),
+    );
+
+    await renderLoadedApp();
+    switchTo("commands");
+
+    expect(await screen.findByText("succeeded")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText("pending")).toBeInTheDocument();
   });
 });

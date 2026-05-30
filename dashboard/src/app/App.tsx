@@ -273,7 +273,7 @@ export function App() {
             </select>
           </div>
           {view === "overview" ? (
-            <Overview state={state} errors={resourceErrors} queue={queue} retry={load} />
+            <Overview state={state} errors={resourceErrors} retry={load} />
           ) : view === "events" ? (
             <Events
               events={filteredEvents}
@@ -312,13 +312,15 @@ export function App() {
                 error={resourceErrors.commands}
                 retry={load}
                 queue={queue}
+                queueUnavailable={state.status?.command_queue_available === false}
+                sources={state.sources}
+                events={state.events}
               />
             </Panel>
           ) : (
             <Operations
               jobs={state.jobs}
               alerts={state.alerts}
-              sources={state.sources}
               errors={resourceErrors}
               alertPolicy={state.alertPolicy}
               queue={queue}

@@ -140,7 +140,10 @@ export type BotCommand = {
   payload: Record<string, unknown>;
   result?: Record<string, unknown> | null;
   error_message?: string | null;
+  requested_by?: string | null;
   created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
 };
 
 export type BotStatus = {
@@ -214,4 +217,6 @@ export const api = {
     }),
   setSourceEnabled: (id: string, enabled: boolean) =>
     request<Source>(`/sources/${id}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
+  cancelCommand: (id: string) =>
+    request<BotCommand>(`/bot/commands/${id}/cancel`, { method: "POST" }),
 };

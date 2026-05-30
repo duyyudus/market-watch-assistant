@@ -439,3 +439,85 @@ async def test_bot_status_degrades_when_job_table_is_missing() -> None:
     assert response.json()["latest_job_available"] is False
     assert response.json()["command_queue_available"] is False
     assert missing_session.rollbacks == 3
+
+
+@pytest.mark.asyncio
+async def test_command_payload_validation_accepts_valid_payloads(client: AsyncClient) -> None:
+    valid_commands = [
+        ("pipeline.run", {"dry_run": True}),
+        ("pipeline.run", {}),
+        ("source.fetch", {"source_id": "src_1"}),
+        ("alert.dispatch", {"channel": "telegram", "limit": 10, "dry_run": True}),
+        ("alert.dispatch", {}),
+        ("event.rescore", {"event_id": "evt_1"}),
+        ("event.mark", {"event_id": "evt_1", "status": "confirmed"}),
+        ("event.recluster", {"since": "48h", "limit": 100, "apply": False}),
+        ("event.recluster", {}),
+        ("investigation.run_event", {"event_id": "evt_1"}),
+        ("retention.preview", {}),
+        ("retention.run", {}),
+    ]
+    for command_type, payload in valid_commands:
+        response = await client.post(
+            "/bot/commands",
+            json={"command_type": command_type, "payload": payload},
+        )
+        assert response.status_code == 201, (
+            f"{command_type} with {payload} returned {response.status_code}: "
+            f"{response.text}"
+        )
+        assert response.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_command_payload_validation_rejects_invalid_payloads(client: AsyncClient) -> None:
+    invalid_commands = [
+        ("source.fetch", {}, "Missing required"),
+        ("source.fetch", {"source_id": 123}, "must be str"),
+        ("event.rescore", {}, "Missing required"),
+        ("event.mark", {"event_id": "evt_1"}, "Missing required"),
+        ("event.mark", {"event_id": "evt_1", "status": "invalid"}, "Invalid event status"),
+        ("investigation.run_event", {}, "Missing required"),
+        ("pipeline.run", {"dry_run": "yes"}, "must be bool"),
+        ("pipeline.run", {"unknown_key": True}, "Unexpected payload key"),
+        ("retention.run", {"extra": 1}, "Unexpected payload key"),
+    ]
+    for command_type, payload, _reason in invalid_commands:
+        response = await client.post(
+            "/bot/commands",
+            json={"command_type": command_type, "payload": payload},
+        )
+        assert response.status_code == 422, (
+            f"{command_type} with {payload} should be 422 ({_reason}), "
+            f"got {response.status_code}: {response.text}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_creating_command_returns_503_when_table_missing() -> None:
+    class BrokenSession:
+        async def add(self, _obj):
+            pass
+
+        async def commit(self):
+            raise SQLAlchemyError("relation bot_commands does not exist")
+
+        async def rollback(self):
+            pass
+
+    async def override_session():
+        yield BrokenSession()
+
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as test_client:
+        response = await test_client.post(
+            "/bot/commands",
+            json={"command_type": "pipeline.run", "payload": {"dry_run": True}},
+        )
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert "migrate" in response.json()["detail"].lower()
+
