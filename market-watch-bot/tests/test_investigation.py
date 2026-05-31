@@ -165,6 +165,20 @@ def test_event_investigation_trigger_selects_high_value_uncertain_events() -> No
         event(final_score=45, source_count=4, top_source_score=70, status="confirmed"),
         config=config,
     )
+    
+    # Test configurable rumor threshold
+    config_high = InvestigationConfig(
+        enabled=True,
+        auto_event_score_threshold=90,
+        auto_single_source_score_threshold=95,
+        auto_rumor_score_threshold=85,
+    )
+    assert not should_queue_event_investigation(
+        event(final_score=82, status="reported"), config=config_high
+    )
+    assert should_queue_event_investigation(
+        event(final_score=86, status="reported"), config=config_high
+    )
 
 
 def test_pending_missed_catalyst_review_queues_investigation() -> None:
@@ -624,19 +638,21 @@ async def test_run_pending_investigations_counts_success_failure_and_unsupported
     ]
     session = PendingSession(rows)
 
-    async def fake_run_existing(_session, run, *, config, llm_config):
-        if run.id == "inv_success":
-            run.status = "succeeded"
-        elif run.id == "inv_fail":
-            run.status = "failed"
-        else:
-            raise AssertionError("unsupported rows should fail before execution")
-        return run
+    async def fake_run_concurrently(_session, runs, *, config, llm_config, search_client=None):
+        for run in runs:
+            if run.id == "inv_success":
+                run.status = "succeeded"
+            elif run.id == "inv_fail":
+                run.status = "failed"
+            else:
+                run.status = "failed"
+                run.error_message = "Unsupported investigation target type: unknown"
+        return {"completed": 1, "failed": 2}
 
     monkeypatch.setattr(
         investigation_services,
-        "run_existing_investigation",
-        fake_run_existing,
+        "run_investigations_concurrently",
+        fake_run_concurrently,
     )
 
     result = await investigation_services.run_pending_investigations(
@@ -807,4 +823,63 @@ async def test_brave_search_client_uses_custom_official_and_high_quality_domains
     assert results_custom[0].source_quality == "official"  # custom-official.com in custom official
     assert results_custom[1].source_quality == "high_quality"  # custom-hq.com in custom HQ
     assert results_custom[2].source_quality == "media"  # sec.gov not in custom lists
+
+
+@pytest.mark.asyncio
+async def test_run_investigations_concurrently_executes_multiple_runs(monkeypatch) -> None:
+    rows = [
+        AgentInvestigation(
+            id="inv_1",
+            target_type="event_cluster",
+            target_id="evt_1",
+            trigger_reason="auto_event_uncertain",
+            status="pending",
+            input_snapshot={"headline": "Oil jumps"},
+            evidence=[],
+        ),
+        AgentInvestigation(
+            id="inv_2",
+            target_type="event_cluster",
+            target_id="evt_2",
+            trigger_reason="auto_event_uncertain",
+            status="pending",
+            input_snapshot={"headline": "Gold rises"},
+            evidence=[],
+        ),
+    ]
+    session = PendingSession(rows)
+
+    class FakeProvider:
+        async def investigate_event(self, prompt: str):
+            return (
+                LLMInvestigationResult(
+                    summary="Checked.",
+                    confidence=70,
+                    official_confirmation="unconfirmed",
+                    risk_flags=[],
+                    suggested_score_modifier=2,
+                    suggested_alert_level="daily_digest",
+                    caveats=[],
+                ),
+                {"total_tokens": 15},
+            )
+
+    async def fake_gather(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(investigation_services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(investigation_services, "gather_investigation_evidence", fake_gather)
+
+    result = await investigation_services.run_investigations_concurrently(
+        session,
+        rows,
+        config=InvestigationConfig(enabled=True),
+        llm_config=LLMConfig(enabled=True, api_key="llm-key"),
+    )
+
+    assert result == {"completed": 2, "failed": 0}
+    assert rows[0].status == "succeeded"
+    assert rows[1].status == "succeeded"
+    assert rows[0].result["suggested_score_modifier"] == 2
+
 

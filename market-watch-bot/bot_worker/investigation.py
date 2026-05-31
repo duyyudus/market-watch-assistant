@@ -48,6 +48,7 @@ class InvestigationConfig:
     auto_event_score_threshold: int = 80
     auto_single_source_score_threshold: int = 90
     auto_market_move_score_threshold: int = 70
+    auto_rumor_score_threshold: int = 70
     min_modifier: int = -10
     max_modifier: int = 10
     official_domains: tuple[str, ...] = OFFICIAL_DOMAINS
@@ -73,6 +74,9 @@ class InvestigationConfig:
                 settings.investigation.auto_single_source_score_threshold
             ),
             auto_market_move_score_threshold=settings.investigation.auto_market_move_score_threshold,
+            auto_rumor_score_threshold=getattr(
+                settings.investigation, "auto_rumor_score_threshold", 70
+            ),
             min_modifier=settings.investigation.min_modifier,
             max_modifier=settings.investigation.max_modifier,
             official_domains=tuple(
@@ -188,7 +192,10 @@ def should_queue_event_investigation(
         return True
     if market_move_score >= config.auto_market_move_score_threshold and event.final_score >= 55:
         return True
-    return event.status in {"rumor", "reported"} and event.final_score >= 70
+    return (
+        event.status in {"rumor", "reported"}
+        and event.final_score >= config.auto_rumor_score_threshold
+    )
 
 
 def should_queue_missed_catalyst_investigation(

@@ -46,7 +46,7 @@ from bot_worker.services.investigation import (
     run_asset_investigation,
     run_event_investigation,
     run_existing_investigation,
-    run_move_investigation,
+    run_investigations_concurrently,
     run_pending_investigations,
 )
 from bot_worker.services.jobs import (
@@ -151,6 +151,7 @@ __all__ = [
     "run_missed_catalyst_review",
     "run_move_investigation",
     "run_pending_investigations",
+    "run_investigations_concurrently",
     "run_pipeline",
     "run_retention",
     "score_event_with_llm",

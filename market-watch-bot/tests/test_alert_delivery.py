@@ -365,11 +365,12 @@ async def test_run_pipeline_runs_new_event_investigations_before_alert_decisions
             )
         ]
 
-    async def run_existing(_session, run, *, config, llm_config):
-        calls.append(f"run:{run.id}")
-        run.status = "succeeded"
-        run.result = {"suggested_score_modifier": -5}
-        return run
+    async def fake_run_concurrently(_session, runs, *, config, llm_config, search_client=None):
+        for run in runs:
+            calls.append(f"run:{run.id}")
+            run.status = "succeeded"
+            run.result = {"suggested_score_modifier": -5}
+        return {"completed": len(runs), "failed": 0}
 
     async def queue_missed(*_args, **_kwargs) -> int:
         calls.append("queue_missed")
@@ -387,7 +388,11 @@ async def test_run_pipeline_runs_new_event_investigations_before_alert_decisions
     monkeypatch.setattr(pipeline_services, "enrich_event_clusters_with_llm", zero)
     monkeypatch.setattr(pipeline_services, "build_event_clusters", cluster_zero)
     monkeypatch.setattr(pipeline_services, "queue_event_investigation_runs", queue_event_runs)
-    monkeypatch.setattr(pipeline_services, "run_existing_investigation", run_existing)
+    monkeypatch.setattr(
+        pipeline_services,
+        "run_investigations_concurrently",
+        fake_run_concurrently,
+    )
     monkeypatch.setattr(
         pipeline_services,
         "queue_investigations_for_missed_catalysts",

@@ -1964,3 +1964,18 @@ cheap enough for personal use
 expandable across global / Vietnam / crypto markets
 able to catch important events without drowning you in alerts
 ```
+
+---
+
+# 30. Future Enhancements & Roadmap
+
+## 1. Z-Score Calculation & Historical Volatility Normalization
+Currently, the `z_score` column on the `MarketMove` model is defined in the database schema and utilized in the move scoring algorithm (`score_market_move` awards a `+20` point boost for anomalous moves), but it is not computed during ingestion.
+
+**Implementation Steps:**
+* **Historical Fetch Job:** Add a background task to query the last 30–90 days of historical close prices for watchlisted assets.
+* **Volatility Aggregator:** Calculate the rolling mean and standard deviation of daily percentage price changes for each asset.
+* **Ingest-Time Calculation:** For each newly fetched `MarketMove`, calculate the statistical Z-score:
+  $$\text{Z-score} = \frac{\text{Current Price Change \%} - \text{Mean Price Change \%}}{\text{Standard Deviation}}$$
+* **Database Updates:** Populate the `z_score` field in the database during `store_market_moves` to unlock full volatility-normalized anomaly scoring for "Missed Catalyst" detections and "Agent Investigations".
+

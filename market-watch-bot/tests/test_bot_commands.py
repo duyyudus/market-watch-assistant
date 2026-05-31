@@ -290,3 +290,65 @@ async def test_event_mark_applies_valid_status() -> None:
     assert result == {"event_id": "evt_1", "status": "confirmed"}
     assert event.status == "confirmed"
 
+
+@pytest.mark.asyncio
+async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch) -> None:
+    class MockSession:
+        pass
+
+    async def fake_fetch_market_moves(*args, **kwargs):
+        from bot_worker.market_data import MarketMoveDraft
+        return [
+            MarketMoveDraft(
+                asset_symbol="BTC",
+                asset_class="crypto",
+                exchange="BINANCE",
+                timestamp=datetime.now(UTC),
+                window="1d",
+                price_change_pct=1.2,
+            )
+        ]
+
+    async def fake_store_market_moves(*args, **kwargs):
+        return 1
+
+    async def fake_run_missed_catalyst_review(*args, **kwargs):
+        return 2
+
+    monkeypatch.setattr(
+        "bot_worker.services.bot_commands.fetch_market_moves",
+        fake_fetch_market_moves,
+    )
+    monkeypatch.setattr(
+        "bot_worker.services.bot_commands.store_market_moves",
+        fake_store_market_moves,
+    )
+    monkeypatch.setattr(
+        "bot_worker.services.bot_commands.run_missed_catalyst_review",
+        fake_run_missed_catalyst_review,
+    )
+
+    settings = SimpleNamespace(
+        market_data=SimpleNamespace(
+            vn_base_url="http://mock",
+            symbol_map={"BTC": "bitcoin"}
+        )
+    )
+
+    # Test market.fetch command
+    cmd_fetch = BotCommand(
+        command_type="market.fetch",
+        payload={"symbols": "BTC", "window": "1d"}
+    )
+    res_fetch = await execute_bot_command(MockSession(), cmd_fetch, settings=settings)
+    assert res_fetch == {"inserted": 1, "symbols": ["BTC"], "window": "1d"}
+
+    # Test catalyst.review command
+    cmd_review = BotCommand(
+        command_type="catalyst.review",
+        payload={"window": "1d"}
+    )
+    res_review = await execute_bot_command(MockSession(), cmd_review, settings=settings)
+    assert res_review == {"created": 2, "window": "1d"}
+
+

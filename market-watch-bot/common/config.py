@@ -100,6 +100,7 @@ class InvestigationSettings(BaseModel):
     auto_event_score_threshold: int = 80
     auto_single_source_score_threshold: int = 90
     auto_market_move_score_threshold: int = 70
+    auto_rumor_score_threshold: int = 70
     min_modifier: int = -10
     max_modifier: int = 10
     official_domains: list[str] = Field(

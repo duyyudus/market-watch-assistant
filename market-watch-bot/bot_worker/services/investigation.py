@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
@@ -359,24 +360,15 @@ async def run_pending_investigations(
         ).all()
     )
     counts = {"pending": len(rows), "completed": 0, "failed": 0}
-    for run in rows:
-        if run.target_type not in SUPPORTED_PENDING_TARGET_TYPES:
-            run.status = "failed"
-            run.error_message = f"Unsupported investigation target type: {run.target_type}"
-            run.updated_at = utcnow()
-            await session.flush()
-            counts["failed"] += 1
-            continue
-        result = await run_existing_investigation(
-            session,
-            run,
-            config=config,
-            llm_config=llm_config,
-        )
-        if result.status == "succeeded":
-            counts["completed"] += 1
-        else:
-            counts["failed"] += 1
+    if not rows:
+        return counts
+    res = await run_investigations_concurrently(
+        session,
+        rows,
+        config=config,
+        llm_config=llm_config,
+    )
+    counts.update(res)
     return counts
 
 
@@ -681,3 +673,112 @@ async def queue_event_investigation_runs(
         )
         runs.append(run)
     return runs
+
+
+async def run_investigations_concurrently(
+    session: AsyncSession,
+    runs: list[AgentInvestigation],
+    *,
+    config: InvestigationConfig,
+    llm_config: LLMConfig,
+    search_client: object | None = None,
+) -> dict[str, int]:
+    if not runs:
+        return {"completed": 0, "failed": 0}
+
+    counts = {"completed": 0, "failed": 0}
+    work_items: list[tuple[AgentInvestigation, str]] = []
+
+    # Phase 1: Sequential Preparation (gathering evidence, building prompts)
+    for run in runs:
+        if run.target_type not in SUPPORTED_PENDING_TARGET_TYPES:
+            run.status = "failed"
+            run.error_message = f"Unsupported investigation target type: {run.target_type}"
+            run.updated_at = utcnow()
+            counts["failed"] += 1
+            continue
+
+        run.status = "running"
+        run.evidence = []
+        run.result = None
+        run.usage = None
+        run.error_message = None
+        run.provider = llm_config.provider
+        run.model = llm_config.model
+        run.prompt_version = INVESTIGATION_PROMPT_VERSION
+        run.updated_at = utcnow()
+        await session.flush()
+
+        try:
+            evidence = await gather_investigation_evidence(
+                session,
+                snapshot=run.input_snapshot,
+                config=config,
+                search_client=search_client,
+            )
+            prompt = build_investigation_prompt(
+                target_type=run.target_type,
+                input_snapshot=run.input_snapshot,
+                evidence=evidence,
+            )
+            run.evidence = _json_safe(evidence)
+            run.prompt_hash = prompt_hash(prompt)
+            await session.flush()
+            work_items.append((run, prompt))
+        except Exception as exc:  # noqa: BLE001
+            run.status = "failed"
+            run.error_message = str(exc)
+            run.updated_at = utcnow()
+            counts["failed"] += 1
+
+    if not work_items:
+        return counts
+
+    # Phase 2: Concurrent LLM Calls
+    provider = llm_provider(llm_config)
+    semaphore = asyncio.Semaphore(max(1, config.max_concurrency))
+
+    async def investigate_with_limit(run: AgentInvestigation, prompt: str):
+        async with semaphore:
+            try:
+                if not llm_config.enabled or not llm_config.api_key:
+                    raise ValueError(
+                        f"{llm_config.api_key_env} is required for investigation analysis"
+                    )
+                result, usage = await provider.investigate_event(prompt)
+                return run, result, usage, None
+            except Exception as exc:  # noqa: BLE001
+                return run, None, None, exc
+
+    results = await asyncio.gather(
+        *(investigate_with_limit(run, prompt) for run, prompt in work_items)
+    )
+
+    # Phase 3: Sequential Result Saving
+    for run, result, usage, error in results:
+        if error is not None:
+            run.status = "failed"
+            run.error_message = str(error)
+            run.updated_at = utcnow()
+            counts["failed"] += 1
+            continue
+        if result is None:
+            run.status = "failed"
+            run.error_message = "LLM investigation returned no result"
+            run.updated_at = utcnow()
+            counts["failed"] += 1
+            continue
+
+        result_data = result.model_dump()
+        result_data["suggested_score_modifier"] = min(
+            config.max_modifier,
+            max(config.min_modifier, int(result_data["suggested_score_modifier"])),
+        )
+        run.status = "succeeded"
+        run.result = result_data
+        run.usage = usage
+        run.updated_at = utcnow()
+        counts["completed"] += 1
+
+    await session.flush()
+    return counts

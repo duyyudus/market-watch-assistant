@@ -44,7 +44,7 @@ llm:
   enabled: true
   provider: openrouter
   api_base_url: https://openrouter.ai/api/v1
-  model: openai/gpt-5.4-mini
+  model: openai/gpt-5.4-nano
   api_key_env: OPENROUTER_API_KEY
   prompt_version: event-v1
   temperature: 0.1
@@ -71,9 +71,10 @@ investigation:
   local_evidence_lookback_days: 3
   timeout_seconds: 20
   max_concurrency: 2
-  auto_event_score_threshold: 80
-  auto_single_source_score_threshold: 90
-  auto_market_move_score_threshold: 70
+  auto_event_score_threshold: 90
+  auto_single_source_score_threshold: 95
+  auto_market_move_score_threshold: 85
+  auto_rumor_score_threshold: 80
   min_modifier: -10
   max_modifier: 10
   official_domains:

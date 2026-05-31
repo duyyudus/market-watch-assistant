@@ -14,7 +14,12 @@ from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pen
 from bot_worker.services.events import recluster_recent_event_clusters
 from bot_worker.services.investigation import run_event_investigation
 from bot_worker.services.jobs import record_job_run
-from bot_worker.services.market import market_move_score_for_cluster
+from bot_worker.services.market import (
+    fetch_market_moves,
+    market_move_score_for_cluster,
+    run_missed_catalyst_review,
+    store_market_moves,
+)
 from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
 from bot_worker.services.sources import fetch_source
@@ -29,6 +34,8 @@ ALLOWED_COMMAND_TYPES = {
     "investigation.run_event",
     "retention.preview",
     "retention.run",
+    "market.fetch",
+    "catalyst.review",
 }
 
 EVENT_STATUSES = {"reported", "confirmed", "official", "stale", "false_signal", "merged"}
@@ -181,6 +188,35 @@ async def execute_bot_command(
             llm_config=LLMConfig.from_settings(settings),
         )
         return {"investigation_id": run.id, "status": run.status, "result": run.result or {}}
+
+    if command_type == "market.fetch":
+        custom_symbols = payload.get("symbols")
+        window = str(payload.get("window", "1d"))
+        if custom_symbols:
+            if isinstance(custom_symbols, str):
+                symbols = [s.strip() for s in custom_symbols.split(",") if s.strip()]
+            else:
+                symbols = list(custom_symbols)
+        else:
+            from bot_worker.services.watchlists import watchlist_entries
+            watchlist = await watchlist_entries(session)
+            symbols = list({entry.symbol for entry in watchlist if entry.symbol})
+        
+        if symbols:
+            moves = await fetch_market_moves(
+                symbols=symbols,
+                window=window,
+                vn_base_url=settings.market_data.vn_base_url,
+                symbol_map=settings.market_data.symbol_map,
+            )
+            inserted = await store_market_moves(session, moves)
+            return {"inserted": inserted, "symbols": symbols, "window": window}
+        return {"inserted": 0, "symbols": [], "window": window}
+
+    if command_type == "catalyst.review":
+        window = str(payload.get("window", "1d"))
+        count = await run_missed_catalyst_review(session, window=window)
+        return {"created": count, "window": window}
 
     policy = RetentionPolicy(
         fetch_logs_days=settings.retention.fetch_logs_days,

@@ -23,10 +23,16 @@ from bot_worker.services.ingestion import mark_exact_duplicates, normalize_pendi
 from bot_worker.services.investigation import (
     queue_event_investigation_runs,
     queue_investigations_for_missed_catalysts,
-    run_existing_investigation,
+    run_investigations_concurrently,
 )
 from bot_worker.services.llm import enrich_event_clusters_with_llm, extract_entities_with_llm
+from bot_worker.services.market import (
+    fetch_market_moves,
+    run_missed_catalyst_review,
+    store_market_moves,
+)
 from bot_worker.services.sources import fetch_source
+from bot_worker.services.watchlists import watchlist_entries
 
 logger = logging.getLogger("bot_worker")
 CORE_JOBS = [
@@ -71,7 +77,7 @@ async def run_pipeline(
         (await session.scalars(select(NewsSource).where(NewsSource.enabled.is_(True)))).all()
     )
     fetched = 0
-    logger.info("─── [Stage 1/9] Polling News Sources ───")
+    logger.info("─── [Stage 1/11] Polling News Sources ───")
     logger.info("  Found %d enabled news sources to poll", len(sources))
     for source in sources:
         logger.info("  → Polling source: %s (%s)", source.name, source.url)
@@ -88,33 +94,33 @@ async def run_pipeline(
         else:
             logger.error("  ❌ Failed to fetch source %s: %s", source.name, result.get("error"))
 
-    logger.info("─── [Stage 2/9] Normalizing Raw Items ───")
+    logger.info("─── [Stage 2/11] Normalizing Raw Items ───")
     normalized = await normalize_pending_raw_items(
         session, freshness_hours=freshness_hours, tracking_params=tracking_params
     )
     logger.info("  ✓ Normalized %d news items", normalized)
 
-    logger.info("─── [Stage 3/9] Deduplicating News Items ───")
+    logger.info("─── [Stage 3/11] Deduplicating News Items ───")
     duplicates = await mark_exact_duplicates(session)
     logger.info("  ✓ Marked %d duplicate news items", duplicates)
 
     news_embeddings = 0
     entities_extracted = 0
-    logger.info("─── [Stage 4/9] Extracting News Entities ───")
+    logger.info("─── [Stage 4/11] Extracting News Entities ───")
     if llm_config is not None and llm_config.enabled:
         entities_extracted = await extract_entities_with_llm(session, config=llm_config)
         logger.info("  ✓ Extracted entities for %d news items", entities_extracted)
     else:
         logger.info("  ⚠ LLM config disabled or not provided, skipping entity extraction")
 
-    logger.info("─── [Stage 5/9] Generating News Embeddings ───")
+    logger.info("─── [Stage 5/11] Generating News Embeddings ───")
     if embedding_config is not None:
         news_embeddings = await embed_pending_news_items(session, config=embedding_config)
         logger.info("  ✓ Generated embeddings for %d news items", news_embeddings)
     else:
         logger.info("  ⚠ Embedding config not provided, skipping news embedding generation")
 
-    logger.info("─── [Stage 6/9] Building Event Clusters ───")
+    logger.info("─── [Stage 6/11] Building Event Clusters ───")
     cluster_stats: ClusterBuildStats = await build_event_clusters(
         session,
         embedding_config=embedding_config,
@@ -129,7 +135,7 @@ async def run_pipeline(
     )
 
     event_embeddings = 0
-    logger.info("─── [Stage 7/9] Generating Event Embeddings ───")
+    logger.info("─── [Stage 7/11] Generating Event Embeddings ───")
     if embedding_config is not None:
         event_embeddings = await embed_pending_event_clusters(session, config=embedding_config)
         logger.info("  ✓ Generated embeddings for %d event clusters", event_embeddings)
@@ -139,14 +145,40 @@ async def run_pipeline(
         )
 
     llm_enriched = 0
-    logger.info("─── [Stage 8/9] LLM Event Enrichment ───")
+    logger.info("─── [Stage 8/11] LLM Event Enrichment ───")
     if llm_config is not None and llm_config.enabled:
         llm_enriched = await enrich_event_clusters_with_llm(session, config=llm_config)
         logger.info("  ✓ Enriched %d event clusters with LLM analysis", llm_enriched)
     else:
         logger.info("  ⚠ LLM config disabled or not provided, skipping event enrichment")
 
-    logger.info("─── [Stage 9/9] Recording Alert Decisions ───")
+    market_moves_fetched = 0
+    logger.info("─── [Stage 9/11] Fetching Market Moves ───")
+    try:
+        from common.config import load_settings
+        settings = load_settings()
+        watchlist = await watchlist_entries(session)
+        symbols = list({entry.symbol for entry in watchlist if entry.symbol})
+        if symbols:
+            logger.info(
+                "  Fetching market moves for %d watchlisted assets: %s",
+                len(symbols),
+                ", ".join(symbols),
+            )
+            moves = await fetch_market_moves(
+                symbols=symbols,
+                window="1d",
+                vn_base_url=settings.market_data.vn_base_url,
+                symbol_map=settings.market_data.symbol_map,
+            )
+            market_moves_fetched = await store_market_moves(session, moves)
+            logger.info("  ✓ Successfully fetched and stored %d market moves", market_moves_fetched)
+        else:
+            logger.info("  ⚠ No watchlisted assets with symbols found, skipping market fetch")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("  ❌ Failed to fetch market moves: %s", exc)
+
+    logger.info("─── [Stage 10/11] Recording Alert Decisions ───")
     queued_investigations = 0
     completed_investigations = 0
     failed_investigations = 0
@@ -157,20 +189,17 @@ async def run_pipeline(
                 config=investigation_config,
             )
             queued_investigations += len(event_investigations)
-            if llm_config is not None:
-                for run in event_investigations:
-                    result = await run_existing_investigation(
-                        session,
-                        run,
-                        config=investigation_config,
-                        llm_config=llm_config,
-                    )
-                    if result.status == "succeeded":
-                        completed_investigations += 1
-                    else:
-                        failed_investigations += 1
-            else:
-                failed_investigations += len(event_investigations)
+            if llm_config is not None and event_investigations:
+                res = await run_investigations_concurrently(
+                    session,
+                    event_investigations,
+                    config=investigation_config,
+                    llm_config=llm_config,
+                )
+                completed_investigations = res.get("completed", 0)
+                failed_investigations = res.get("failed", 0)
+            elif event_investigations:
+                failed_investigations = len(event_investigations)
             queued_investigations += await queue_investigations_for_missed_catalysts(
                 session,
                 config=investigation_config,
@@ -199,6 +228,17 @@ async def run_pipeline(
     else:
         logger.info("  ⚠ Alert delivery config not provided or not Telegram, skipping dispatch")
 
+    missed_catalysts_created = 0
+    logger.info("─── [Stage 11/11] Missed Catalyst Review ───")
+    try:
+        missed_catalysts_created = await run_missed_catalyst_review(session, window="1d")
+        logger.info(
+            "  ✓ Completed review; created %d missed catalyst tasks",
+            missed_catalysts_created,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("  ❌ Failed to run missed catalyst review: %s", exc)
+
     logger.info("======================================================================")
     logger.info("🎉 Pipeline run completed successfully!")
     logger.info("======================================================================")
@@ -214,10 +254,12 @@ async def run_pipeline(
         "llm_cluster_attaches": cluster_stats.llm_cluster_attaches,
         "event_embeddings": event_embeddings,
         "llm_enriched": llm_enriched,
+        "market_moves_fetched": market_moves_fetched,
         "queued_investigations": queued_investigations,
         "completed_investigations": completed_investigations,
         "failed_investigations": failed_investigations,
         "alerts": alerts,
         "delivered_alerts": delivered_alerts,
         "failed_alert_deliveries": failed_alert_deliveries,
+        "missed_catalysts_created": missed_catalysts_created,
     }
