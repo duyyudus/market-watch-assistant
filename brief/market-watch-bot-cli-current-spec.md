@@ -1,11 +1,11 @@
 # `market-watch-bot` Current CLI Specification
 
-Date: 2026-05-28
+NOTE: this document should be always kept up-to-date.
+
+Last updated: 2026-05-28
 
 This document is the current recommended CLI surface for the implemented
-`market-watch-bot`. It intentionally does not replace
-`market-watch-bot-cli-manual.md`, which remains a broader historical/reference
-manual.
+`market-watch-bot`.
 
 The current CLI should prioritize operator debugging, database-backed inspection,
 and explicit maintenance actions. It should avoid speculative daemon controls,
