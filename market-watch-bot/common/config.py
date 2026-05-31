@@ -10,9 +10,7 @@ import yaml
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 
-DEFAULT_DATABASE_URL = (
-    "postgresql+asyncpg://postgres:postgres@192.168.100.39:5432/market_watch_assistant"
-)
+DEFAULT_DATABASE_URL = ""
 
 
 class AppConfig(BaseModel):
@@ -232,6 +230,7 @@ class LoggingConfig(BaseModel):
 
 class Settings(BaseModel):
     database_url: str = DEFAULT_DATABASE_URL
+    api_auth_token: str | None = None
     openrouter_api_key: str | None = None
     brave_search_api_key: str | None = None
     telegram_bot_token: str | None = None
@@ -334,6 +333,7 @@ def _read_env(path: Path) -> dict[str, str]:
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_CHAT_ID",
             "API_BASE_URL",
+            "API_AUTH_TOKEN",
             "REDIS_URL",
             "API_CORS_ORIGINS",
         }
@@ -347,9 +347,13 @@ def load_settings(
     yaml_data = _read_yaml(Path(settings_file))
     env_data = _read_env(Path(env_file))
     origins = env_data.get("API_CORS_ORIGINS")
+    database_url = env_data.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+    if not database_url:
+        raise ValueError("DATABASE_URL must be set in the environment or .env")
     merged: dict[str, Any] = {
         **yaml_data,
-        "database_url": env_data.get("DATABASE_URL", DEFAULT_DATABASE_URL),
+        "database_url": database_url,
+        "api_auth_token": env_data.get("API_AUTH_TOKEN"),
         "openrouter_api_key": env_data.get("OPENROUTER_API_KEY"),
         "brave_search_api_key": env_data.get("BRAVE_SEARCH_API_KEY"),
         "telegram_bot_token": env_data.get("TELEGRAM_BOT_TOKEN"),

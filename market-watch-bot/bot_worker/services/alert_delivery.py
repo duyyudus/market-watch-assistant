@@ -19,6 +19,7 @@ from bot_worker.services.digests import (
 
 DeliveryCounts = dict[str, int]
 TelegramSender = Callable[["AlertDeliveryConfig", str, str], Awaitable[dict[str, Any]]]
+REDACTED_TELEGRAM_TOKEN = "[REDACTED_TELEGRAM_TOKEN]"
 
 
 @dataclass(frozen=True)
@@ -127,13 +128,14 @@ async def send_test_alert(
     try:
         provider_response = await send_telegram_message(config, config.telegram_chat_id, message)
     except Exception as exc:
+        error_message = redact_telegram_token(str(exc), config.telegram_bot_token)
         session.add(
             AlertDeliveryRecord(
                 channel=config.channel,
                 recipient=config.telegram_chat_id,
                 status="failed",
                 message_text=message,
-                error_message=str(exc),
+                error_message=error_message,
                 attempted_at=attempted_at,
             )
         )
@@ -141,7 +143,7 @@ async def send_test_alert(
             "status": "failed",
             "channel": config.channel,
             "recipient": config.telegram_chat_id,
-            "error": str(exc),
+            "error": error_message,
         }
     session.add(
         AlertDeliveryRecord(
@@ -149,7 +151,10 @@ async def send_test_alert(
             recipient=config.telegram_chat_id,
             status="sent",
             message_text=message,
-            provider_response=provider_response,
+            provider_response=redact_sensitive_payload(
+                provider_response,
+                config.telegram_bot_token,
+            ),
             attempted_at=attempted_at,
         )
     )
@@ -197,6 +202,7 @@ async def dispatch_pending_alerts(
         try:
             provider_response = await send_telegram_message(config, recipient, message)
         except Exception as exc:
+            error_message = redact_telegram_token(str(exc), config.telegram_bot_token)
             counts["failed"] += 1
             session.add(
                 AlertDeliveryRecord(
@@ -205,7 +211,7 @@ async def dispatch_pending_alerts(
                     recipient=recipient,
                     status="failed",
                     message_text=message,
-                    error_message=str(exc),
+                    error_message=error_message,
                     attempted_at=attempted_at,
                 )
             )
@@ -223,7 +229,10 @@ async def dispatch_pending_alerts(
                 recipient=recipient,
                 status="sent",
                 message_text=message,
-                provider_response=provider_response,
+                provider_response=redact_sensitive_payload(
+                    provider_response,
+                    config.telegram_bot_token,
+                ),
                 attempted_at=attempted_at,
             )
         )
@@ -242,3 +251,26 @@ def _join_unique(values: list[str]) -> str:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def redact_telegram_token(value: str, token: str | None) -> str:
+    if not token:
+        return value
+    return value.replace(token, REDACTED_TELEGRAM_TOKEN)
+
+
+def redact_sensitive_payload(value: Any, token: str | None) -> Any:
+    if token is None:
+        return value
+    if isinstance(value, str):
+        return redact_telegram_token(value, token)
+    if isinstance(value, list):
+        return [redact_sensitive_payload(item, token) for item in value]
+    if isinstance(value, tuple):
+        return [redact_sensitive_payload(item, token) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): redact_sensitive_payload(item, token)
+            for key, item in value.items()
+        }
+    return value

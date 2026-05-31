@@ -46,9 +46,9 @@ class FakeEmbeddingSession:
 
 
 def test_load_settings_uses_openrouter_embedding_defaults(tmp_path) -> None:
-    settings = load_settings(
-        env_file=tmp_path / "missing.env", settings_file=tmp_path / "missing.yml"
-    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("DATABASE_URL=sqlite+aiosqlite:///:memory:\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
 
     assert settings.embeddings.provider == "openrouter"
     assert settings.embeddings.api_base_url == "https://openrouter.ai/api/v1"

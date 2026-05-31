@@ -193,6 +193,57 @@ async def test_dispatch_pending_alerts_records_failed_send_without_marking_sent(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_pending_alerts_redacts_telegram_token_from_errors() -> None:
+    alert = _alert()
+    session = DeliverySession([(alert, _event())])
+
+    async def fake_send(_config: AlertDeliveryConfig, _recipient: str, _message: str) -> dict:
+        raise RuntimeError("https://api.telegram.org/botsecret-token/sendMessage failed")
+
+    result = await dispatch_pending_alerts(
+        session,
+        AlertDeliveryConfig(
+            channel="telegram",
+            telegram_bot_token="secret-token",
+            telegram_chat_id="chat_1",
+        ),
+        send_telegram_message=fake_send,
+    )
+
+    delivery = next(value for value in session.added if isinstance(value, AlertDeliveryRecord))
+    assert result["failed"] == 1
+    assert "secret-token" not in str(delivery.error_message)
+    assert "[REDACTED_TELEGRAM_TOKEN]" in str(delivery.error_message)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_alerts_redacts_telegram_token_from_provider_response() -> None:
+    alert = _alert()
+    session = DeliverySession([(alert, _event())])
+
+    async def fake_send(_config: AlertDeliveryConfig, _recipient: str, _message: str) -> dict:
+        return {"ok": True, "token": "secret-token", "nested": {"url": "botsecret-token"}}
+
+    await dispatch_pending_alerts(
+        session,
+        AlertDeliveryConfig(
+            channel="telegram",
+            telegram_bot_token="secret-token",
+            telegram_chat_id="chat_1",
+        ),
+        send_telegram_message=fake_send,
+    )
+
+    delivery = next(value for value in session.added if isinstance(value, AlertDeliveryRecord))
+    assert "secret-token" not in str(delivery.provider_response)
+    assert delivery.provider_response == {
+        "ok": True,
+        "token": "[REDACTED_TELEGRAM_TOKEN]",
+        "nested": {"url": "bot[REDACTED_TELEGRAM_TOKEN]"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_alerts_dry_run_does_not_send_or_record_delivery() -> None:
     session = DeliverySession([(_alert(), _event())])
     calls = 0

@@ -1,0 +1,9 @@
+.git
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.venv
+dashboard/node_modules
+dashboard/dist
+market-watch-bot/.env
+market-watch-bot/.log

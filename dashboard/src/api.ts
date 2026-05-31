@@ -5,6 +5,7 @@ export function defaultApiBaseUrl(protocol: string, hostname: string): string {
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
   defaultApiBaseUrl(window.location.protocol, window.location.hostname);
+const API_AUTH_TOKEN = import.meta.env.VITE_API_AUTH_TOKEN;
 
 export type ListEnvelope<T> = {
   items: T[];
@@ -243,9 +244,17 @@ export function normalizeListResponse<T>(value: unknown): ListEnvelope<T> {
   };
 }
 
+export function buildRequestHeaders(token: string | undefined): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { ...buildRequestHeaders(API_AUTH_TOKEN), ...(init?.headers ?? {}) },
     ...init,
   });
   if (!response.ok) {
@@ -309,4 +318,3 @@ export const api = {
   maintenanceRetentionJobs: (limit?: number, offset?: number) =>
     request<ListEnvelope<RetentionJob>>(`/maintenance/retention-jobs?limit=${limit || 100}&offset=${offset || 0}`),
 };
-

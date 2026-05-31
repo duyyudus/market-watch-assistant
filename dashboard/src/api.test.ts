@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defaultApiBaseUrl, normalizeListResponse } from "./api";
+import { buildRequestHeaders, defaultApiBaseUrl, normalizeListResponse } from "./api";
 
 describe("normalizeListResponse", () => {
   it("keeps API list envelopes stable for dashboard pages", () => {
@@ -19,5 +19,20 @@ describe("normalizeListResponse", () => {
 
   it("uses the current host for network dashboard URLs", () => {
     expect(defaultApiBaseUrl("http:", "192.168.28.40")).toBe("http://192.168.28.40:8000");
+  });
+
+  it("adds a bearer token when dashboard auth is configured", () => {
+    const headers = buildRequestHeaders("secret-token");
+
+    expect(headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer secret-token",
+    });
+  });
+
+  it("omits authorization when dashboard auth is not configured", () => {
+    const headers = buildRequestHeaders(undefined);
+
+    expect(headers).toEqual({ "Content-Type": "application/json" });
   });
 });

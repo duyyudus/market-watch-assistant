@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from bot_worker.config import STARTER_SOURCES, Settings, load_settings
 from bot_worker.db.models import AppSetting
 from bot_worker.services.sources import seed_configuration_presets
@@ -12,6 +14,7 @@ def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
         "\n".join(
             [
                 "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app",
+                "API_AUTH_TOKEN=api-secret",
                 "OPENROUTER_API_KEY=secret-key",
                 "BRAVE_SEARCH_API_KEY=brave-key",
             ]
@@ -34,6 +37,7 @@ alerts:
     settings = load_settings(env_file=env_file, settings_file=settings_file)
 
     assert settings.database_url == "postgresql+asyncpg://user:pass@db:5432/app"
+    assert settings.api_auth_token == "api-secret"
     assert settings.openrouter_api_key == "secret-key"
     assert settings.brave_search_api_key == "brave-key"
     assert settings.app.name == "custom-watch"
@@ -42,15 +46,22 @@ alerts:
     assert settings.alerts.immediate_threshold == 77
 
 
-def test_load_settings_uses_documented_defaults(tmp_path: Path) -> None:
-    settings = load_settings(
-        env_file=tmp_path / "missing.env", settings_file=tmp_path / "missing.yml"
+def test_load_settings_requires_database_url(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        load_settings(env_file=tmp_path / "missing.env", settings_file=tmp_path / "missing.yml")
+
+
+def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app\n",
+        encoding="utf-8",
     )
 
-    assert (
-        settings.database_url
-        == "postgresql+asyncpg://postgres:postgres@192.168.100.39:5432/market_watch_assistant"
-    )
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
+
+    assert settings.database_url == "postgresql+asyncpg://user:pass@db:5432/app"
+    assert settings.api_auth_token is None
     assert settings.bot.default_retention_days == 60
     assert settings.alerts.watchlist_threshold == 55
     assert settings.llm.enabled is False

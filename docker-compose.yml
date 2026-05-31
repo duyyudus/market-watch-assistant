@@ -1,0 +1,65 @@
+services:
+  bot-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: bot-worker
+    volumes:
+      - ./market-watch-bot/settings.yml:/app/market-watch-bot/settings.yml:ro
+      - ./market-watch-bot/.env:/app/market-watch-bot/.env:ro
+      - ./market-watch-bot/.log:/app/market-watch-bot/.log
+    healthcheck:
+      test: ["CMD", "uv", "run", "market-watch", "worker", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api-server
+    volumes:
+      - ./market-watch-bot/settings.yml:/app/market-watch-bot/settings.yml:ro
+      - ./market-watch-bot/.env:/app/market-watch-bot/.env:ro
+      - ./market-watch-bot/.log:/app/market-watch-bot/.log
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "uv",
+          "run",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dashboard
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_API_AUTH_TOKEN: ${VITE_API_AUTH_TOKEN:-}
+    ports:
+      - "5173:80"
+    depends_on:
+      api-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

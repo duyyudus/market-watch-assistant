@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_server.app.db import Base, get_session
 from api_server.app.main import app
+from common.config import Settings
 from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
@@ -28,9 +29,15 @@ from common.db.models import (
     WatchlistEntity,
 )
 
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+
 
 @pytest.fixture()
 async def client():
+    app.state.settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        api_auth_token="test-token",
+    )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -242,6 +249,11 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
 
+    ready = await client.get("/ready")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert set(ready.json()["pool"]) == {"pool_size", "checked_out", "overflow"}
+
     status = await client.get("/bot/status")
     assert status.status_code == 200
     assert status.json()["latest_job"]["id"] == "jobrun_1"
@@ -268,6 +280,27 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_ready_returns_503_when_database_check_fails() -> None:
+    class BrokenReadinessSession:
+        async def execute(self, _stmt):
+            raise SQLAlchemyError("database unavailable")
+
+    async def override_session():
+        yield BrokenReadinessSession()
+
+    app.state.settings = Settings(database_url="sqlite+aiosqlite:///:memory:")
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as test_client:
+        response = await test_client.get("/ready")
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+
+
+@pytest.mark.asyncio
 async def test_private_network_dashboard_origin_is_allowed(client: AsyncClient) -> None:
     response = await client.get("/health", headers={"Origin": "http://192.168.28.40:5173"})
 
@@ -279,6 +312,7 @@ async def test_private_network_dashboard_origin_is_allowed(client: AsyncClient) 
 async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> None:
     created = await client.post(
         "/sources",
+        headers=AUTH_HEADERS,
         json={
             "name": "CoinDesk",
             "url": "https://example.com/coindesk",
@@ -293,7 +327,7 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
     assert created.status_code == 201
     source_id = created.json()["id"]
 
-    disabled = await client.post(f"/sources/{source_id}/disable")
+    disabled = await client.post(f"/sources/{source_id}/disable", headers=AUTH_HEADERS)
     assert disabled.status_code == 200
     assert disabled.json()["enabled"] is False
 
@@ -304,6 +338,7 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
 
     policy = await client.patch(
         "/settings/alert-policy",
+        headers=AUTH_HEADERS,
         json={
             "immediate_threshold": 81,
             "watchlist_threshold": 56,
@@ -316,6 +351,7 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
 
     command = await client.post(
         "/bot/commands",
+        headers=AUTH_HEADERS,
         json={"command_type": "pipeline.run", "payload": {"dry_run": True}},
     )
     assert command.status_code == 201
@@ -325,7 +361,10 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
     assert listed.status_code == 200
     assert listed.json()["items"][0]["command_type"] == "pipeline.run"
 
-    cancelled = await client.post(f"/bot/commands/{command.json()['id']}/cancel")
+    cancelled = await client.post(
+        f"/bot/commands/{command.json()['id']}/cancel",
+        headers=AUTH_HEADERS,
+    )
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
 
@@ -336,6 +375,7 @@ async def test_safe_configuration_mutations_normalize_tier_and_delete_watchlist(
 ) -> None:
     patched_source = await client.patch(
         "/sources/src_1",
+        headers=AUTH_HEADERS,
         json={
             "name": "Federal Reserve Watch",
             "url": "https://example.com/fed-watch",
@@ -353,6 +393,7 @@ async def test_safe_configuration_mutations_normalize_tier_and_delete_watchlist(
 
     created_watch = await client.post(
         "/watchlist",
+        headers=AUTH_HEADERS,
         json={
             "symbol": "btc",
             "name": "Bitcoin",
@@ -371,6 +412,7 @@ async def test_safe_configuration_mutations_normalize_tier_and_delete_watchlist(
 
     updated_watch = await client.patch(
         f"/watchlist/{watch_id}",
+        headers=AUTH_HEADERS,
         json={"tier": "a", "aliases": ["BTC"]},
     )
 
@@ -378,7 +420,7 @@ async def test_safe_configuration_mutations_normalize_tier_and_delete_watchlist(
     assert updated_watch.json()["tier"] == "A"
     assert updated_watch.json()["aliases"] == ["BTC"]
 
-    deleted_watch = await client.delete(f"/watchlist/{watch_id}")
+    deleted_watch = await client.delete(f"/watchlist/{watch_id}", headers=AUTH_HEADERS)
     assert deleted_watch.status_code == 204
 
     missing_watch = await client.get("/watchlist")
@@ -399,6 +441,7 @@ async def test_alert_policy_defaults_and_updates(client: AsyncClient) -> None:
 
     updated_policy = await client.patch(
         "/settings/alert-policy",
+        headers=AUTH_HEADERS,
         json={
             "immediate_threshold": 85,
             "watchlist_threshold": 60,
@@ -438,6 +481,7 @@ async def test_configuration_presets_are_served_by_api(client: AsyncClient) -> N
 async def test_rejects_unknown_bot_command(client: AsyncClient) -> None:
     response = await client.post(
         "/bot/commands",
+        headers=AUTH_HEADERS,
         json={"command_type": "shell.exec", "payload": {}},
     )
 
@@ -530,6 +574,7 @@ async def test_command_payload_validation_accepts_valid_payloads(client: AsyncCl
     for command_type, payload in valid_commands:
         response = await client.post(
             "/bot/commands",
+            headers=AUTH_HEADERS,
             json={"command_type": command_type, "payload": payload},
         )
         assert response.status_code == 201, (
@@ -555,6 +600,7 @@ async def test_command_payload_validation_rejects_invalid_payloads(client: Async
     for command_type, payload, _reason in invalid_commands:
         response = await client.post(
             "/bot/commands",
+            headers=AUTH_HEADERS,
             json={"command_type": command_type, "payload": payload},
         )
         assert response.status_code == 422, (
@@ -566,7 +612,7 @@ async def test_command_payload_validation_rejects_invalid_payloads(client: Async
 @pytest.mark.asyncio
 async def test_creating_command_returns_503_when_table_missing() -> None:
     class BrokenSession:
-        async def add(self, _obj):
+        def add(self, _obj):
             pass
 
         async def commit(self):
@@ -578,18 +624,64 @@ async def test_creating_command_returns_503_when_table_missing() -> None:
     async def override_session():
         yield BrokenSession()
 
+    app.state.settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        api_auth_token="test-token",
+    )
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as test_client:
         response = await test_client.post(
             "/bot/commands",
+            headers=AUTH_HEADERS,
             json={"command_type": "pipeline.run", "payload": {"dry_run": True}},
         )
     app.dependency_overrides.clear()
 
     assert response.status_code == 503
     assert "migrate" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_mutating_endpoints_require_bearer_token(client: AsyncClient) -> None:
+    open_response = await client.get("/sources")
+    assert open_response.status_code == 200
+
+    payload = {
+        "name": "CoinDesk Auth",
+        "url": "https://example.com/coindesk-auth",
+        "region": "crypto",
+        "category": "crypto",
+        "source_type": "rss",
+        "language": "en",
+        "source_score": 75,
+        "polling_interval_seconds": 600,
+    }
+
+    missing = await client.post(
+        "/sources",
+        headers={"Origin": "http://localhost:5173"},
+        json=payload,
+    )
+    assert missing.status_code == 401
+    assert missing.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert missing.headers["access-control-allow-credentials"] == "true"
+
+    invalid = await client.post(
+        "/sources",
+        headers={
+            "Authorization": "Bearer wrong-token",
+            "Origin": "http://localhost:5173",
+        },
+        json=payload,
+    )
+    assert invalid.status_code == 403
+    assert invalid.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert invalid.headers["access-control-allow-credentials"] == "true"
+
+    valid = await client.post("/sources", headers=AUTH_HEADERS, json=payload)
+    assert valid.status_code == 201
 
 
 @pytest.mark.asyncio
@@ -656,4 +748,3 @@ async def test_maintenance_endpoints(client: AsyncClient) -> None:
     assert data["items"][0]["id"] == "retention_1"
     assert data["items"][0]["status"] == "completed"
     assert data["items"][0]["deleted_counts"] == {"news": 10}
-

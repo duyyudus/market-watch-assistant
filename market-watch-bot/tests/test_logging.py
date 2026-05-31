@@ -7,9 +7,9 @@ from bot_worker.logging import LineRotatingFileHandler
 
 def test_logging_config_defaults(tmp_path: Path) -> None:
     # Verify defaults are merged correctly
-    settings = load_settings(
-        env_file=tmp_path / "missing.env", settings_file=tmp_path / "missing.yml"
-    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("DATABASE_URL=sqlite+aiosqlite:///:memory:\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
     assert settings.logging.max_lines == 10000
     assert settings.logging.backup_count == 5
 
@@ -28,9 +28,9 @@ logging:
 """,
         encoding="utf-8",
     )
-    settings = load_settings(
-        env_file=tmp_path / "missing.env", settings_file=settings_file
-    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("DATABASE_URL=sqlite+aiosqlite:///:memory:\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file, settings_file=settings_file)
     assert settings.logging.level == "DEBUG"
     assert settings.logging.log_file == ".log/custom.log"
     assert settings.logging.console is False

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from bot_worker.cli.apps import worker_app
 from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
 from bot_worker.db.models import JobRun
+from bot_worker.db.session import make_session_factory
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import LLMConfig
@@ -75,9 +76,10 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
     typer.echo("Use Ctrl+C to stop")
 
     async def loop() -> None:
+        settings = _settings()
+        session_factory = make_session_factory(settings)
         last_pipeline_run_at = asyncio.get_running_loop().time()
         while True:
-            settings = _settings()
             now = asyncio.get_running_loop().time()
 
             async def action(
@@ -93,7 +95,11 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
                     now=now,
                 )
 
-            last_pipeline_run_at = await _with_session(action)
+            last_pipeline_run_at = await _with_session(
+                action,
+                settings=settings,
+                session_factory=session_factory,
+            )
             await asyncio.sleep(getattr(settings.bot, "command_poll_interval_seconds", 2))
 
     _run(loop())

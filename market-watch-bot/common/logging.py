@@ -73,6 +73,22 @@ class LineRotatingFileHandler(logging.handlers.RotatingFileHandler):
         self._line_count = 0
 
 
+class SecretRedactionFilter(logging.Filter):
+    def __init__(self, secrets: list[str]) -> None:
+        super().__init__()
+        self.secrets = [secret for secret in secrets if secret]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self.secrets:
+            return True
+        message = record.getMessage()
+        for secret in self.secrets:
+            message = message.replace(secret, "[REDACTED_TELEGRAM_TOKEN]")
+        record.msg = message
+        record.args = ()
+        return True
+
+
 def setup_logging(settings: Settings) -> None:
     """Configure logging for the application."""
     logger = logging.getLogger("bot_worker")
@@ -86,11 +102,13 @@ def setup_logging(settings: Settings) -> None:
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    redaction_filter = SecretRedactionFilter([settings.telegram_bot_token or ""])
 
     if settings.logging.console:
         # Standard StreamHandler prints to stderr by default
         console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setFormatter(formatter)
+        console_handler.addFilter(redaction_filter)
         logger.addHandler(console_handler)
 
     if settings.logging.log_file:
@@ -105,4 +123,5 @@ def setup_logging(settings: Settings) -> None:
             backupCount=settings.logging.backup_count,
         )
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(redaction_filter)
         logger.addHandler(file_handler)
