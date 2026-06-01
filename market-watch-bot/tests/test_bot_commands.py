@@ -296,7 +296,10 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
     class MockSession:
         pass
 
+    fetch_kwargs = {}
+
     async def fake_fetch_market_moves(*args, **kwargs):
+        fetch_kwargs.update(kwargs)
         from bot_worker.market_data import MarketMoveDraft
         return [
             MarketMoveDraft(
@@ -331,7 +334,9 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
     settings = SimpleNamespace(
         market_data=SimpleNamespace(
             vn_base_url="http://mock",
-            symbol_map={"BTC": "bitcoin"}
+            symbol_map={"BTC": "bitcoin"},
+            crypto_provider="coingecko",
+            crypto_fallback_provider="binance",
         )
     )
 
@@ -342,6 +347,8 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
     )
     res_fetch = await execute_bot_command(MockSession(), cmd_fetch, settings=settings)
     assert res_fetch == {"inserted": 1, "symbols": ["BTC"], "window": "1d"}
+    assert fetch_kwargs["crypto_provider"] == "coingecko"
+    assert fetch_kwargs["crypto_fallback_provider"] == "binance"
 
     # Test catalyst.review command
     cmd_review = BotCommand(
@@ -350,5 +357,4 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
     )
     res_review = await execute_bot_command(MockSession(), cmd_review, settings=settings)
     assert res_review == {"created": 2, "window": "1d"}
-
 

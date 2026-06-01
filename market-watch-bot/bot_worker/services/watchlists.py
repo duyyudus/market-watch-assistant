@@ -9,6 +9,8 @@ from bot_worker.db.models import (
 )
 from bot_worker.watchlist import WatchlistEntry
 
+TIER_RANK = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1}
+
 
 async def news_item_entities(session: AsyncSession, news_item_id: str) -> list[str]:
     rows = list(
@@ -33,6 +35,8 @@ async def news_item_tickers(session: AsyncSession, news_item_id: str) -> list[st
 
 
 async def watchlist_entries(session: AsyncSession) -> list[WatchlistEntry]:
+    if not hasattr(session, "scalars"):
+        return []
     rows = list(
         (
             await session.scalars(select(WatchlistEntity).where(WatchlistEntity.enabled.is_(True)))
@@ -50,7 +54,36 @@ async def watchlist_entries(session: AsyncSession) -> list[WatchlistEntry]:
             enabled=row.enabled,
         )
         for row in rows
+        if hasattr(row, "symbol") and hasattr(row, "name") and hasattr(row, "tier")
     ]
+
+
+def highest_watchlist_tier(entries: list[WatchlistEntry]) -> str | None:
+    if not entries:
+        return None
+    tiers = [(entry.tier or "D").upper() for entry in entries]
+    return max(tiers, key=lambda tier: TIER_RANK.get(tier, 0))
+
+
+def tier_for_entities(
+    *,
+    entities: list[str],
+    tickers: list[str],
+    entries: list[WatchlistEntry],
+) -> str | None:
+    wanted = {value.casefold() for value in [*entities, *tickers] if value}
+    if wanted and not entries:
+        return "A"
+    matches = [
+        entry
+        for entry in entries
+        if (
+            entry.name.casefold() in wanted
+            or (entry.symbol and entry.symbol.casefold() in wanted)
+            or any(alias.casefold() in wanted for alias in entry.aliases)
+        )
+    ]
+    return highest_watchlist_tier(matches)
 async def add_watchlist_entry(
     session: AsyncSession,
     *,

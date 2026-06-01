@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import timedelta
 
 import httpx
@@ -20,6 +21,14 @@ from bot_worker.market_data import (
     parse_yahoo_chart_move,
     score_market_move,
 )
+
+
+@dataclass(frozen=True)
+class MarketFetchResult:
+    moves: list[MarketMoveDraft]
+    degraded_providers: list[str] = field(default_factory=list)
+    failed_providers: list[str] = field(default_factory=list)
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 async def store_market_moves(session: AsyncSession, moves: list[MarketMoveDraft]) -> int:
@@ -44,7 +53,30 @@ async def fetch_market_moves(
     window: str,
     vn_base_url: str,
     symbol_map: dict[str, str] | None = None,
+    crypto_provider: str = "binance",
+    crypto_fallback_provider: str = "coingecko",
 ) -> list[MarketMoveDraft]:
+    result = await fetch_market_moves_with_stats(
+        symbols=symbols,
+        window=window,
+        vn_base_url=vn_base_url,
+        symbol_map=symbol_map,
+        crypto_provider=crypto_provider,
+        crypto_fallback_provider=crypto_fallback_provider,
+    )
+    return result.moves
+
+
+async def fetch_market_moves_with_stats(
+    *,
+    symbols: list[str],
+    window: str,
+    vn_base_url: str,
+    symbol_map: dict[str, str] | None = None,
+    crypto_provider: str = "binance",
+    crypto_fallback_provider: str = "coingecko",
+    client: object | None = None,
+) -> MarketFetchResult:
     symbol_map = symbol_map or {}
     global_symbol_set = {"SPY", "QQQ", "DIA", "GLD", "SLV", "USO", "DXY", "TNX"}
     crypto_symbols = [
@@ -60,54 +92,110 @@ async def fetch_market_moves(
     routed = {*crypto_symbols, *global_symbols}
     vn_symbols = [symbol.lower() for symbol in symbols if symbol.upper() not in routed]
     moves: list[MarketMoveDraft] = []
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+    degraded: set[str] = set()
+    failed: set[str] = set()
+    errors: dict[str, str] = {}
+    crypto_provider_order = list(
+        dict.fromkeys(
+            provider.lower()
+            for provider in (crypto_provider, crypto_fallback_provider)
+            if provider
+        )
+    )
+
+    async def run(active_client: object) -> None:
         for symbol in crypto_symbols:
-            if symbol.endswith("USDT"):
+            fetched_crypto_move = False
+            for index, provider in enumerate(crypto_provider_order):
+                is_last_provider = index == len(crypto_provider_order) - 1
                 try:
-                    response = await client.get(
-                        "https://api.binance.com/api/v3/ticker/24hr", params={"symbol": symbol}
-                    )
-                    response.raise_for_status()
-                    moves.append(parse_binance_ticker_move(response.json(), window=window))
-                    continue
-                except httpx.HTTPError:
-                    pass
-            coin_id = symbol_map.get(symbol.removesuffix("USDT"), symbol.lower())
-            response = await client.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "ids": coin_id,
-                    "price_change_percentage": "24h",
-                },
-            )
-            response.raise_for_status()
-            moves.append(parse_coingecko_market_move(response.json(), symbol=symbol, window=window))
+                    if provider == "binance":
+                        binance_symbol = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+                        response = await active_client.get(
+                            "https://api.binance.com/api/v3/ticker/24hr",
+                            params={"symbol": binance_symbol},
+                        )
+                        response.raise_for_status()
+                        moves.append(parse_binance_ticker_move(response.json(), window=window))
+                        fetched_crypto_move = True
+                        break
+                    if provider == "coingecko":
+                        coin_id = symbol_map.get(symbol.removesuffix("USDT"), symbol.lower())
+                        response = await active_client.get(
+                            "https://api.coingecko.com/api/v3/coins/markets",
+                            params={
+                                "vs_currency": "usd",
+                                "ids": coin_id,
+                                "price_change_percentage": "24h",
+                            },
+                        )
+                        response.raise_for_status()
+                        moves.append(
+                            parse_coingecko_market_move(
+                                response.json(),
+                                symbol=symbol,
+                                window=window,
+                            )
+                        )
+                        fetched_crypto_move = True
+                        break
+                    raise ValueError(f"Unsupported crypto market data provider: {provider}")
+                except Exception as exc:  # noqa: BLE001 - provider boundary catches parser/transport errors
+                    if is_last_provider:
+                        failed.add(provider)
+                    else:
+                        degraded.add(provider)
+                    errors.setdefault(provider, str(exc))
+            if not crypto_provider_order and not fetched_crypto_move:
+                failed.add("crypto_market")
+                errors.setdefault(
+                    "crypto_market",
+                    "No crypto market data providers configured",
+                )
         for symbol in global_symbols:
             yahoo_symbol = symbol_map.get(symbol, symbol)
-            response = await client.get(
-                f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}",
-                params={"range": "5d", "interval": "1d"},
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            response.raise_for_status()
-            moves.append(
-                parse_yahoo_chart_move(
-                    response.json(),
-                    symbol=symbol,
-                    asset_class="equity",
-                    window=window,
+            try:
+                response = await active_client.get(
+                    f"https://query2.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}",
+                    params={"range": "5d", "interval": "1d"},
+                    headers={"User-Agent": "Mozilla/5.0"},
                 )
-            )
+                response.raise_for_status()
+                moves.append(
+                    parse_yahoo_chart_move(
+                        response.json(),
+                        symbol=symbol,
+                        asset_class="equity",
+                        window=window,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                failed.add("yahoo_finance")
+                errors.setdefault("yahoo_finance", str(exc))
         if vn_symbols:
-            response = await client.post(
-                f"{vn_base_url.rstrip('/')}/api/v1/stocks/quotes",
-                json={"symbols": vn_symbols},
-                headers={"accept": "application/json"},
-            )
-            response.raise_for_status()
-            moves.extend(parse_vietnam_quote_moves(response.json()))
-    return moves
+            try:
+                response = await active_client.post(
+                    f"{vn_base_url.rstrip('/')}/api/v1/stocks/quotes",
+                    json={"symbols": vn_symbols},
+                    headers={"accept": "application/json"},
+                )
+                response.raise_for_status()
+                moves.extend(parse_vietnam_quote_moves(response.json()))
+            except Exception as exc:  # noqa: BLE001
+                failed.add("vietnam_market")
+                errors.setdefault("vietnam_market", str(exc))
+
+    if client is not None:
+        await run(client)
+    else:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as active_client:
+            await run(active_client)
+    return MarketFetchResult(
+        moves=moves,
+        degraded_providers=sorted(degraded),
+        failed_providers=sorted(failed),
+        errors=errors,
+    )
 async def run_missed_catalyst_review(session: AsyncSession, *, window: str = "1d") -> int:
     existing_reviews = select(MissedCatalystReview.asset_symbol).where(
         MissedCatalystReview.move_window == window

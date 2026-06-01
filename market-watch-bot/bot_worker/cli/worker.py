@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import typer
 from sqlalchemy import select
 
 from bot_worker.cli.apps import worker_app
 from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
-from bot_worker.db.models import JobRun
+from bot_worker.db.models import DigestRecord, JobRun
 from bot_worker.db.session import make_session_factory
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
@@ -22,6 +24,7 @@ from bot_worker.services import (
     run_pipeline,
 )
 from bot_worker.services.bot_commands import process_pending_bot_commands
+from bot_worker.services.digests import build_digest_record, send_digest_record
 
 COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25
@@ -65,7 +68,35 @@ async def run_worker_tick(
         )
         await record_job_run(session, "agent_investigation", pending_result)
         typer.echo(f"agent_investigation: {pending_result}")
+    await maybe_send_daily_digest(session, settings)
     return now
+
+
+async def maybe_send_daily_digest(session, settings) -> None:
+    if not hasattr(session, "scalar"):
+        return
+    timezone = ZoneInfo(getattr(settings.bot, "timezone", "Asia/Bangkok"))
+    local_now = datetime.now(timezone)
+    if local_now.time() < time(8, 0):
+        return
+    window_end = local_now.replace(hour=8, minute=0, second=0, microsecond=0)
+    window_start = window_end - timedelta(hours=24)
+    window_end_utc = window_end.astimezone(UTC)
+    existing = await session.scalar(
+        select(DigestRecord)
+        .where(DigestRecord.digest_type == "daily")
+        .where(DigestRecord.window_end == window_end_utc)
+        .limit(1)
+    )
+    if existing is not None:
+        return
+    digest = await build_digest_record(
+        session,
+        since=window_start.astimezone(UTC),
+        until=window_end_utc,
+        threshold=settings.alerts.digest_threshold,
+    )
+    await send_digest_record(session, digest, AlertDeliveryConfig.from_settings(settings))
 
 
 @worker_app.command("start")

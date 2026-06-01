@@ -140,16 +140,21 @@ class BraveSearchClient:
         self.high_quality_domains = high_quality_domains
 
     async def search(self, query: str, *, count: int) -> list[BraveSearchResult]:
+        from bot_worker.services.external_providers import (
+            PROVIDER_RETRY_POLICIES,
+            request_with_retry,
+        )
+
         async with self.http_client_factory(timeout=self.timeout_seconds) as client:
-            response = await client.get(
-                "https://api.search.brave.com/res/v1/web/search",
+            response = await request_with_retry(
+                provider="brave_search",
+                method="GET",
+                url="https://api.search.brave.com/res/v1/web/search",
+                retry_policy=PROVIDER_RETRY_POLICIES["brave_search"],
+                client=client,
                 params={"q": query, "count": count},
-                headers={
-                    "Accept": "application/json",
-                    "X-Subscription-Token": self.api_key,
-                },
+                headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
             )
-            response.raise_for_status()
         data = response.json()
         results = ((data.get("web") or {}).get("results") or []) if isinstance(data, dict) else []
         normalized: list[BraveSearchResult] = []

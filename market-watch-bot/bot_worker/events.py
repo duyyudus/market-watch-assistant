@@ -15,6 +15,7 @@ class EventCandidate:
     asset_classes: list[str]
     published_at: datetime | None
     tickers: list[str] = field(default_factory=list)
+    watchlist_tier: str | None = None
 
 
 @dataclass
@@ -26,7 +27,9 @@ class EventClusterDraft:
     regions: set[str] = field(default_factory=set)
     asset_classes: set[str] = field(default_factory=set)
     source_count: int = 0
+    high_quality_source_count: int = 0
     top_source_score: int = 0
+    watchlist_tier: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,5 +113,12 @@ def cluster_candidates(candidates: list[EventCandidate]) -> list[EventClusterDra
         target.regions.add(candidate.region)
         target.asset_classes.update(candidate.asset_classes)
         target.source_count += 1
+        if candidate.source_score >= 75:
+            target.high_quality_source_count += 1
         target.top_source_score = max(target.top_source_score, candidate.source_score)
+        if candidate.watchlist_tier is not None:
+            ranks = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1}
+            current = target.watchlist_tier or "D"
+            if ranks.get(candidate.watchlist_tier, 0) > ranks.get(current, 0):
+                target.watchlist_tier = candidate.watchlist_tier
     return clusters

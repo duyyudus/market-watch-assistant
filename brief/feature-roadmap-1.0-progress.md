@@ -44,10 +44,80 @@ Status: Completed
 - Added request-time settings/session dependencies that can be overridden in tests.
 - Added DB-backed `GET /ready` readiness reporting with pool metrics.
 
+## Track 2: Pipeline Intelligence
+
+Status: Completed
+
+### 2.1 Retry & Backoff for External APIs
+
+- Added shared provider retry/backoff helpers with provider-specific retry policies for RSS, market APIs, OpenRouter chat/embeddings, Telegram, and Brave Search.
+- Added `429` handling with `Retry-After` support and cooldown recording hooks.
+- Wired retry handling into RSS fetches, OpenRouter embeddings, OpenRouter chat completions, Brave Search, and Telegram sends.
+
+### 2.2 Per-Provider Rate Limiting & 429 Cooldowns
+
+- Added `provider_cooldowns` persistence in Alembic revision `0009_pipeline_intelligence.py`.
+- Added provider cooldown helper APIs and pipeline stats for rate-limit skips and provider degradation.
+
+### 2.3 Actual Watchlist Tier-Based Scoring
+
+- Added watchlist-tier resolution for matched entities/tickers and propagated actual S/A/B/C/D tiers through event clustering, rescore, alert decisions, bot commands, and LLM scoring inputs.
+- Kept the previous A-tier fallback only for test/fake-session paths where no watchlist rows are available.
+
+### 2.4 Digest Generation & Delivery
+
+- Added persisted `digests` records with window, content, event count, delivery status, channel, recipient, response, error, and sent timestamp.
+- Added daily digest formatting grouped by region/asset class.
+- Added digest build/send service helpers, `digest.send` bot command support, and worker daily digest scheduling at 8 AM configured bot timezone.
+
+### 2.5 Multi-Source Confirmation Boosting
+
+- Added `unique_high_quality_source_count` to `ScoreInput`.
+- Added high-quality source counting for event drafts/clusters and confidence boosting for diverse high-quality coverage.
+
+### 2.6 Smart Polling Intervals
+
+- Added source polling state fields: `last_fetched_at`, `consecutive_failure_count`, `burst_until_at`, and `disabled_until_at`.
+- Added interval-aware source skipping, 30-minute burst mode after newly inserted RSS items, and failure cooldown after 3 consecutive failures.
+- Surfaced skipped and failed source counts in pipeline results.
+
+### 2.7 Web Crawler / Full-Text Extraction
+
+- Added `trafilatura` to backend dependencies.
+- Added full-text extraction for high-priority/single-source events with graceful failure isolation.
+- Added `NormalizedNewsItem.raw_content` persistence and LLM prompt inclusion when full text is available.
+
+### 2.8 Embedding-Based Cross-Language Clustering
+
+- Added Vietnamese-aware entity extraction prompt guidance and language/raw-content metadata in LLM snapshots.
+- Preserved embedding-based cluster attachment flow for multilingual items while improving source-language context for entity extraction.
+
+### 2.9 Robust Market Data Fetch Error Handling
+
+- Added `fetch_market_moves_with_stats()` with provider-level degraded/failed reporting.
+- Hardened Binance-to-CoinGecko fallback to catch HTTP, JSON, parser, and unexpected response errors per symbol without aborting the whole fetch.
+
+### 2.10 Pipeline Degradation Reporting
+
+- Added `degraded_stages`, `failed_stages`, `rate_limit_skips`, and `provider_retries` fields to pipeline results.
+- Marked provider throttling, source polling skips/failures, embedding/LLM failures, market fetch degradation, investigation failures, full-text extraction failures, alert dispatch failures, and missed-catalyst review failures.
+
+### 2.11 Type-Safe Vector SQL Parameterized Casting
+
+- Added Python vector validation before pgvector queries.
+- Refactored vector search to bind the query vector through the shared `Vector` SQLAlchemy type instead of passing a raw serialized literal.
+- Removed `pgvector_literal` from the public `bot_worker.services` export surface.
+
+### 2.12 Dead Exports Cleanup
+
+- Removed nonexistent `run_move_investigation` from `bot_worker.services.__all__`.
+
 ## Verification
 
-- `cd market-watch-bot && uv run pytest` -> 196 passed.
+- `cd market-watch-bot && uv run pytest` -> 204 passed.
 - `cd market-watch-bot && uv run ruff check .` -> all checks passed.
+- `cd market-watch-bot && uv run market-watch --help` -> rendered CLI help successfully.
+- `cd market-watch-bot && uv run market-watch pipeline run --dry-run` -> rendered dry-run pipeline path successfully.
 - `cd dashboard && npm test` -> 24 passed.
 - `cd dashboard && npm run build` -> build completed.
 - `docker compose config` -> Compose syntax rendered successfully.
@@ -55,4 +125,4 @@ Status: Completed
 ## Operational Notes
 
 - `docker-compose.yml` mounts `market-watch-bot/.env` into backend containers instead of using Compose `env_file`, so `docker compose config` does not expand local secrets into rendered service environment output.
-- No live containers, live migrations, live market-data calls, or live pipeline commands were run.
+- No live containers, live migrations, live market-data calls, OpenRouter calls, Brave calls, Telegram sends, or live pipeline commands were run for Track 2 verification.

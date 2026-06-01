@@ -103,9 +103,17 @@ async def send_telegram_message(
         raise ValueError("Telegram delivery requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
     url = f"https://api.telegram.org/bot{config.telegram_bot_token}/sendMessage"
     payload = {"chat_id": recipient, "text": message, "disable_web_page_preview": True}
+    from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, request_with_retry
+
     async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(url, json=payload)
-        response.raise_for_status()
+        response = await request_with_retry(
+            provider="telegram",
+            method="POST",
+            url=url,
+            retry_policy=PROVIDER_RETRY_POLICIES["telegram"],
+            client=client,
+            json=payload,
+        )
         data = response.json()
     if not data.get("ok"):
         description = data.get("description") or "Telegram API returned ok=false"

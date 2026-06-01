@@ -10,14 +10,17 @@ from bot_worker.services.alerts import (
     record_alert_decisions,
 )
 from bot_worker.services.digests import (
+    build_digest_record,
     digest_display_headline,
     digest_preview,
     digest_time_in_window,
     event_report_time_range,
+    format_digest_message,
     format_report_time_range,
     format_report_time_span,
     select_digest_headline,
     select_report_time_range,
+    send_digest_record,
 )
 from bot_worker.services.embeddings import (
     embed_pending_event_clusters,
@@ -26,7 +29,6 @@ from bot_worker.services.embeddings import (
 from bot_worker.services.events import (
     ClusterBuildStats,
     build_event_clusters,
-    pgvector_literal,
     recluster_recent_event_clusters,
     vector_cluster_candidates_for_item,
 )
@@ -103,6 +105,7 @@ __all__ = [
     "add_source",
     "add_watchlist_entry",
     "baseline_reset_preview",
+    "build_digest_record",
     "build_event_clusters",
     "classify_news_item_with_llm",
     "digest_display_headline",
@@ -119,6 +122,7 @@ __all__ = [
     "fetch_source_content",
     "format_report_time_range",
     "format_report_time_span",
+    "format_digest_message",
     "format_alert_message",
     "get_source",
     "import_sources_yaml",
@@ -133,7 +137,6 @@ __all__ = [
     "news_item_entities",
     "news_item_tickers",
     "normalize_pending_raw_items",
-    "pgvector_literal",
     "purge_source",
     "queue_event_investigation_runs",
     "queue_investigation",
@@ -149,7 +152,6 @@ __all__ = [
     "run_event_investigation",
     "run_existing_investigation",
     "run_missed_catalyst_review",
-    "run_move_investigation",
     "run_pending_investigations",
     "run_investigations_concurrently",
     "run_pipeline",
@@ -160,6 +162,7 @@ __all__ = [
     "select_digest_headline",
     "select_report_time_range",
     "send_test_alert",
+    "send_digest_record",
     "set_source_enabled",
     "store_market_moves",
     "summarize_event_with_llm",

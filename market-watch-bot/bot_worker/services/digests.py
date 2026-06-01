@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
+    DigestRecord,
     EventCluster,
     EventClusterItem,
     NormalizedNewsItem,
 )
+
+if TYPE_CHECKING:
+    from bot_worker.services.alert_delivery import AlertDeliveryConfig, TelegramSender
 
 type ReportTimeRange = tuple[datetime, datetime]
 
@@ -173,3 +178,93 @@ async def digest_display_headline(
         since=since,
         until=until,
     )
+
+
+def _digest_group(event: EventCluster) -> str:
+    region = (event.regions or ["global"])[0].upper()
+    asset_class = (event.asset_classes or ["market"])[0]
+    return f"{region} / {asset_class}"
+
+
+def format_digest_message(
+    events: list[EventCluster],
+    *,
+    since: datetime,
+    until: datetime,
+) -> str:
+    lines = [
+        "[Daily Market Digest]",
+        f"Window: {format_report_time_span((since, until))}",
+    ]
+    grouped: dict[str, list[EventCluster]] = {}
+    for event in events:
+        grouped.setdefault(_digest_group(event), []).append(event)
+    for group in sorted(grouped):
+        lines.extend(["", group])
+        for event in sorted(grouped[group], key=lambda item: item.final_score, reverse=True):
+            lines.append(
+                f"- {event.final_score} {event.status}: {event.canonical_headline}"
+                f" ({event.source_count} sources)"
+            )
+    if not events:
+        lines.extend(["", "No digest-worthy events in this window."])
+    return "\n".join(lines)
+
+
+async def build_digest_record(
+    session: AsyncSession,
+    *,
+    since: datetime,
+    until: datetime,
+    threshold: int,
+    limit: int = 50,
+) -> DigestRecord:
+    events = [
+        event
+        for event in await digest_preview(session, limit=limit, since=since, until=until)
+        if event.final_score >= threshold
+    ]
+    digest = DigestRecord(
+        digest_type="daily",
+        window_start=since,
+        window_end=until,
+        content=format_digest_message(events, since=since, until=until),
+        status="built",
+        event_count=len(events),
+    )
+    session.add(digest)
+    await session.flush()
+    return digest
+
+
+async def send_digest_record(
+    session: AsyncSession,
+    digest: DigestRecord,
+    config: AlertDeliveryConfig,
+    *,
+    send_telegram_message: TelegramSender | None = None,
+) -> DigestRecord:
+    if send_telegram_message is None:
+        from bot_worker.services.alert_delivery import send_telegram_message as telegram_sender
+        send_telegram_message = telegram_sender
+    if config.channel != "telegram" or not config.telegram_configured:
+        digest.status = "skipped"
+        digest.error_message = "Telegram digest delivery is not configured"
+        return digest
+    assert config.telegram_chat_id is not None
+    digest.channel = "telegram"
+    digest.recipient = config.telegram_chat_id
+    try:
+        digest.provider_response = await send_telegram_message(
+            config,
+            config.telegram_chat_id,
+            digest.content,
+        )
+    except Exception as exc:  # noqa: BLE001 - digest history should record delivery failure
+        digest.status = "failed"
+        digest.error_message = str(exc)
+        return digest
+    digest.status = "sent"
+    digest.sent_at = datetime.now(UTC)
+    await session.flush()
+    return digest

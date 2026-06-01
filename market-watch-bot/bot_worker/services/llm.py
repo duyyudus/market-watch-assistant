@@ -35,6 +35,7 @@ from bot_worker.llm import (
 )
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.market import market_move_score_for_cluster
+from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 
 
 async def latest_successful_llm_analysis(
@@ -127,6 +128,8 @@ def _news_classification_snapshot(item: NormalizedNewsItem) -> dict[str, object]
         "source_score": item.source_score,
         "region": item.region,
         "asset_classes": item.asset_classes,
+        "language": item.language,
+        "raw_content_available": bool(getattr(item, "raw_content", None)),
     }
 
 
@@ -514,13 +517,19 @@ async def score_event_with_llm(
     if run is not None and run.status == "succeeded" and not force:
         return run
     move_score = await market_move_score_for_cluster(session, event)
+    watch_entries = await watchlist_entries(session)
     base_score = score_event(
         ScoreInput(
             top_source_score=event.top_source_score,
             source_count=event.source_count,
-            watchlist_tier="A" if event.affected_entities else None,
+            watchlist_tier=tier_for_entities(
+                entities=event.affected_entities or [],
+                tickers=event.affected_tickers or [],
+                entries=watch_entries,
+            ),
             is_duplicate=False,
             is_stale=event.status == "stale",
+            unique_high_quality_source_count=int(event.high_quality_source_count or 0),
             status=event.status,
             market_move_score=move_score,
         )
@@ -578,6 +587,7 @@ async def enrich_event_clusters_with_llm(
     if event_cluster_id is not None:
         stmt = select(EventCluster).where(EventCluster.id == event_cluster_id)
     clusters = list((await session.scalars(stmt)).all())
+    watch_entries = await watchlist_entries(session)
     provider = llm_provider(config)
     work_items: list[tuple[LLMAnalysisRun, str]] = []
     for cluster in clusters:
@@ -595,9 +605,14 @@ async def enrich_event_clusters_with_llm(
             ScoreInput(
                 top_source_score=cluster.top_source_score,
                 source_count=cluster.source_count,
-                watchlist_tier="A" if cluster.affected_entities else None,
+                watchlist_tier=tier_for_entities(
+                    entities=cluster.affected_entities or [],
+                    tickers=cluster.affected_tickers or [],
+                    entries=watch_entries,
+                ),
                 is_duplicate=False,
                 is_stale=cluster.status == "stale",
+                unique_high_quality_source_count=int(cluster.high_quality_source_count or 0),
                 status=cluster.status,
                 market_move_score=move_score,
             )

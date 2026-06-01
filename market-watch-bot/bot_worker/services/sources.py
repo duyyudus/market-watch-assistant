@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
 
@@ -31,6 +33,8 @@ from bot_worker.normalize import (
 from bot_worker.rss import parse_rss_items
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
 from bot_worker.services.common import _json_safe, _published_to_string, _result_rowcount
+from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, request_with_retry
+from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 
 
 def _source_from_starter(source: StarterSource) -> NewsSource:
@@ -186,13 +190,19 @@ async def _refresh_event_cluster_after_source_purge(session: AsyncSession, clust
         affected_entities = sorted(cluster.affected_entities)
     if not affected_tickers:
         affected_tickers = sorted(cluster.affected_tickers)
+    watch_entries = await watchlist_entries(session)
     score = score_event(
         ScoreInput(
             top_source_score=max(item.source_score for item in items),
             source_count=len(items),
-            watchlist_tier="A" if affected_entities else None,
+            watchlist_tier=tier_for_entities(
+                entities=affected_entities,
+                tickers=affected_tickers,
+                entries=watch_entries,
+            ),
             is_duplicate=False,
             is_stale=cluster.status == "stale",
+            unique_high_quality_source_count=sum(1 for item in items if item.source_score >= 75),
             status=cluster.status,
         )
     )
@@ -206,6 +216,7 @@ async def _refresh_event_cluster_after_source_purge(session: AsyncSession, clust
     cluster.affected_entities = affected_entities
     cluster.affected_tickers = affected_tickers
     cluster.source_count = len(items)
+    cluster.high_quality_source_count = sum(1 for item in items if item.source_score >= 75)
     cluster.top_source_score = max(item.source_score for item in items)
     cluster.confirmation_score = score.confidence_score
     cluster.novelty_score = score.novelty_score
@@ -358,12 +369,20 @@ async def purge_source(session: AsyncSession, identifier: str) -> dict[str, int 
     return {"status": "purged", "source": source_name, **deleted}
 async def fetch_source_content(source: NewsSource) -> tuple[int, str]:
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        response = await client.get(source.url)
-        response.raise_for_status()
+        response = await request_with_retry(
+            provider="rss",
+            method="GET",
+            url=source.url,
+            retry_policy=PROVIDER_RETRY_POLICIES["rss"],
+            client=client,
+        )
         return response.status_code, response.text
 async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, int | str]:
     started = perf_counter()
     try:
+        decision = should_poll_source(source)
+        if not decision.should_poll:
+            return {"status": "skipped", "reason": decision.reason}
         http_status, body = await fetch_source_content(source)
         items = parse_rss_items(body)
         inserted = 0
@@ -393,8 +412,10 @@ async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, i
                 content_hash=content_hash(body),
             )
         )
+        mark_source_fetch_result(source, status="success", inserted=inserted)
         return {"status": "success", "items": len(items), "inserted": inserted}
     except Exception as exc:  # noqa: BLE001 - command should persist source diagnostics
+        mark_source_fetch_result(source, status="failed", inserted=0)
         session.add(
             SourceFetchLog(
                 source_id=source.id,
@@ -410,3 +431,59 @@ def import_sources_yaml(path: Path) -> list[dict[str, object]]:
     if not isinstance(sources, list):
         raise ValueError("sources file must contain a sources list")
     return [source for source in sources if isinstance(source, dict)]
+@dataclass(frozen=True)
+class SourcePollingDecision:
+    should_poll: bool
+    reason: str
+
+
+BURST_POLLING_INTERVAL_SECONDS = 60
+BURST_WINDOW = timedelta(minutes=30)
+FAILURE_COOLDOWN = timedelta(minutes=30)
+
+
+def _ensure_aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def should_poll_source(source: NewsSource, *, now: datetime | None = None) -> SourcePollingDecision:
+    current = now or datetime.now(UTC)
+    disabled_until = _ensure_aware(getattr(source, "disabled_until_at", None))
+    if disabled_until is not None and disabled_until > current:
+        return SourcePollingDecision(False, "failure_cooldown")
+    last_fetched_at = _ensure_aware(getattr(source, "last_fetched_at", None))
+    if last_fetched_at is None:
+        return SourcePollingDecision(True, "never_fetched")
+    burst_until = _ensure_aware(getattr(source, "burst_until_at", None))
+    interval = (
+        BURST_POLLING_INTERVAL_SECONDS
+        if burst_until is not None and burst_until > current
+        else source.polling_interval_seconds
+    )
+    if current - last_fetched_at < timedelta(seconds=interval):
+        return SourcePollingDecision(False, "interval_not_elapsed")
+    return SourcePollingDecision(True, "due")
+
+
+def mark_source_fetch_result(
+    source: NewsSource,
+    *,
+    now: datetime | None = None,
+    status: str,
+    inserted: int,
+) -> None:
+    current = now or datetime.now(UTC)
+    source.last_fetched_at = current
+    if status == "success":
+        source.consecutive_failure_count = 0
+        source.disabled_until_at = None
+        if inserted > 0:
+            source.burst_until_at = current + BURST_WINDOW
+        return
+    source.consecutive_failure_count = int(getattr(source, "consecutive_failure_count", 0) or 0) + 1
+    if source.consecutive_failure_count >= 3:
+        source.disabled_until_at = current + FAILURE_COOLDOWN

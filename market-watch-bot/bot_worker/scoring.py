@@ -10,6 +10,7 @@ class ScoreInput:
     watchlist_tier: str | None
     is_duplicate: bool
     is_stale: bool
+    unique_high_quality_source_count: int = 0
     status: str = "reported"
     market_move_score: int | None = None
 
@@ -46,6 +47,8 @@ def score_event(input_data: ScoreInput) -> ScoreBreakdown:
     relevance_by_tier = {"S": 100, "A": 95, "B": 75, "C": 55, "D": 35}
     source_score = min(100, max(0, input_data.top_source_score))
     confidence = min(95, 45 + (input_data.source_count * 15))
+    if input_data.unique_high_quality_source_count >= 2:
+        confidence = min(100, max(confidence, 80 + input_data.unique_high_quality_source_count * 5))
     if input_data.status in {"confirmed", "official"}:
         confidence = max(confidence, 90)
     impact = 75 if source_score >= 75 else 55

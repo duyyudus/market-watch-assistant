@@ -75,6 +75,10 @@ class NewsSource(Base):
     paywall_risk: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
     requires_auth: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     parser_type: Mapped[str] = mapped_column(String(32), nullable=False, default="rss")
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consecutive_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    burst_until_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_until_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -125,6 +129,7 @@ class NormalizedNewsItem(Base):
     raw_item_id: Mapped[str | None] = mapped_column(ForeignKey("raw_news_items.id"))
     title: Mapped[str] = mapped_column(Text, nullable=False)
     snippet: Mapped[str | None] = mapped_column(Text)
+    raw_content: Mapped[str | None] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     canonical_url: Mapped[str | None] = mapped_column(Text)
     source_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -177,6 +182,7 @@ class EventCluster(Base):
     affected_entities: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     affected_tickers: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    high_quality_source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     top_source_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     confirmation_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     novelty_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -364,6 +370,39 @@ class AlertDeliveryRecord(Base):
     provider_response: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)
     attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProviderCooldown(Base):
+    __tablename__ = "provider_cooldowns"
+
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="cooling_down")
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class DigestRecord(Base):
+    __tablename__ = "digests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("digest"))
+    digest_type: Mapped[str] = mapped_column(String(32), nullable=False, default="daily")
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="built")
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    channel: Mapped[str | None] = mapped_column(String(32))
+    recipient: Mapped[str | None] = mapped_column(String(255))
+    provider_response: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -272,16 +272,28 @@ def build_event_analysis_prompt(
 
 
 def build_news_classification_prompt(item: NormalizedNewsItem) -> str:
+    language_guidance = (
+        "Vietnamese-language guidance: preserve Vietnamese company/entity names, "
+        "map common Vietnamese market terms to tickers only when explicit, and treat "
+        "VN-Index/HOSE/HNX/UPCoM as market entities."
+        if item.language.lower().startswith("vi")
+        else "Use the source language as context for entity extraction."
+    )
     return "\n".join(
         [
             "Classify this normalized market news item for a market watch bot.",
             "Return only JSON matching the requested schema.",
             "Focus on market type, actionability, actual region/assets, affected "
             "entities, and ambiguity.",
+            language_guidance,
             "",
             f"News item id: {item.id}",
             f"Title: {normalize_text(item.title)}",
             f"Snippet: {normalize_text(item.snippet) if item.snippet else ''}",
+            (
+                "Full text: "
+                f"{normalize_text(item.raw_content) if getattr(item, 'raw_content', None) else ''}"
+            ),
             f"Source: {normalize_text(item.source_name)}",
             f"Source type: {item.source_type}",
             f"Source score: {item.source_score}",
@@ -471,11 +483,24 @@ class OpenRouterChatProvider:
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
+        from bot_worker.services.external_providers import (
+            PROVIDER_RETRY_POLICIES,
+            request_with_retry,
+        )
+
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json=payload)
             try:
-                response.raise_for_status()
+                response = await request_with_retry(
+                    provider="openrouter_chat",
+                    method="POST",
+                    url=url,
+                    retry_policy=PROVIDER_RETRY_POLICIES["openrouter_chat"],
+                    client=client,
+                    headers=headers,
+                    json=payload,
+                )
             except httpx.HTTPStatusError as exc:
+                response = exc.response
                 if response.status_code == 400:
                     fallback_schema = {
                         "name": schema_name,
@@ -485,7 +510,15 @@ class OpenRouterChatProvider:
                         "type": "json_schema",
                         "json_schema": fallback_schema,
                     }
-                    response = await client.post(url, headers=headers, json=payload)
+                    response = await request_with_retry(
+                        provider="openrouter_chat",
+                        method="POST",
+                        url=url,
+                        retry_policy=PROVIDER_RETRY_POLICIES["openrouter_chat"],
+                        client=client,
+                        headers=headers,
+                        json=payload,
+                    )
                     try:
                         response.raise_for_status()
                     except httpx.HTTPStatusError as retry_exc:

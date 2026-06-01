@@ -118,9 +118,21 @@ class OpenRouterEmbeddingProvider:
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
+        from bot_worker.services.external_providers import (
+            PROVIDER_RETRY_POLICIES,
+            request_with_retry,
+        )
+
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+            response = await request_with_retry(
+                provider="openrouter_embeddings",
+                method="POST",
+                url=url,
+                retry_policy=PROVIDER_RETRY_POLICIES["openrouter_embeddings"],
+                client=client,
+                headers=headers,
+                json=payload,
+            )
         data = response.json().get("data", [])
         return [[float(value) for value in item["embedding"]] for item in data]
 

@@ -171,7 +171,7 @@ class FakeVectorQuerySession:
 
 
 @pytest.mark.asyncio
-async def test_vector_cluster_candidates_use_pgvector_literal_and_config_filters() -> None:
+async def test_vector_cluster_candidates_use_typed_vector_param_and_config_filters() -> None:
     session = FakeVectorQuerySession()
     item = NormalizedNewsItem(id="news_1", title="Oil rises", region="global")
 
@@ -198,7 +198,7 @@ async def test_vector_cluster_candidates_use_pgvector_literal_and_config_filters
         )
     ]
     assert session.params is not None
-    assert session.params["query_vector"] == "[0.1,0.2,0.3]"
+    assert session.params["query_vector"] == [0.1, 0.2, 0.3]
     assert session.params["provider"] == "local"
     assert session.params["model"] == "local-hash"
     assert session.params["version"] == "v1"

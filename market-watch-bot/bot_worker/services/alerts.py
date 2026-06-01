@@ -14,6 +14,7 @@ from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_
 from bot_worker.services.investigation import latest_successful_investigation
 from bot_worker.services.llm import latest_successful_llm_analysis
 from bot_worker.services.market import market_move_score_for_cluster
+from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 
 
 async def alert_thresholds_from_settings(
@@ -44,6 +45,7 @@ async def record_alert_decisions(session: AsyncSession) -> int:
     )
     clusters = list((await session.scalars(stmt)).all())
     thresholds, channel = await alert_thresholds_from_settings(session)
+    watch_entries = await watchlist_entries(session)
     count = 0
     for cluster in clusters:
         move_score = await market_move_score_for_cluster(session, cluster)
@@ -51,9 +53,14 @@ async def record_alert_decisions(session: AsyncSession) -> int:
             ScoreInput(
                 top_source_score=cluster.top_source_score,
                 source_count=cluster.source_count,
-                watchlist_tier="A" if cluster.affected_entities else None,
+                watchlist_tier=tier_for_entities(
+                    entities=cluster.affected_entities or [],
+                    tickers=cluster.affected_tickers or [],
+                    entries=watch_entries,
+                ),
                 is_duplicate=False,
                 is_stale=cluster.status == "stale",
+                unique_high_quality_source_count=int(cluster.high_quality_source_count or 0),
                 status=cluster.status,
                 market_move_score=move_score,
             )

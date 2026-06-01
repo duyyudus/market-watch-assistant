@@ -56,6 +56,8 @@ def market_fetch(
             window=window,
             vn_base_url=settings.market_data.vn_base_url,
             symbol_map=settings.market_data.symbol_map,
+            crypto_provider=settings.market_data.crypto_provider,
+            crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
         )
         inserted = await store_market_moves(session, moves)
         _echo_json(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import bindparam, delete, func, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from bot_worker.db.models import (
     EventClusterItem,
     NewsItemEmbedding,
     NormalizedNewsItem,
+    Vector,
     utcnow,
 )
 from bot_worker.embeddings import (
@@ -29,7 +30,12 @@ from bot_worker.events import (
 from bot_worker.llm import LLMConfig
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
 from bot_worker.services.llm import resolve_llm_cluster_decision
-from bot_worker.services.watchlists import news_item_entities, news_item_tickers, watchlist_entries
+from bot_worker.services.watchlists import (
+    news_item_entities,
+    news_item_tickers,
+    tier_for_entities,
+    watchlist_entries,
+)
 from bot_worker.watchlist import WatchlistEntry, match_watchlist
 
 
@@ -41,8 +47,14 @@ class ClusterBuildStats:
     llm_cluster_attaches: int = 0
 
 
-def pgvector_literal(vector: list[float]) -> str:
-    return "[" + ",".join(str(float(value)) for value in vector) + "]"
+def validate_pgvector(vector: list[float], *, dimensions: int | None = None) -> None:
+    if not vector:
+        raise ValueError("vector must not be empty")
+    if dimensions is not None and len(vector) != dimensions:
+        raise ValueError(f"vector dimensions mismatch: expected {dimensions}, got {len(vector)}")
+    for value in vector:
+        if not isinstance(value, int | float):
+            raise ValueError("vector values must be numeric")
 
 
 def _result_rowcount(result: object) -> int:
@@ -60,6 +72,7 @@ async def vector_cluster_candidates_for_item(
     embedding = await session.get(NewsItemEmbedding, news_item.id)
     if embedding is None:
         return []
+    validate_pgvector(embedding.vector, dimensions=config.dimensions)
 
     cutoff = utcnow() - timedelta(days=lookback_days)
     stmt = sql_text(
@@ -80,12 +93,14 @@ async def vector_cluster_candidates_for_item(
         ORDER BY ece.vector <=> CAST(:query_vector AS vector)
         LIMIT :limit
         """
+    ).bindparams(
+        bindparam("query_vector", type_=Vector(config.dimensions)),
     )
     rows = (
         await session.execute(
             stmt,
             {
-                "query_vector": pgvector_literal(embedding.vector),
+                "query_vector": embedding.vector,
                 "cutoff": cutoff,
                 "provider": config.provider,
                 "model": config.model,
@@ -118,14 +133,27 @@ def _effective_news_time() -> object:
     )
 
 
-def _rescore_cluster(cluster: EventCluster) -> None:
+def _rescore_cluster(
+    cluster: EventCluster,
+    watch_entries: list[WatchlistEntry] | None = None,
+) -> None:
+    tier = (
+        tier_for_entities(
+            entities=cluster.affected_entities or [],
+            tickers=cluster.affected_tickers or [],
+            entries=watch_entries,
+        )
+        if watch_entries is not None
+        else ("A" if cluster.affected_entities else None)
+    )
     score = score_event(
         ScoreInput(
             top_source_score=cluster.top_source_score,
             source_count=cluster.source_count,
-            watchlist_tier="A" if cluster.affected_entities else None,
+            watchlist_tier=tier,
             is_duplicate=False,
             is_stale=False,
+            unique_high_quality_source_count=int(cluster.high_quality_source_count or 0),
         )
     )
     cluster.confirmation_score = score.confidence_score
@@ -184,6 +212,7 @@ async def _attach_news_item_to_cluster(
     entities: list[str],
     tickers: list[str],
     similarity: float,
+    watch_entries: list[WatchlistEntry],
 ) -> None:
     session.add(
         EventClusterItem(
@@ -198,8 +227,10 @@ async def _attach_news_item_to_cluster(
     cluster.affected_entities = sorted(set(cluster.affected_entities or []) | set(entities))
     cluster.affected_tickers = sorted(set(cluster.affected_tickers or []) | set(tickers))
     cluster.source_count += 1
+    if item.source_score >= 75:
+        cluster.high_quality_source_count = int(cluster.high_quality_source_count or 0) + 1
     cluster.top_source_score = max(cluster.top_source_score, item.source_score)
-    _rescore_cluster(cluster)
+    _rescore_cluster(cluster, watch_entries)
     await session.execute(
         delete(EventClusterEmbedding).where(EventClusterEmbedding.event_cluster_id == cluster.id)
     )
@@ -213,19 +244,26 @@ async def _candidate_from_item(
     matches = match_watchlist(f"{item.title} {item.snippet or ''}", watch_entries)
     stored_entities = await news_item_entities(session, item.id)
     stored_tickers = await news_item_tickers(session, item.id)
+    entities = stored_entities or [match.name for match in matches]
+    tickers = stored_tickers or [match.symbol for match in matches if match.symbol]
     return EventCandidate(
         news_id=item.id,
         title=item.title,
         source_score=item.source_score,
-        entities=stored_entities or [match.name for match in matches],
-        tickers=stored_tickers or [match.symbol for match in matches if match.symbol],
+        entities=entities,
+        tickers=tickers,
         region=item.region,
         asset_classes=item.asset_classes,
         published_at=item.published_at,
+        watchlist_tier=tier_for_entities(entities=entities, tickers=tickers, entries=watch_entries),
     )
 
 
-def _update_cluster_from_draft(cluster: EventCluster, draft: EventClusterDraft) -> None:
+def _update_cluster_from_draft(
+    cluster: EventCluster,
+    draft: EventClusterDraft,
+    watch_entries: list[WatchlistEntry],
+) -> None:
     cluster.canonical_headline = draft.canonical_headline
     cluster.first_seen_at = cluster.first_seen_at or utcnow()
     cluster.last_updated_at = utcnow()
@@ -235,14 +273,21 @@ def _update_cluster_from_draft(cluster: EventCluster, draft: EventClusterDraft) 
     cluster.affected_entities = sorted(draft.entities)
     cluster.affected_tickers = sorted(draft.tickers)
     cluster.source_count = draft.source_count
+    cluster.high_quality_source_count = draft.high_quality_source_count
     cluster.top_source_score = draft.top_source_score
     score = score_event(
         ScoreInput(
             top_source_score=draft.top_source_score,
             source_count=draft.source_count,
-            watchlist_tier="A" if draft.entities else None,
+            watchlist_tier=draft.watchlist_tier
+            or tier_for_entities(
+                entities=list(draft.entities),
+                tickers=list(draft.tickers),
+                entries=watch_entries,
+            ),
             is_duplicate=False,
             is_stale=False,
+            unique_high_quality_source_count=draft.high_quality_source_count,
         )
     )
     cluster.confirmation_score = score.confidence_score
@@ -359,7 +404,7 @@ async def recluster_recent_event_clusters(
         )
     )
     for cluster, draft in zip(clusters, drafts, strict=False):
-        _update_cluster_from_draft(cluster, draft)
+        _update_cluster_from_draft(cluster, draft, watch_entries)
         for news_id in draft.news_ids:
             session.add(EventClusterItem(event_cluster_id=cluster.id, news_item_id=news_id))
     for cluster in clusters[len(drafts) :]:
@@ -430,6 +475,7 @@ async def build_event_clusters(
                     entities=entities,
                     tickers=tickers,
                     similarity=vector_candidate.similarity,
+                    watch_entries=watch_entries,
                 )
                 attached_existing += 1
                 attached = True
@@ -470,6 +516,7 @@ async def build_event_clusters(
                     entities=entities,
                     tickers=tickers,
                     similarity=vector_candidate.similarity,
+                    watch_entries=watch_entries,
                 )
                 attached_existing += 1
                 llm_cluster_attaches += 1
@@ -492,15 +539,22 @@ async def build_event_clusters(
             affected_entities=sorted(draft.entities),
             affected_tickers=sorted(draft.tickers),
             source_count=draft.source_count,
+            high_quality_source_count=draft.high_quality_source_count,
             top_source_score=draft.top_source_score,
         )
         score = score_event(
             ScoreInput(
                 top_source_score=draft.top_source_score,
                 source_count=draft.source_count,
-                watchlist_tier="A" if draft.entities else None,
+                watchlist_tier=draft.watchlist_tier
+                or tier_for_entities(
+                    entities=list(draft.entities),
+                    tickers=list(draft.tickers),
+                    entries=watch_entries,
+                ),
                 is_duplicate=False,
                 is_stale=False,
+                unique_high_quality_source_count=draft.high_quality_source_count,
             )
         )
         cluster.confirmation_score = score.confidence_score

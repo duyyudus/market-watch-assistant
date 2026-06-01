@@ -11,6 +11,7 @@ from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import LLMConfig
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pending_alerts
+from bot_worker.services.digests import build_digest_record, send_digest_record
 from bot_worker.services.events import recluster_recent_event_clusters
 from bot_worker.services.investigation import run_event_investigation
 from bot_worker.services.jobs import record_job_run
@@ -23,11 +24,13 @@ from bot_worker.services.market import (
 from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
 from bot_worker.services.sources import fetch_source
+from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 
 ALLOWED_COMMAND_TYPES = {
     "pipeline.run",
     "source.fetch",
     "alert.dispatch",
+    "digest.send",
     "event.rescore",
     "event.mark",
     "event.recluster",
@@ -75,13 +78,19 @@ async def claim_pending_bot_command(session: AsyncSession) -> BotCommand | None:
 
 async def score_event_cluster(session: AsyncSession, event: EventCluster):
     market_score = await market_move_score_for_cluster(session, event)
+    watch_entries = await watchlist_entries(session)
     return score_event(
         ScoreInput(
             top_source_score=event.top_source_score,
             source_count=event.source_count,
-            watchlist_tier="A" if event.affected_entities else None,
+            watchlist_tier=tier_for_entities(
+                entities=event.affected_entities or [],
+                tickers=event.affected_tickers or [],
+                entries=watch_entries,
+            ),
             is_duplicate=False,
             is_stale=event.status == "stale",
+            unique_high_quality_source_count=int(event.high_quality_source_count or 0),
             status=event.status,
             market_move_score=market_score,
         )
@@ -151,6 +160,30 @@ async def execute_bot_command(
         )
         return dict(result)
 
+    if command_type == "digest.send":
+        until = utcnow()
+        since = until - timedelta(hours=int(payload.get("hours", 24)))
+        digest = await build_digest_record(
+            session,
+            since=since,
+            until=until,
+            threshold=settings.alerts.digest_threshold,
+            limit=int(payload.get("limit", 50)),
+        )
+        if bool(payload.get("dry_run", False)):
+            return {
+                "digest_id": digest.id,
+                "status": digest.status,
+                "event_count": digest.event_count,
+                "content": digest.content,
+            }
+        digest = await send_digest_record(
+            session,
+            digest,
+            AlertDeliveryConfig.from_settings(settings, channel="telegram"),
+        )
+        return {"digest_id": digest.id, "status": digest.status, "event_count": digest.event_count}
+
     if command_type == "event.rescore":
         event_id = str(payload["event_id"])
         event = await session.get(EventCluster, event_id)
@@ -208,6 +241,8 @@ async def execute_bot_command(
                 window=window,
                 vn_base_url=settings.market_data.vn_base_url,
                 symbol_map=settings.market_data.symbol_map,
+                crypto_provider=settings.market_data.crypto_provider,
+                crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
             )
             inserted = await store_market_moves(session, moves)
             return {"inserted": inserted, "symbols": symbols, "window": window}
