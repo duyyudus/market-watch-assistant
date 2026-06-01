@@ -25,6 +25,20 @@ export type Source = {
   source_score: number;
 };
 
+export type SourceHealth = {
+  source_id: string;
+  name: string;
+  enabled: boolean;
+  category: string;
+  region: string;
+  health_status: "healthy" | "degraded" | "failing";
+  latest_status?: string | null;
+  last_fetched_at?: string | null;
+  consecutive_failure_count: number;
+  average_latency_ms?: number | null;
+  daily_item_counts: Array<{ date: string; count: number }>;
+};
+
 export type SourcePayload = {
   name: string;
   url: string;
@@ -52,6 +66,76 @@ export type EventCluster = {
   last_updated_at?: string | null;
   latest_alert?: AlertDecision | null;
   latest_investigation?: { id: string; status: string; result?: unknown } | null;
+};
+
+export type EventTimelineItem = {
+  news_item_id: string;
+  title: string;
+  source_name: string;
+  source_score: number;
+  url: string;
+  published_at?: string | null;
+  fetched_at?: string | null;
+  added_at?: string | null;
+  relation_type: string;
+  similarity_score?: number | null;
+};
+
+export type EventMarketMove = {
+  id: string;
+  asset_symbol: string;
+  asset_class: string;
+  exchange?: string | null;
+  timestamp: string;
+  window: string;
+  price_change_pct: number;
+  volume_change_pct?: number | null;
+  value_traded_change_pct?: number | null;
+  z_score?: number | null;
+};
+
+export type EventLLMRun = {
+  id: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  result?: Record<string, any> | null;
+  status: string;
+  error_message?: string | null;
+  usage?: Record<string, any> | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
+export type EventScoreHistoryItem = {
+  id: string;
+  event_cluster_id: string;
+  score_breakdown: Record<string, any>;
+  final_score: number;
+  created_at: string;
+};
+
+export type EventDetail = EventCluster & {
+  top_source_score: number;
+  confirmation_score: number;
+  novelty_score: number;
+  urgency_score: number;
+  market_impact_score: number;
+  relevance_score: number;
+  first_seen_at?: string | null;
+  latest_investigation?: {
+    id: string;
+    status: string;
+    trigger_reason?: string | null;
+    result?: Record<string, any> | null;
+    evidence?: Array<Record<string, any>>;
+    error_message?: string | null;
+    created_at?: string | null;
+  } | null;
+  score_history: EventScoreHistoryItem[];
+  timeline: EventTimelineItem[];
+  llm_runs: EventLLMRun[];
+  market_moves: EventMarketMove[];
 };
 
 export type NewsItem = {
@@ -302,6 +386,10 @@ export function buildRequestHeaders(token: string | undefined): Record<string, s
   return headers;
 }
 
+export function eventStreamUrl(): string {
+  return `${API_BASE_URL}/events/stream`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...buildRequestHeaders(API_AUTH_TOKEN), ...(init?.headers ?? {}) },
@@ -320,8 +408,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   botStatus: () => request<BotStatus>("/bot/status"),
   sources: () => request<ListEnvelope<Source>>("/sources"),
+  sourceHealth: () => request<ListEnvelope<SourceHealth>>("/sources/health"),
   events: () => request<ListEnvelope<EventCluster>>("/events?limit=100"),
-  event: (id: string) => request<EventCluster>(`/events/${id}`),
+  event: (id: string) => request<EventDetail>(`/events/${id}`),
   news: () => request<ListEnvelope<NewsItem>>("/news?limit=100"),
   alerts: () => request<ListEnvelope<AlertDecision>>("/alerts?limit=100"),
   alertChannels: () => request<ListEnvelope<AlertChannel>>("/alert-channels"),

@@ -7,9 +7,11 @@ import type {
   BotStatus,
   ConfigurationPresets,
   EventCluster,
+  EventDetail,
   JobRun,
   NewsItem,
   Source,
+  SourceHealth,
   WatchlistEntry,
 } from "../api";
 
@@ -28,7 +30,9 @@ export type View =
 export type DashboardState = {
   status: BotStatus | null;
   sources: Source[];
+  sourceHealth: SourceHealth[];
   events: EventCluster[];
+  eventDetails: Record<string, EventDetail>;
   news: NewsItem[];
   alerts: AlertDecision[];
   alertChannels: AlertChannel[];
@@ -43,7 +47,9 @@ export type DashboardState = {
 export type ResourceKey =
   | "status"
   | "sources"
+  | "sourceHealth"
   | "events"
+  | "eventDetail"
   | "news"
   | "alerts"
   | "alertChannels"

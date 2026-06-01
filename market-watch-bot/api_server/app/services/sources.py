@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import UTC, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.app.schemas import SourceCreate, SourceUpdate
-from common.db.models import NewsSource, SourceFetchLog
+from api_server.app.schemas import SourceCreate, SourceHealthRead, SourceUpdate
+from common.db.models import NewsSource, SourceFetchLog, utcnow
 
 
 async def list_sources(session: AsyncSession, *, enabled: bool | None) -> list[NewsSource]:
@@ -70,3 +73,56 @@ async def list_source_fetch_logs(
         ).all()
     )
     return rows, len(rows)
+
+
+async def list_source_health(session: AsyncSession) -> list[SourceHealthRead]:
+    sources = await list_sources(session, enabled=None)
+    since = utcnow() - timedelta(days=7)
+    logs = list(
+        (
+            await session.scalars(
+                select(SourceFetchLog)
+                .where(SourceFetchLog.fetched_at >= since)
+                .order_by(SourceFetchLog.fetched_at.desc())
+            )
+        ).all()
+    )
+    logs_by_source: dict[str, list[SourceFetchLog]] = defaultdict(list)
+    for log in logs:
+        logs_by_source[log.source_id].append(log)
+
+    rows: list[SourceHealthRead] = []
+    for source in sources:
+        source_logs = logs_by_source.get(source.id, [])
+        latest = source_logs[0] if source_logs else None
+        durations = [log.duration_ms for log in source_logs if log.duration_ms is not None]
+        daily_counts: dict[str, int] = defaultdict(int)
+        for log in source_logs:
+            day = log.fetched_at.astimezone(UTC).date().isoformat()
+            daily_counts[day] += int(log.item_count or 0)
+        if not source.enabled:
+            health_status = "degraded"
+        elif source.consecutive_failure_count >= 3 or latest and latest.status == "error":
+            health_status = "failing"
+        elif source.consecutive_failure_count > 0:
+            health_status = "degraded"
+        else:
+            health_status = "healthy"
+        rows.append(
+            SourceHealthRead(
+                source_id=source.id,
+                name=source.name,
+                enabled=source.enabled,
+                category=source.category,
+                region=source.region,
+                health_status=health_status,
+                latest_status=latest.status if latest else None,
+                last_fetched_at=latest.fetched_at if latest else source.last_fetched_at,
+                consecutive_failure_count=source.consecutive_failure_count,
+                average_latency_ms=round(sum(durations) / len(durations)) if durations else None,
+                daily_item_counts=[
+                    {"date": day, "count": daily_counts[day]} for day in sorted(daily_counts)
+                ],
+            )
+        )
+    return rows

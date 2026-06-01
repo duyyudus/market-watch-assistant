@@ -11,14 +11,18 @@ from api_server.app.db import Base, get_session
 from api_server.app.main import app
 from common.config import Settings
 from common.db.models import (
+    AgentInvestigation,
     AlertChannel,
     AlertSuppressionRule,
     AppSetting,
+    BotCommand,
     EventCluster,
     EventClusterEmbedding,
+    EventClusterItem,
     EventScoreHistory,
     JobRun,
     LLMAnalysisRun,
+    MarketMove,
     MissedCatalystReview,
     NewsItemEmbedding,
     NewsSource,
@@ -67,11 +71,20 @@ async def client():
             regions=["us"],
             asset_classes=["global_macro"],
             affected_entities=["Federal Reserve"],
-            affected_tickers=[],
+            affected_tickers=["SPY"],
             source_count=2,
             top_source_score=100,
+            confirmation_score=88,
+            novelty_score=85,
+            urgency_score=80,
+            market_impact_score=72,
+            relevance_score=100,
             final_score=84,
             alert_level="immediate_alert",
+            first_seen_at=datetime(2026, 5, 29, 13, 0, tzinfo=UTC),
+            last_updated_at=datetime(2026, 5, 29, 13, 10, tzinfo=UTC),
+            created_at=datetime(2026, 5, 29, 13, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 29, 13, 10, tzinfo=UTC),
         )
         news = NormalizedNewsItem(
             id="news_1",
@@ -94,6 +107,7 @@ async def client():
             reason="score_above_immediate_threshold",
             score_breakdown={"final_score": 84},
             channel="telegram",
+            created_at=datetime(2026, 5, 29, 13, 5, tzinfo=UTC),
         )
         channel = AlertChannel(
             id="chan_1",
@@ -117,6 +131,15 @@ async def client():
             result={"clusters": 1},
             started_at=datetime(2026, 5, 29, tzinfo=UTC),
             completed_at=datetime(2026, 5, 29, tzinfo=UTC),
+        )
+        command = BotCommand(
+            id="cmd_1",
+            command_type="pipeline.run",
+            status="succeeded",
+            payload={"dry_run": True},
+            result={"event_clusters": 1},
+            created_at=datetime(2026, 5, 29, 13, 2, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 29, 13, 3, tzinfo=UTC),
         )
         watch = WatchlistEntity(
             id="watch_1",
@@ -191,12 +214,33 @@ async def client():
             status="success",
             duration_ms=120,
             item_count=5,
+            fetched_at=datetime(2026, 5, 29, 12, 55, tzinfo=UTC),
+        )
+        cluster_item = EventClusterItem(
+            event_cluster_id="evt_1",
+            news_item_id="news_1",
+            relation_type="seed",
+            similarity_score=91,
+            added_at=datetime(2026, 5, 29, 13, 1, tzinfo=UTC),
         )
         score_history = EventScoreHistory(
             id="score_1",
             event_cluster_id="evt_1",
-            score_breakdown={"relevance": 10},
+            score_breakdown={
+                "source_score": 100,
+                "impact_score": 75,
+                "relevance_score": 100,
+                "novelty_score": 85,
+                "urgency_score": 80,
+                "market_move_score": 72,
+                "confidence_score": 88,
+                "duplicate_penalty": 0,
+                "noise_penalty": 0,
+                "stale_penalty": 0,
+                "final_score": 84,
+            },
             final_score=84,
+            created_at=datetime(2026, 5, 29, 13, 4, tzinfo=UTC),
         )
         catalyst = MissedCatalystReview(
             id="review_1",
@@ -226,14 +270,35 @@ async def client():
         )
         llm_run = LLMAnalysisRun(
             id="llm_1",
-            target_type="event",
+            target_type="event_cluster",
             target_id="evt_1",
             provider="openai",
             model="gpt-4o",
             prompt_version="1",
             prompt_hash="phash",
             status="succeeded",
+            result={"summary": "Less hawkish Fed path.", "risk_flags": ["rates"]},
             usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        )
+        investigation = AgentInvestigation(
+            id="inv_1",
+            target_type="event_cluster",
+            target_id="evt_1",
+            trigger_reason="dashboard_test",
+            status="succeeded",
+            evidence=[{"source": "official", "title": "Fed statement"}],
+            result={"suggested_action": "monitor duration exposure"},
+            created_at=datetime(2026, 5, 29, 13, 6, tzinfo=UTC),
+        )
+        market_move = MarketMove(
+            id="move_1",
+            asset_symbol="SPY",
+            asset_class="equity",
+            exchange="NYSE",
+            timestamp=datetime(2026, 5, 29, 13, 10, tzinfo=UTC),
+            window="1h",
+            price_change_pct=1.7,
+            volume_change_pct=22.5,
         )
         retention = RetentionJob(
             id="retention_1",
@@ -241,9 +306,9 @@ async def client():
             deleted_counts={"news": 10},
         )
         session.add_all([
-            source, event, news, alert, channel, suppression_rule, job, watch, presets,
-            fetch_log, score_history, catalyst, news_embedding,
-            event_embedding, llm_run, retention
+            source, event, news, alert, channel, suppression_rule, job, command, watch, presets,
+            fetch_log, cluster_item, score_history, catalyst, news_embedding,
+            event_embedding, llm_run, investigation, market_move, retention
         ])
         await session.commit()
 
@@ -303,6 +368,68 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
     rules = await client.get("/alert-suppression-rules")
     assert rules.status_code == 200
     assert rules.json()["items"][0]["rule_type"] == "quiet_hours"
+
+
+@pytest.mark.asyncio
+async def test_event_detail_includes_timeline_analysis_investigation_and_market_moves(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/events/evt_1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "evt_1"
+    assert payload["timeline"][0]["news_item_id"] == "news_1"
+    assert payload["timeline"][0]["title"] == "Fed signals a slower rate path"
+    assert payload["timeline"][0]["source_name"] == "Federal Reserve"
+    assert payload["score_history"][0]["score_breakdown"]["market_move_score"] == 72
+    assert payload["llm_runs"][0]["id"] == "llm_1"
+    assert payload["llm_runs"][0]["result"]["summary"] == "Less hawkish Fed path."
+    assert payload["latest_investigation"]["id"] == "inv_1"
+    assert payload["latest_investigation"]["result"]["suggested_action"] == (
+        "monitor duration exposure"
+    )
+    assert payload["market_moves"][0]["asset_symbol"] == "SPY"
+    assert payload["market_moves"][0]["price_change_pct"] == 1.7
+
+
+@pytest.mark.asyncio
+async def test_source_health_endpoint_reports_status_latency_and_daily_counts(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/sources/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    source = payload["items"][0]
+    assert source["source_id"] == "src_1"
+    assert source["name"] == "Federal Reserve"
+    assert source["health_status"] == "healthy"
+    assert source["latest_status"] == "success"
+    assert source["average_latency_ms"] == 120
+    assert source["consecutive_failure_count"] == 0
+    assert source["daily_item_counts"] == [{"date": "2026-05-29", "count": 5}]
+
+
+@pytest.mark.asyncio
+async def test_event_stream_emits_heartbeat_and_existing_change_events(client: AsyncClient) -> None:
+    async with client.stream("GET", "/events/stream?replay=true&limit=4") as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = ""
+        async for chunk in response.aiter_text():
+            body += chunk
+            if body.count("\n\n") >= 4:
+                break
+
+    assert "event: heartbeat" in body
+    assert "event: alert.created" in body
+    assert "event: pipeline.completed" in body
+    assert "event: command.updated" in body
+    assert '"id":"alert_1"' in body
+    assert '"id":"jobrun_1"' in body
+    assert '"id":"cmd_1"' in body
 
 
 @pytest.mark.asyncio
@@ -818,7 +945,7 @@ async def test_maintenance_endpoints(client: AsyncClient) -> None:
     assert data["total"] == 1
     assert data["items"][0]["id"] == "score_1"
     assert data["items"][0]["final_score"] == 84
-    assert data["items"][0]["score_breakdown"] == {"relevance": 10}
+    assert data["items"][0]["score_breakdown"]["relevance_score"] == 100
 
     # 3. Missed Catalysts
     response = await client.get("/maintenance/catalysts")

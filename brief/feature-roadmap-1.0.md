@@ -223,6 +223,8 @@ A dedicated view showing per-source operational health:
 - Color-coded status: green (healthy), yellow (degraded), red (failing)
 - Quick action: test fetch, enable/disable, edit settings
 
+This view should be a sub-page/tab inside the main 'Sources' page.
+
 ### 4.4 Scoring Explanation Panel (Priority: P2)
 
 For each event, show a visual breakdown of how its score was calculated:
@@ -238,12 +240,13 @@ Before SSE is available, add a configurable auto-refresh interval:
 - Use `setInterval` with the existing `load()` function
 - Persist preference in `localStorage`
 
-### 4.6 Mobile-Responsive Layout (Priority: P2)
+However, this may be unnecessary if SSE and real-time update have been already implemented.
+
+### 4.6 Responsive Layout (Priority: P2)
 
 The dashboard has a mobile dropdown nav selector but the content areas (tables with many columns, grid layouts) aren't optimized for small screens:
-- Card-based views for events and alerts on mobile
+- Card-based views for events and alerts on small screen (small laptop display, not necessary mobile)
 - Collapsible table columns
-- Bottom navigation bar instead of dropdown
 
 ### 4.7 Dark/Light Mode Persistence & System Preference (Priority: P3)
 

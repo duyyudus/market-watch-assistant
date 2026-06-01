@@ -3,7 +3,37 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
+
+  /* Premium Dimmed Inverted Zinc Color Palette for Light Mode */
+  --zinc-50: 9 9 11;       /* zinc-950 black accents */
+  --zinc-100: 9 9 11;       /* zinc-950 bold headings */
+  --zinc-200: 9 9 11;       /* zinc-950 main body text */
+  --zinc-300: 24 24 27;     /* zinc-900 text */
+  --zinc-400: 39 39 42;     /* zinc-800 subtext */
+  --zinc-500: 63 63 70;     /* zinc-700 muted labels */
+  --zinc-600: 82 82 91;     /* zinc-600 details */
+  --zinc-700: 113 113 122; /* zinc-500 borders */
+  --zinc-800: 161 161 170; /* zinc-400 borders/dividers */
+  --zinc-900: 228 228 231; /* zinc-200 soft non-glare panels */
+  --zinc-950: 212 212 216; /* zinc-300 rich soft gray background */
+}
+
+.dark {
   color-scheme: dark;
+
+  /* Classic Tailwind Zinc Color Palette for Dark Mode */
+  --zinc-50: 250 250 250;
+  --zinc-100: 244 244 245;
+  --zinc-200: 228 228 231;
+  --zinc-300: 212 212 216;
+  --zinc-400: 161 161 170;
+  --zinc-500: 113 113 122;
+  --zinc-600: 82 82 91;
+  --zinc-700: 63 63 70;
+  --zinc-800: 39 39 42;
+  --zinc-900: 24 24 27;
+  --zinc-950: 9 9 11;
 }
 
 /* Custom modal display helper to bypass daisyUI's automatic root scroll-locking layout shift */
@@ -16,7 +46,8 @@
 body {
   margin: 0;
   min-width: 320px;
-  background: #121214;
+  background: rgb(var(--zinc-950));
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .nav-button {

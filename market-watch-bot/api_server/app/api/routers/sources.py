@@ -3,7 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, status
 
 from api_server.app.api.dependencies import SessionDep
-from api_server.app.schemas import ListEnvelope, SourceCreate, SourceRead, SourceUpdate
+from api_server.app.schemas import (
+    ListEnvelope,
+    SourceCreate,
+    SourceHealthRead,
+    SourceRead,
+    SourceUpdate,
+)
 from api_server.app.services import sources as source_service
 from common.db.models import NewsSource
 
@@ -17,6 +23,12 @@ async def list_sources(
 ) -> ListEnvelope[SourceRead]:
     rows = await source_service.list_sources(session, enabled=enabled)
     return ListEnvelope(items=[SourceRead.model_validate(row) for row in rows], total=len(rows))
+
+
+@router.get("/sources/health", response_model=ListEnvelope[SourceHealthRead])
+async def source_health(session: SessionDep) -> ListEnvelope[SourceHealthRead]:
+    rows = await source_service.list_source_health(session)
+    return ListEnvelope(items=rows, total=len(rows))
 
 
 @router.post("/sources", response_model=SourceRead, status_code=status.HTTP_201_CREATED)

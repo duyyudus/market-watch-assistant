@@ -49,3 +49,22 @@ class SourceRead(BaseModel):
     source_score: int
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class DailySourceItemCount(BaseModel):
+    date: str
+    count: int
+
+
+class SourceHealthRead(BaseModel):
+    source_id: str
+    name: str
+    enabled: bool
+    category: str
+    region: str
+    health_status: str
+    latest_status: str | None = None
+    last_fetched_at: datetime | None = None
+    consecutive_failure_count: int
+    average_latency_ms: int | None = None
+    daily_item_counts: list[DailySourceItemCount]

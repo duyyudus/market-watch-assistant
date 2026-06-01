@@ -166,7 +166,7 @@ export function WatchlistTable({
                   <div className="mt-4 flex gap-2">
                     <button
                       aria-label={`Edit ${label}`}
-                      className="btn btn-xs btn-outline"
+                      className="btn btn-xs btn-outline btn-primary"
                       onClick={() => startEdit(row)}
                       type="button"
                     >

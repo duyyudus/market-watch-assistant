@@ -49,7 +49,46 @@ export function AlertsTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <>
+      <div className="grid gap-3 lg:hidden">
+        {sortedRows.map((row) => (
+          <div
+            className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3"
+            data-testid={`alert-card-${row.id}`}
+            key={row.id}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span
+                className={classNames(
+                  "px-2 py-0.5 rounded text-xs font-bold uppercase whitespace-nowrap",
+                  row.decision === "immediate_alert"
+                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                    : "bg-zinc-800 text-zinc-400",
+                )}
+              >
+                {row.decision.replace("_", " ")}
+              </span>
+              <span className="text-xs text-zinc-500">
+                {formatTime(row.sent_at ?? row.created_at)}
+              </span>
+            </div>
+            <div className="mt-2 text-sm font-semibold text-zinc-100">
+              {row.event?.headline ?? row.reason}
+            </div>
+            {!compact ? (
+              <div className="mt-2 text-xs text-base-content/60">
+                {row.channel ?? "-"} ·{" "}
+                {row.suppression_reason === "dismissed"
+                  ? "dismissed"
+                  : row.acknowledged_at
+                    ? "acknowledged"
+                    : "unacknowledged"}
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto lg:block">
       <table className="table w-full">
         <thead>
           <tr className="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider">
@@ -124,7 +163,7 @@ export function AlertsTable({
                     </span>
                     {!row.acknowledged_at && row.suppression_reason !== "dismissed" && acknowledge ? (
                       <button
-                        className="btn btn-xs btn-outline"
+                        className="btn btn-xs btn-outline btn-primary"
                         onClick={() => void acknowledge(row.id)}
                         type="button"
                       >
@@ -133,7 +172,7 @@ export function AlertsTable({
                     ) : null}
                     {!row.acknowledged_at && row.suppression_reason !== "dismissed" && dismiss ? (
                       <button
-                        className="btn btn-xs btn-outline"
+                        className="btn btn-xs btn-outline btn-primary"
                         onClick={() => void dismiss(row.id)}
                         type="button"
                       >
@@ -147,6 +186,7 @@ export function AlertsTable({
           ))}
         </tbody>
       </table>
-    </div>
+      </div>
+    </>
   );
 }

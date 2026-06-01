@@ -1,5 +1,5 @@
 import { Send, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   AlertChannel,
@@ -230,6 +230,20 @@ export function AlertControls({
     enabled: true,
   });
   const [ruleConfig, setRuleConfig] = useState(getRuleTemplate(ruleTypes[0] || "cooldown"));
+
+  useEffect(() => {
+    if (!presets) return;
+    const firstChannelType = channelTypes[0] || "webhook";
+    const firstRuleType = ruleTypes[0] || "cooldown";
+    if (!channel.name) {
+      setChannel((current) => ({ ...current, channel_type: firstChannelType }));
+      setChannelConfig(getChannelTemplate(firstChannelType));
+    }
+    if (!rule.name) {
+      setRule((current) => ({ ...current, rule_type: firstRuleType }));
+      setRuleConfig(getRuleTemplate(firstRuleType));
+    }
+  }, [presets]);
 
   async function saveChannel() {
     await api.createAlertChannel({ ...channel, config: parseConfig(channelConfig) });

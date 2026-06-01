@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.app.schemas import AlertPolicy, ConfigurationPresets
@@ -32,7 +33,10 @@ def get_alert_presets() -> dict[str, Any]:
                 "type": "log",
                 "placeholder": "e.g. Local Dev Log",
                 "template": {},
-                "description": "Prints alerts directly to the server logs. No configuration payload is required.",
+                "description": (
+                    "Prints alerts directly to the server logs. "
+                    "No configuration payload is required."
+                ),
                 "parameters": {},
             },
             {
@@ -65,7 +69,10 @@ def get_alert_presets() -> dict[str, Any]:
                 "template": {"hours": 6},
                 "description": "Dampens frequent repetitions of the same event.",
                 "parameters": {
-                    "hours": "required: Quiet interval duration before the same event triggers again."
+                    "hours": (
+                        "required: Quiet interval duration before the same event "
+                        "triggers again."
+                    )
                 },
             },
             {
@@ -105,7 +112,10 @@ def get_alert_presets() -> dict[str, Any]:
                 "description": "Specific ticker or project silencing.",
                 "parameters": {
                     "entities": "required: Array of tickers/names (e.g. ['BTC', 'ETH']).",
-                    "until": "optional: ISO-8601 UTC timestamp after which muting automatically ends."
+                    "until": (
+                        "optional: ISO-8601 UTC timestamp after which muting "
+                        "automatically ends."
+                    )
                 },
             },
         ],

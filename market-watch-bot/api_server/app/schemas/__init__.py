@@ -15,7 +15,7 @@ from api_server.app.schemas.bot import (
     validate_command_payload,
 )
 from api_server.app.schemas.common import ListEnvelope
-from api_server.app.schemas.events import EventRead
+from api_server.app.schemas.events import EventDetailRead, EventRead
 from api_server.app.schemas.jobs import JobRunRead
 from api_server.app.schemas.maintenance import (
     CatalystReviewRead,
@@ -27,7 +27,7 @@ from api_server.app.schemas.maintenance import (
 )
 from api_server.app.schemas.news import EntityRead, NewsRead
 from api_server.app.schemas.settings import AlertPolicy, ConfigurationPresets
-from api_server.app.schemas.sources import SourceCreate, SourceRead, SourceUpdate
+from api_server.app.schemas.sources import SourceCreate, SourceHealthRead, SourceRead, SourceUpdate
 from api_server.app.schemas.watchlist import WatchlistCreate, WatchlistRead, WatchlistUpdate
 
 __all__ = [
@@ -47,6 +47,7 @@ __all__ = [
     "ConfigurationPresets",
     "EmbeddingStats",
     "EntityRead",
+    "EventDetailRead",
     "EventRead",
     "FetchLogRead",
     "JobRunRead",
@@ -56,6 +57,7 @@ __all__ = [
     "RetentionJobRead",
     "ScoreHistoryRead",
     "SourceCreate",
+    "SourceHealthRead",
     "SourceRead",
     "SourceUpdate",
     "WatchlistCreate",

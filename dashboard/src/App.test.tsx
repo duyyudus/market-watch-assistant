@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, compareValues } from "./App";
@@ -7,8 +7,10 @@ const apiMock = vi.hoisted(() => ({
   botStatus: vi.fn(),
   sources: vi.fn(),
   events: vi.fn(),
+  event: vi.fn(),
   news: vi.fn(),
   alerts: vi.fn(),
+  sourceHealth: vi.fn(),
   alertChannels: vi.fn(),
   alertSuppressionRules: vi.fn(),
   createAlertChannel: vi.fn(),
@@ -35,6 +37,33 @@ const apiMock = vi.hoisted(() => ({
   updateAlertPolicy: vi.fn(),
   presets: vi.fn(),
 }));
+
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  private listeners: Record<string, Array<(event: MessageEvent) => void>> = {};
+  url: string;
+
+  constructor(url: string) {
+    this.url = url;
+    MockEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent) => void) {
+    this.listeners[type] = [...(this.listeners[type] ?? []), listener];
+  }
+
+  close = vi.fn();
+
+  emit(type: string, data: unknown) {
+    const event = new MessageEvent(type, { data: JSON.stringify(data) });
+    for (const listener of this.listeners[type] ?? []) {
+      listener(event);
+    }
+    this.onmessage?.(event);
+  }
+}
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -99,6 +128,91 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       },
     ]),
   );
+  apiMock.event.mockResolvedValue({
+    id: "evt_1",
+    canonical_headline: "Fed signals a slower rate path",
+    summary: "Policy makers leaned less hawkish.",
+    status: "reported",
+    regions: ["us"],
+    asset_classes: ["global_macro"],
+    affected_entities: ["Federal Reserve"],
+    affected_tickers: ["SPY"],
+    source_count: 2,
+    top_source_score: 100,
+    confirmation_score: 88,
+    novelty_score: 85,
+    urgency_score: 80,
+    market_impact_score: 72,
+    relevance_score: 100,
+    final_score: 84,
+    alert_level: "immediate_alert",
+    first_seen_at: "2026-05-29T13:00:00Z",
+    last_updated_at: "2026-05-29T13:10:00Z",
+    latest_alert: null,
+    latest_investigation: {
+      id: "inv_1",
+      status: "succeeded",
+      result: { suggested_action: "monitor duration exposure" },
+    },
+    score_history: [
+      {
+        id: "score_1",
+        event_cluster_id: "evt_1",
+        final_score: 84,
+        score_breakdown: {
+          source_score: 100,
+          impact_score: 75,
+          relevance_score: 100,
+          novelty_score: 85,
+          urgency_score: 80,
+          market_move_score: 72,
+          confidence_score: 88,
+          duplicate_penalty: 0,
+          noise_penalty: 0,
+          stale_penalty: 0,
+          final_score: 84,
+        },
+        created_at: "2026-05-29T13:04:00Z",
+      },
+    ],
+    timeline: [
+      {
+        news_item_id: "news_1",
+        title: "Fed signals a slower rate path",
+        source_name: "Federal Reserve",
+        source_score: 100,
+        url: "https://example.com/news",
+        published_at: "2026-05-29T13:00:00Z",
+        fetched_at: "2026-05-29T13:00:00Z",
+        added_at: "2026-05-29T13:01:00Z",
+        relation_type: "seed",
+        similarity_score: 91,
+      },
+    ],
+    llm_runs: [
+      {
+        id: "llm_1",
+        provider: "openai",
+        model: "gpt-4o",
+        prompt_version: "1",
+        result: { summary: "Less hawkish Fed path." },
+        status: "succeeded",
+        created_at: "2026-05-29T13:02:00Z",
+      },
+    ],
+    market_moves: [
+      {
+        id: "move_1",
+        asset_symbol: "SPY",
+        asset_class: "equity",
+        exchange: "NYSE",
+        timestamp: "2026-05-29T13:10:00Z",
+        window: "1h",
+        price_change_pct: 1.7,
+        volume_change_pct: 22.5,
+      },
+    ],
+  });
   apiMock.news.mockResolvedValue(
     envelope([
       {
@@ -128,6 +242,23 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
         latest_delivery_status: "sent",
         acknowledged_at: null,
+      },
+    ]),
+  );
+  apiMock.sourceHealth.mockResolvedValue(
+    envelope([
+      {
+        source_id: "src_1",
+        name: "Federal Reserve",
+        enabled: true,
+        category: "global_macro",
+        region: "us",
+        health_status: "healthy",
+        latest_status: "success",
+        last_fetched_at: "2026-05-29T12:55:00Z",
+        consecutive_failure_count: 0,
+        average_latency_ms: 120,
+        daily_item_counts: [{ date: "2026-05-29", count: 5 }],
       },
     ]),
   );
@@ -329,32 +460,148 @@ async function renderLoadedApp() {
 }
 
 function switchTo(view: string) {
-  fireEvent.change(screen.getByRole("combobox"), { target: { value: view } });
+  const selectors = screen.getAllByRole("combobox");
+  fireEvent.change(selectors[selectors.length - 1], { target: { value: view } });
 }
 
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  MockEventSource.instances = [];
+  vi.stubGlobal("EventSource", MockEventSource);
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("dark"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   mockSuccessfulLoad();
 });
 
 describe("App theme", () => {
-  it("uses the dark emerald_terminal theme", async () => {
+  it("uses the dark emerald_dark theme", async () => {
     await renderLoadedApp();
 
-    expect(screen.getByTestId("dashboard-root")).toHaveAttribute("data-theme", "emerald_terminal");
+    expect(screen.getByTestId("dashboard-root")).toHaveAttribute("data-theme", "emerald_dark");
     expect(document.documentElement).toHaveClass("dark");
+  });
+
+  it("persists system theme mode and follows prefers-color-scheme", async () => {
+    localStorage.setItem("mw-theme-mode", "system");
+    await renderLoadedApp();
+
+    expect(screen.getByTestId("dashboard-root")).toHaveAttribute("data-theme", "emerald_dark");
+    fireEvent.click(screen.getByRole("button", { name: /theme/i }));
+    fireEvent.click(screen.getByRole("button", { name: /light/i }));
+
+    expect(localStorage.getItem("mw-theme-mode")).toBe("light");
+    expect(screen.getByTestId("dashboard-root")).toHaveAttribute("data-theme", "emerald_light");
   });
 });
 
 describe("App data states", () => {
+  it("loads only overview resources on initial render", async () => {
+    await renderLoadedApp();
+
+    expect(apiMock.botStatus).toHaveBeenCalledTimes(1);
+    expect(apiMock.events).toHaveBeenCalledTimes(1);
+    expect(apiMock.alerts).toHaveBeenCalledTimes(1);
+    expect(apiMock.sources).not.toHaveBeenCalled();
+    expect(apiMock.news).not.toHaveBeenCalled();
+    expect(apiMock.watchlist).not.toHaveBeenCalled();
+    expect(apiMock.alertChannels).not.toHaveBeenCalled();
+    expect(apiMock.presets).not.toHaveBeenCalled();
+  });
+
   it("renders successful dashboard data", async () => {
     await renderLoadedApp();
 
     expect(await screen.findAllByText("Fed signals a slower rate path")).not.toHaveLength(0);
     switchTo("sources");
-    expect(screen.getByText("Federal Reserve")).toBeInTheDocument();
+    expect(await screen.findAllByText("Federal Reserve")).not.toHaveLength(0);
     expect(screen.getByText("API ok")).toBeInTheDocument();
+  });
+
+  it("refreshes affected resources when live dashboard events arrive", async () => {
+    await renderLoadedApp();
+
+    expect(MockEventSource.instances[0].url).toContain("/events/stream");
+    apiMock.alerts.mockClear();
+    act(() => MockEventSource.instances[0].emit("alert.created", { id: "alert_2" }));
+
+    await waitFor(() => expect(apiMock.alerts).toHaveBeenCalledTimes(1));
+  });
+
+  it("renders detailed event timeline scoring analysis and actions", async () => {
+    await renderLoadedApp();
+    switchTo("events");
+
+    fireEvent.click(await screen.findByTestId("event-card-evt_1"));
+
+    expect(await screen.findByText("Timeline")).toBeInTheDocument();
+    expect(screen.getByText("Scoring")).toBeInTheDocument();
+    expect(screen.getByText("Market moves")).toBeInTheDocument();
+    expect(screen.getByText("Less hawkish Fed path.")).toBeInTheDocument();
+    expect(screen.getByText("monitor duration exposure")).toBeInTheDocument();
+    expect(screen.getByText("SPY")).toBeInTheDocument();
+    expect(screen.getByText("Source")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rescore/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /confirm/i })).toBeInTheDocument();
+  });
+
+  it("renders source health subtab and queues source test fetch", async () => {
+    apiMock.createCommand.mockResolvedValue({
+      id: "cmd_source",
+      command_type: "source.fetch",
+      status: "pending",
+      payload: { source_id: "src_1" },
+    });
+    await renderLoadedApp();
+    switchTo("sources");
+
+    fireEvent.click(await screen.findByRole("button", { name: /health/i }));
+
+    expect(await screen.findByText("healthy")).toBeInTheDocument();
+    expect(screen.getByText("120ms avg")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /test fetch Federal Reserve/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("source.fetch", {
+        source_id: "src_1",
+      }),
+    );
+  });
+
+  it("persists auto refresh preference and reloads on interval", async () => {
+    await renderLoadedApp();
+    vi.useFakeTimers();
+
+    fireEvent.change(screen.getByLabelText("Auto-refresh"), { target: { value: "30000" } });
+    expect(localStorage.getItem("mw-auto-refresh-ms")).toBe("30000");
+
+    apiMock.botStatus.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30000);
+    });
+
+    expect(apiMock.botStatus).toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Auto-refresh"), { target: { value: "0" } });
+    vi.useRealTimers();
+  });
+
+  it("renders compact card views for responsive event alert and source lists", async () => {
+    await renderLoadedApp();
+
+    expect(await screen.findByTestId("event-card-evt_1")).toBeInTheDocument();
+    switchTo("alerts");
+    expect(await screen.findByTestId("alert-card-alert_1")).toBeInTheDocument();
+    switchTo("sources");
+    expect(await screen.findByTestId("source-card-src_1")).toBeInTheDocument();
   });
 
   it("renders empty states instead of blank tables", async () => {
@@ -373,12 +620,12 @@ describe("App data states", () => {
 
     await renderLoadedApp();
 
-    expect(await screen.findByText("API degraded")).toBeInTheDocument();
     switchTo("sources");
-    expect(screen.getByText("Federal Reserve")).toBeInTheDocument();
+    expect(await screen.findAllByText("Federal Reserve")).not.toHaveLength(0);
 
     switchTo("news");
-    expect(screen.getByText("Normalized news unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("API degraded")).toBeInTheDocument();
+    expect(await screen.findByText("Normalized news unavailable")).toBeInTheDocument();
     expect(screen.getByText("news unavailable")).toBeInTheDocument();
   });
 
@@ -395,6 +642,7 @@ describe("App data states", () => {
   it("creates and edits sources from the dashboard", async () => {
     await renderLoadedApp();
     switchTo("sources");
+    await screen.findByTestId("source-card-src_1");
 
     fireEvent.click(screen.getByRole("button", { name: /add source/i }));
     const main = screen.getByRole("main");
@@ -427,7 +675,7 @@ describe("App data states", () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /edit Federal Reserve/i }));
+    fireEvent.click(screen.getAllByRole("button", { name: /edit Federal Reserve/i })[0]);
     fireEvent.change(screen.getByLabelText("Source name"), {
       target: { value: "Federal Reserve Watch" },
     });
@@ -444,6 +692,7 @@ describe("App data states", () => {
   it("creates edits and deletes watchlist entries from the dashboard", async () => {
     await renderLoadedApp();
     switchTo("watchlist");
+    await screen.findByText("SPY");
 
     fireEvent.click(screen.getByRole("button", { name: /add watchlist entry/i }));
     const main = screen.getByRole("main");
@@ -532,6 +781,8 @@ describe("App data states", () => {
 
     // Switch to controls sub-tab to make inputs visible in DOM
     fireEvent.click(screen.getByRole("button", { name: /setting/i }));
+    const channelType = await screen.findByLabelText("Channel type");
+    fireEvent.change(channelType, { target: { value: "webhook" } });
 
     fireEvent.change(screen.getByLabelText("Channel name"), { target: { value: "Webhook" } });
     fireEvent.change(screen.getByLabelText("Channel config"), {

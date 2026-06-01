@@ -1,5 +1,5 @@
 import { Bot, Palette, RefreshCcw, ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   AlertDecision,
@@ -10,12 +10,14 @@ import type {
   BotStatus,
   ConfigurationPresets,
   EventCluster,
+  EventDetail,
   JobRun,
   NewsItem,
   Source,
+  SourceHealth,
   WatchlistEntry,
 } from "../api";
-import { api, normalizeListResponse } from "../api";
+import { api, eventStreamUrl, normalizeListResponse } from "../api";
 import { Badge } from "../components/Badge";
 import { Panel } from "../components/Panel";
 import { AlertsTable } from "../features/alerts/AlertsTable";
@@ -29,10 +31,18 @@ import { SourcesTable } from "../features/sources/SourcesTable";
 import { WatchlistTable } from "../features/watchlist/WatchlistTable";
 import { Maintenance } from "../features/maintenance/Maintenance";
 import { classNames } from "../lib/classNames";
+import { createResourceCache } from "../lib/apiCache";
 import { settle } from "../lib/errors";
-import type { DashboardState, ResourceErrors, View } from "../types/dashboard";
+import type { DashboardState, ResourceErrors, ResourceKey, View } from "../types/dashboard";
 import { nav } from "./navigation";
 import { emptyErrors, emptyState } from "./state";
+
+const AUTO_REFRESH_OPTIONS = [
+  { label: "Off", value: 0 },
+  { label: "30s", value: 30_000 },
+  { label: "60s", value: 60_000 },
+  { label: "5m", value: 300_000 },
+];
 
 export function App() {
   const [view, setView] = useState<View>("overview");
@@ -41,87 +51,201 @@ export function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [theme, setTheme] = useState<string>(
-    () => localStorage.getItem("mw-theme") ?? "emerald_terminal",
+  const [themeMode, setThemeMode] = useState<string>(
+    () => localStorage.getItem("mw-theme-mode") ?? "dark",
+  );
+  const [autoRefreshMs, setAutoRefreshMs] = useState<number>(
+    () => Number(localStorage.getItem("mw-auto-refresh-ms") ?? "0"),
   );
   const [alertSubTab, setAlertSubTab] = useState<"decisions" | "controls">("decisions");
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() =>
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true,
+  );
+  const loadingKeys = useRef(new Set<ResourceKey>());
+  const resourceCache = useRef(createResourceCache({ ttlMs: 15_000 })).current;
+
+  const effectiveTheme =
+    themeMode === "light"
+      ? "emerald_light"
+      : themeMode === "system"
+        ? systemPrefersDark
+          ? "emerald_dark"
+          : "emerald_light"
+        : "emerald_dark";
 
   useEffect(() => {
-    document.documentElement.classList.add("dark");
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("mw-theme", theme);
-  }, [theme]);
+    document.documentElement.classList.toggle("dark", effectiveTheme !== "emerald_light");
+    document.documentElement.dataset.theme = effectiveTheme;
+    localStorage.setItem("mw-theme-mode", themeMode);
+  }, [effectiveTheme, themeMode]);
 
-  async function load() {
-    setLoading(true);
-    const results = await Promise.all([
-      settle("status", api.botStatus()),
-      settle("sources", api.sources()),
-      settle("events", api.events()),
-      settle("news", api.news()),
-      settle("alerts", api.alerts()),
-      settle("alertChannels", api.alertChannels()),
-      settle("alertSuppressionRules", api.alertSuppressionRules()),
-      settle("jobs", api.jobs()),
-      settle("watchlist", api.watchlist()),
-      settle("commands", api.commands()),
-      settle("alertPolicy", api.alertPolicy()),
-      settle("presets", api.presets()),
-    ]);
-    const nextErrors: ResourceErrors = {};
-    const nextState: DashboardState = { ...emptyState };
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!media) return;
+    const update = () => setSystemPrefersDark(media.matches);
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
 
-    for (const result of results) {
-      if ("error" in result) {
-        nextErrors[result.key] = result.error;
-        continue;
+  const applyResult = useCallback((key: ResourceKey, value: unknown) => {
+    setState((current) => {
+      if (key === "status") return { ...current, status: value as BotStatus };
+      if (key === "sources") {
+        return { ...current, sources: normalizeListResponse<Source>(value).items };
       }
-      if (result.key === "status") nextState.status = result.value as BotStatus;
-      if (result.key === "sources") {
-        nextState.sources = normalizeListResponse<Source>(result.value).items;
+      if (key === "sourceHealth") {
+        return { ...current, sourceHealth: normalizeListResponse<SourceHealth>(value).items };
       }
-      if (result.key === "events") {
-        nextState.events = normalizeListResponse<EventCluster>(result.value).items;
+      if (key === "events") {
+        return { ...current, events: normalizeListResponse<EventCluster>(value).items };
       }
-      if (result.key === "news") {
-        nextState.news = normalizeListResponse<NewsItem>(result.value).items;
+      if (key === "news") return { ...current, news: normalizeListResponse<NewsItem>(value).items };
+      if (key === "alerts") {
+        return { ...current, alerts: normalizeListResponse<AlertDecision>(value).items };
       }
-      if (result.key === "alerts") {
-        nextState.alerts = normalizeListResponse<AlertDecision>(result.value).items;
+      if (key === "alertChannels") {
+        return {
+          ...current,
+          alertChannels: normalizeListResponse<AlertChannel>(value).items,
+        };
       }
-      if (result.key === "alertChannels") {
-        nextState.alertChannels = normalizeListResponse<AlertChannel>(result.value).items;
+      if (key === "alertSuppressionRules") {
+        return {
+          ...current,
+          alertSuppressionRules: normalizeListResponse<AlertSuppressionRule>(value).items,
+        };
       }
-      if (result.key === "alertSuppressionRules") {
-        nextState.alertSuppressionRules =
-          normalizeListResponse<AlertSuppressionRule>(result.value).items;
+      if (key === "jobs") return { ...current, jobs: normalizeListResponse<JobRun>(value).items };
+      if (key === "watchlist") {
+        return { ...current, watchlist: normalizeListResponse<WatchlistEntry>(value).items };
       }
-      if (result.key === "jobs") {
-        nextState.jobs = normalizeListResponse<JobRun>(result.value).items;
+      if (key === "commands") {
+        return { ...current, commands: normalizeListResponse<BotCommand>(value).items };
       }
-      if (result.key === "watchlist") {
-        nextState.watchlist = normalizeListResponse<WatchlistEntry>(result.value).items;
+      if (key === "alertPolicy") return { ...current, alertPolicy: value as AlertPolicy };
+      if (key === "presets") return { ...current, presets: value as ConfigurationPresets };
+      return current;
+    });
+    setResourceErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const loaders: Record<Exclude<ResourceKey, "eventDetail">, () => Promise<unknown>> = {
+    status: api.botStatus,
+    sources: api.sources,
+    sourceHealth: api.sourceHealth,
+    events: api.events,
+    news: api.news,
+    alerts: api.alerts,
+    alertChannels: api.alertChannels,
+    alertSuppressionRules: api.alertSuppressionRules,
+    jobs: api.jobs,
+    watchlist: api.watchlist,
+    commands: api.commands,
+    alertPolicy: api.alertPolicy,
+    presets: api.presets,
+  };
+
+  const loadResources = useCallback(
+    async (keys: Array<Exclude<ResourceKey, "eventDetail">>, invalidate = false) => {
+      setLoading(true);
+      keys.forEach((key) => {
+        loadingKeys.current.add(key);
+        if (invalidate) resourceCache.invalidate(key);
+      });
+      const results = await Promise.all(
+        keys.map((key) => settle(key, resourceCache.get(key, loaders[key]))),
+      );
+      for (const result of results) {
+        loadingKeys.current.delete(result.key as ResourceKey);
+        if ("error" in result) {
+          setResourceErrors((current) => ({ ...current, [result.key]: result.error }));
+        } else {
+          applyResult(result.key as ResourceKey, result.value);
+        }
       }
-      if (result.key === "commands") {
-        nextState.commands = normalizeListResponse<BotCommand>(result.value).items;
-      }
-      if (result.key === "alertPolicy") nextState.alertPolicy = result.value as AlertPolicy;
-      if (result.key === "presets") nextState.presets = result.value as ConfigurationPresets;
+      setLoading(loadingKeys.current.size > 0);
+    },
+    [applyResult],
+  );
+
+  const loadEventDetail = useCallback(async (id: string, invalidate = false) => {
+    const key = `event:${id}`;
+    if (invalidate) resourceCache.invalidate(key);
+    const result = await settle("eventDetail", resourceCache.get(key, () => api.event(id)));
+    if ("error" in result) {
+      setResourceErrors((current) => ({ ...current, eventDetail: result.error }));
+      return;
     }
+    setState((current) => ({
+      ...current,
+      eventDetails: { ...current.eventDetails, [id]: result.value as EventDetail },
+    }));
+    setResourceErrors((current) => {
+      const next = { ...current };
+      delete next.eventDetail;
+      return next;
+    });
+  }, []);
 
-    setState(nextState);
-    setResourceErrors(nextErrors);
-    setLoading(false);
+  async function load(invalidate = false) {
+    const keysByView: Record<View, Array<Exclude<ResourceKey, "eventDetail">>> = {
+      overview: ["status", "events", "alerts"],
+      events: ["status", "events"],
+      news: ["status", "news"],
+      alerts:
+        alertSubTab === "controls"
+          ? ["status", "alertChannels", "alertSuppressionRules", "presets"]
+          : ["status", "alerts"],
+      sources: ["status", "sources", "sourceHealth", "presets"],
+      watchlist: ["status", "watchlist", "presets"],
+      commands: ["status", "commands", "sources", "events"],
+      operations: ["status", "jobs", "alerts", "alertPolicy"],
+      maintenance: ["status"],
+    };
+    await loadResources(keysByView[view], invalidate);
   }
 
   useEffect(() => {
-    void load();
-  }, []);
+    void loadResources(["status", "events", "alerts"]);
+  }, [loadResources]);
+
+  useEffect(() => {
+    if (view !== "overview") void load();
+  }, [view, alertSubTab]);
+
+  useEffect(() => {
+    const source = new EventSource(eventStreamUrl());
+    const refreshAlerts = () => void loadResources(["status", "alerts"], true);
+    const refreshJobs = () => void loadResources(["status", "jobs"], true);
+    const refreshCommands = () => void loadResources(["status", "commands"], true);
+    source.addEventListener("alert.created", refreshAlerts);
+    source.addEventListener("pipeline.completed", refreshJobs);
+    source.addEventListener("command.updated", refreshCommands);
+    return () => source.close();
+  }, [loadResources]);
+
+  useEffect(() => {
+    localStorage.setItem("mw-auto-refresh-ms", String(autoRefreshMs));
+    if (!autoRefreshMs) return;
+    const id = window.setInterval(() => void load(true), autoRefreshMs);
+    return () => window.clearInterval(id);
+  }, [autoRefreshMs, view, alertSubTab]);
 
   const selectedEvent = useMemo(
     () => state.events.find((event) => event.id === selectedEventId) ?? state.events[0],
     [selectedEventId, state.events],
   );
+  const selectedEventDetail = selectedEvent ? state.eventDetails[selectedEvent.id] : undefined;
+
+  useEffect(() => {
+    if (view === "events" && selectedEvent?.id) {
+      void loadEventDetail(selectedEvent.id);
+    }
+  }, [loadEventDetail, selectedEvent?.id, view]);
 
   const activeNavItem = nav.find((item) => item.id === view);
   const HeaderIcon = activeNavItem?.icon ?? Bot;
@@ -139,18 +263,19 @@ export function App() {
 
   async function queue(commandType: string, payload: Record<string, unknown>) {
     await api.createCommand(commandType, payload);
-    await load();
+    resourceCache.invalidate();
+    await load(true);
     setView("commands");
   }
 
   async function acknowledgeAlert(id: string) {
     await api.acknowledgeAlert(id);
-    await load();
+    await loadResources(["alerts"], true);
   }
 
   async function dismissAlert(id: string) {
     await api.dismissAlert(id);
-    await load();
+    await loadResources(["alerts"], true);
   }
 
   const unacknowledgedAlerts = state.alerts.filter(
@@ -161,9 +286,12 @@ export function App() {
     <div
       className="min-h-screen bg-base-100 text-base-content"
       data-testid="dashboard-root"
-      data-theme={theme}
+      data-theme={effectiveTheme}
     >
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-zinc-800 bg-zinc-950 lg:block">
+      <aside
+        className="fixed inset-y-0 left-0 hidden w-64 border-r border-zinc-800 bg-zinc-950 lg:block dark"
+        data-theme="emerald_dark"
+      >
         <div className="flex h-16 items-center gap-3 border-b border-zinc-800 px-5">
           <ShieldCheck className="h-6 w-6 text-primary animate-pulse" />
           <div>
@@ -196,7 +324,10 @@ export function App() {
         </nav>
       </aside>
       <main className="lg:pl-64">
-        <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md">
+        <header
+          className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md dark"
+          data-theme="emerald_dark"
+        >
           <div className="flex min-h-16 flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6">
             <div className="flex items-center gap-3">
               <HeaderIcon className="h-5 w-5 text-secondary" />
@@ -222,58 +353,75 @@ export function App() {
               ) : null}
 
               <div className="dropdown dropdown-end dropdown-bottom">
-                <label
+                <button
                   tabIndex={0}
                   className="btn btn-sm btn-outline gap-1.5 font-medium text-zinc-300 cursor-pointer"
+                  type="button"
                 >
                   <Palette className="h-4 w-4" />
                   Theme
-                </label>
+                </button>
                 <ul
                   tabIndex={0}
                   className="dropdown-content z-[20] menu p-2 shadow-2xl bg-zinc-900 border border-zinc-800 rounded-box w-52 mt-1"
                 >
                   <li>
                     <button
-                      onClick={() => setTheme("marketwatch")}
+                      onClick={() => setThemeMode("system")}
                       className={classNames(
                         "justify-between rounded-md text-left",
-                        theme === "marketwatch" && "active bg-primary/10 text-primary",
+                        themeMode === "system" && "active bg-primary/10 text-primary",
                       )}
                       type="button"
                     >
-                      <span>Minimalist Mono</span>
+                      <span>System</span>
                       <span className="h-2.5 w-2.5 rounded-full bg-zinc-100 border border-zinc-500" />
                     </button>
                   </li>
                   <li>
                     <button
-                      onClick={() => setTheme("emerald_terminal")}
+                      onClick={() => setThemeMode("dark")}
                       className={classNames(
                         "justify-between rounded-md text-left",
-                        theme === "emerald_terminal" && "active bg-primary/10 text-primary",
+                        themeMode === "dark" && "active bg-primary/10 text-primary",
                       )}
                       type="button"
                     >
-                      <span>Financial Emerald</span>
+                      <span>Dark</span>
                       <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
                     </button>
                   </li>
                   <li>
                     <button
-                      onClick={() => setTheme("amber_bronze")}
+                      onClick={() => setThemeMode("light")}
                       className={classNames(
                         "justify-between rounded-md text-left",
-                        theme === "amber_bronze" && "active bg-primary/10 text-primary",
+                        themeMode === "light" && "active bg-primary/10 text-primary",
                       )}
                       type="button"
                     >
-                      <span>Amber Bronze</span>
-                      <span className="h-2.5 w-2.5 rounded-full bg-amber-600" />
+                      <span>Light</span>
+                      <span className="h-2.5 w-2.5 rounded-full bg-zinc-100" />
                     </button>
                   </li>
                 </ul>
               </div>
+
+              <label className="select select-bordered select-sm flex items-center gap-2">
+                <span className="sr-only">Auto-refresh</span>
+                <select
+                  aria-label="Auto-refresh"
+                  className="bg-transparent"
+                  onChange={(event) => setAutoRefreshMs(Number(event.target.value))}
+                  value={autoRefreshMs}
+                >
+                  {AUTO_REFRESH_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      Auto {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <button className="btn btn-sm btn-outline" onClick={() => void load()} type="button">
                 <RefreshCcw className="h-4 w-4" />
@@ -304,20 +452,24 @@ export function App() {
             </select>
           </div>
           {view === "overview" ? (
-            <Overview state={state} errors={resourceErrors} retry={load} />
+            <Overview state={state} errors={resourceErrors} retry={() => load(true)} />
           ) : view === "events" ? (
             <Events
               events={filteredEvents}
               error={resourceErrors.events}
               query={query}
               selectedEvent={selectedEvent}
+              selectedEventDetail={selectedEventDetail}
               setQuery={setQuery}
-              setSelectedEventId={setSelectedEventId}
+              setSelectedEventId={(id) => {
+                setSelectedEventId(id);
+                void loadEventDetail(id);
+              }}
               queue={queue}
-              retry={load}
+              retry={() => load(true)}
             />
           ) : view === "news" ? (
-            <NewsTable rows={state.news} error={resourceErrors.news} retry={load} />
+            <NewsTable rows={state.news} error={resourceErrors.news} retry={() => load(true)} />
           ) : view === "alerts" ? (
             <div className="space-y-4">
               <div className="tabs tabs-boxed border border-zinc-800/60 bg-zinc-950/60 p-1 flex flex-wrap gap-1">
@@ -348,7 +500,7 @@ export function App() {
                   <AlertsTable
                     rows={state.alerts}
                     error={resourceErrors.alerts}
-                    retry={load}
+                    retry={() => load(true)}
                     acknowledge={acknowledgeAlert}
                     dismiss={dismissAlert}
                   />
@@ -357,7 +509,7 @@ export function App() {
                 <AlertControls
                   channels={state.alertChannels}
                   rules={state.alertSuppressionRules}
-                  reload={load}
+                  reload={() => load(true)}
                   presets={state.presets}
                 />
               )}
@@ -365,23 +517,25 @@ export function App() {
           ) : view === "sources" ? (
             <SourcesTable
               rows={state.sources}
+              health={state.sourceHealth}
               error={resourceErrors.sources}
               presets={state.presets?.sources ?? null}
-              reload={load}
+              reload={() => load(true)}
+              queue={queue}
             />
           ) : view === "watchlist" ? (
             <WatchlistTable
               rows={state.watchlist}
               error={resourceErrors.watchlist}
               presets={state.presets?.watchlist ?? null}
-              retry={load}
+              retry={() => load(true)}
             />
           ) : view === "commands" ? (
             <Panel title="Command queue">
               <CommandsTable
                 rows={state.commands}
                 error={resourceErrors.commands}
-                retry={load}
+                retry={() => load(true)}
                 queue={queue}
                 queueUnavailable={state.status?.command_queue_available === false}
                 sources={state.sources}
@@ -395,7 +549,7 @@ export function App() {
               errors={resourceErrors}
               alertPolicy={state.alertPolicy}
               queue={queue}
-              retry={load}
+              retry={() => load(true)}
             />
           ) : (
             <Maintenance />

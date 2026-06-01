@@ -1,23 +1,34 @@
 import { Pencil, Plus, Radio, RefreshCcw, X } from "lucide-react";
 import { useState } from "react";
 
-import { api, type ConfigurationPresets, type Source, type SourcePayload } from "../../api";
+import {
+  api,
+  type ConfigurationPresets,
+  type Source,
+  type SourceHealth,
+  type SourcePayload,
+} from "../../api";
 import { EmptyState } from "../../components/EmptyState";
 import { Panel } from "../../components/Panel";
 import { SectionError } from "../../components/SectionError";
 import { SortableHeader } from "../../components/SortableHeader";
 import { useSortableData } from "../../hooks/useSortableData";
+import type { QueueCommand } from "../../types/dashboard";
 
 export function SourcesTable({
   rows,
+  health,
   error,
   presets,
   reload,
+  queue,
 }: {
   rows: Source[];
+  health: SourceHealth[];
   error?: string;
   presets: ConfigurationPresets["sources"] | null;
   reload: () => Promise<void>;
+  queue: QueueCommand;
 }) {
   const { items: sortedRows, requestSort, sortConfig } = useSortableData(rows, {
     key: "name",
@@ -27,6 +38,7 @@ export function SourcesTable({
   const [form, setForm] = useState<SourcePayload>(emptySourcePayload());
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [subTab, setSubTab] = useState<"configured" | "health">("configured");
 
   async function toggle(row: Source) {
     await api.setSourceEnabled(row.id, !row.enabled);
@@ -76,7 +88,22 @@ export function SourcesTable({
   return (
     <Panel title="Sources">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-base-content/60">{sortedRows.length} configured sources</div>
+        <div className="tabs tabs-boxed border border-zinc-800/60 bg-zinc-950/60 p-1">
+          <button
+            className={`tab tab-sm ${subTab === "configured" ? "tab-active" : ""}`}
+            onClick={() => setSubTab("configured")}
+            type="button"
+          >
+            Configured
+          </button>
+          <button
+            className={`tab tab-sm ${subTab === "health" ? "tab-active" : ""}`}
+            onClick={() => setSubTab("health")}
+            type="button"
+          >
+            Health
+          </button>
+        </div>
         <button className="btn btn-sm btn-primary" onClick={startCreate} type="button">
           <Plus className="h-4 w-4" />
           Add source
@@ -94,7 +121,9 @@ export function SourcesTable({
           onSave={saveSource}
         />
       ) : null}
-      {error ? (
+      {subTab === "health" ? (
+        <SourceHealthPanel health={health} rows={rows} queue={queue} reload={reload} toggle={toggle} />
+      ) : error ? (
         <SectionError title="Sources unavailable" message={error} retry={reload} />
       ) : sortedRows.length === 0 ? (
         <EmptyState
@@ -109,7 +138,40 @@ export function SourcesTable({
           }
         />
       ) : (
-        <div className="overflow-x-auto">
+        <>
+        <div className="grid gap-3 lg:hidden">
+          {sortedRows.map((row) => (
+            <div
+              className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3"
+              data-testid={`source-card-${row.id}`}
+              key={row.id}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-semibold text-zinc-100">{row.name}</div>
+                <input
+                  aria-label={`${row.enabled ? "Disable" : "Enable"} ${row.name}`}
+                  className="toggle toggle-sm"
+                  checked={row.enabled}
+                  onChange={() => void toggle(row)}
+                  type="checkbox"
+                />
+              </div>
+              <div className="mt-2 text-xs text-base-content/60">
+                {row.region} · {row.category} · {row.polling_interval_seconds}s
+              </div>
+              <button
+                aria-label={`Edit ${row.name}`}
+                className="btn btn-xs btn-outline btn-primary mt-3"
+                onClick={() => startEdit(row)}
+                type="button"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="hidden overflow-x-auto lg:block">
           <table className="table w-full">
             <thead>
               <tr className="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider">
@@ -194,8 +256,106 @@ export function SourcesTable({
             </tbody>
           </table>
         </div>
+        </>
       )}
     </Panel>
+  );
+}
+
+function SourceHealthPanel({
+  health,
+  rows,
+  queue,
+  reload,
+  toggle,
+}: {
+  health: SourceHealth[];
+  rows: Source[];
+  queue: QueueCommand;
+  reload: () => Promise<void>;
+  toggle: (row: Source) => Promise<void>;
+}) {
+  if (!health.length) {
+    return (
+      <EmptyState
+        icon={Radio}
+        title="No source health yet"
+        body="Fetch logs will appear after source polling runs."
+        action={
+          <button className="btn btn-sm btn-outline" onClick={() => void reload()} type="button">
+            <RefreshCcw className="h-4 w-4" />
+            Refresh
+          </button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="grid gap-3 xl:grid-cols-2">
+      {health.map((row) => {
+        const source = rows.find((item) => item.id === row.source_id);
+        return (
+          <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-4" key={row.source_id}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-bold text-zinc-100">{row.name}</div>
+                <div className="mt-1 text-xs text-base-content/60">
+                  {row.region} · {row.category} · {row.latest_status ?? "no fetch"}
+                </div>
+              </div>
+              <span
+                className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
+                  row.health_status === "healthy"
+                    ? "bg-emerald-500/10 text-emerald-400"
+                    : row.health_status === "degraded"
+                      ? "bg-amber-500/10 text-amber-400"
+                      : "bg-red-500/10 text-red-400"
+                }`}
+              >
+                {row.health_status}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-base-content/70 sm:grid-cols-3">
+              <div>{row.average_latency_ms ?? "-"}ms avg</div>
+              <div>{row.consecutive_failure_count} failures</div>
+              <div>{row.enabled ? "enabled" : "disabled"}</div>
+            </div>
+            <div className="mt-3 flex h-12 items-end gap-1">
+              {row.daily_item_counts.map((point) => (
+                <div
+                  className="w-4 rounded-t bg-primary/80 text-center text-[10px] text-base-100"
+                  key={point.date}
+                  style={{ height: `${Math.max(8, Math.min(48, point.count * 8))}px` }}
+                  title={point.date}
+                >
+                  {point.count}
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                aria-label={`Test fetch ${row.name}`}
+                className="btn btn-xs btn-outline btn-primary"
+                onClick={() => queue("source.fetch", { source_id: row.source_id })}
+                type="button"
+              >
+                Test fetch
+              </button>
+              {source ? (
+                <button
+                  className="btn btn-xs btn-outline btn-primary"
+                  onClick={() => void toggle(source)}
+                  type="button"
+                >
+                  {source.enabled ? "Disable" : "Enable"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

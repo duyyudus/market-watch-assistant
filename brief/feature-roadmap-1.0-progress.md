@@ -141,21 +141,60 @@ Status: Completed
 - Updated alert dispatch to retry failed delivery records after the retry window.
 - Added max-attempt handling that marks exhausted deliveries as `permanently_failed`.
 
+## Track 4: Dashboard Live UX
+
+Status: Completed
+
+### Live Event Updates
+
+- Added `GET /events/stream` as a read-only `text/event-stream` endpoint.
+- Added heartbeat messages plus database-polled `alert.created`, `pipeline.completed`, and `command.updated` events from shared tables.
+- Kept the stream decoupled from worker execution; it reads persisted records only.
+
+### Event Details
+
+- Extended `GET /events/{event_id}` with timeline items, score history, latest alert, latest investigation, relevant LLM runs, and related market moves.
+- Added typed API response models for the richer event detail payload.
+- Reworked the dashboard event detail area into timeline, LLM analysis, investigation, market moves, scoring, and action sections.
+- Added score component bars and penalty indicators using CSS only.
+
+### Source Health
+
+- Added `GET /sources/health`.
+- Returned latest fetch status, last fetch time, failure streak, average latency, 7-day item counts, and computed `healthy`, `degraded`, or `failing` state.
+- Added the dashboard source health sub-tab with status indicators, item-count spark bars, test fetch, enable/disable, and edit controls.
+
+### Dashboard Data Loading
+
+- Added a small client resource cache with TTL, in-flight request deduplication, explicit invalidation, and debounced reload helpers.
+- Replaced eager loading with view-aware resource loading: overview loads status/events/alerts, and each view loads only its own resources plus shared status as needed.
+- Added an SSE client subscription that invalidates and refreshes only affected resources for alert, pipeline, and command messages.
+- Added persisted auto-refresh fallback options: off, 30s, 60s, and 5m.
+
+### Responsive UI & Theme
+
+- Added responsive card views for events, alerts, and sources while preserving desktop tables.
+- Added persisted theme selection for `system`, `dark`, and `light`.
+- Added a light daisyUI theme and system-mode handling through `prefers-color-scheme`.
+
 ## Verification
 
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 194 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_api_contract.py -q` -> 16 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_api_contract.py -q` -> 19 passed.
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_alert_delivery.py tests/test_migration_0010.py tests/test_bot_commands.py -q` -> 26 passed.
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` outside the sandbox -> 210 passed.
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run ruff check .` -> all checks passed.
 - `cd market-watch-bot && uv run market-watch --help` -> rendered CLI help successfully.
 - `cd market-watch-bot && uv run market-watch pipeline run --dry-run` -> rendered dry-run pipeline path successfully.
-- `cd dashboard && npm test` -> 25 passed.
+- `cd dashboard && npm test` -> 37 passed.
+- `cd dashboard && npm run lint` -> TypeScript check passed.
 - `cd dashboard && npm run build` -> build completed.
+- Playwright rendered validation against local Vite server -> desktop/mobile event detail and source health screenshots captured successfully under `/tmp/dashboard-live-*.png`.
 - `docker compose config` -> Compose syntax rendered successfully.
 
 ## Operational Notes
 
 - `docker-compose.yml` mounts `market-watch-bot/.env` into backend containers instead of using Compose `env_file`, so `docker compose config` does not expand local secrets into rendered service environment output.
 - Sandboxed `aiosqlite.connect(":memory:")` timed out in this Codex environment, but the same API contract suite passed outside the sandbox. The timeout was isolated to sandboxed async SQLite startup rather than API endpoint behavior.
-- No live containers, live migrations, live market-data calls, OpenRouter calls, Brave calls, Telegram sends, webhook posts, or live pipeline commands were run for Track 3 verification.
+- No live containers, live migrations, live market-data calls, OpenRouter calls, Brave calls, Telegram sends, webhook posts, or live pipeline commands were run for Track 3 or dashboard verification.
+- A sandboxed full `DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest -q` attempt did not complete after the first 16 tests in this session; the focused API contract suite, dashboard tests, dashboard build, ruff, and rendered Playwright validation completed successfully.
