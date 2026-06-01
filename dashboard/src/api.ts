@@ -23,6 +23,10 @@ export type Source = {
   enabled: boolean;
   polling_interval_seconds: number;
   source_score: number;
+  auto_quality_score?: number | null;
+  quality_metrics?: Record<string, unknown> | null;
+  quality_calculated_at?: string | null;
+  effective_source_score?: number | null;
 };
 
 export type SourceHealth = {

@@ -20,6 +20,19 @@ from bot_worker.embeddings import (
 )
 from bot_worker.services.watchlists import news_item_entities
 
+DB_VECTOR_DIMENSIONS = int(NewsItemEmbedding.__table__.c.vector.type.dimensions)
+
+
+def validate_embedding_dimensions(config: EmbeddingConfig) -> None:
+    if config.provider == "local":
+        return
+    if config.dimensions != DB_VECTOR_DIMENSIONS:
+        raise ValueError(
+            f"configured embedding dimensions {config.dimensions} do not match "
+            f"database vector columns ({DB_VECTOR_DIMENSIONS}); run a vector migration "
+            "before changing dimensions"
+        )
+
 
 def _batch_work_items[T](work_items: list[T], *, max_concurrency: int) -> list[list[T]]:
     concurrency = max(1, max_concurrency)
@@ -47,6 +60,7 @@ async def _embed_text_batches(
 async def embed_pending_news_items(
     session: AsyncSession, *, config: EmbeddingConfig, limit: int = 100
 ) -> int:
+    validate_embedding_dimensions(config)
     existing = select(NewsItemEmbedding.news_item_id)
     stmt = (
         select(NormalizedNewsItem)
@@ -97,6 +111,7 @@ async def embed_pending_news_items(
 async def embed_pending_event_clusters(
     session: AsyncSession, *, config: EmbeddingConfig, limit: int = 100
 ) -> int:
+    validate_embedding_dimensions(config)
     existing = select(EventClusterEmbedding.event_cluster_id)
     stmt = (
         select(EventCluster)

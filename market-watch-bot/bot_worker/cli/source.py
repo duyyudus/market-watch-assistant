@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from bot_worker.cli.apps import source_app
+from bot_worker.cli.apps import source_app, source_quality_app
 from bot_worker.cli.common import _db_error, _echo_json, _run, _with_session
 from bot_worker.services import (
     add_source,
@@ -14,6 +14,7 @@ from bot_worker.services import (
     import_sources_yaml,
     list_sources,
     purge_source,
+    refresh_source_quality_scores,
     set_source_enabled,
 )
 
@@ -197,5 +198,15 @@ def source_export(out: Annotated[Path, typer.Option("--out")] = Path("sources.ya
 
         out.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         typer.echo(f"Exported {len(rows)} sources to {out}")
+
+    _run(_with_session(action))
+
+
+@source_quality_app.command("refresh")
+def source_quality_refresh() -> None:
+    """Refresh automatic quality metrics for all sources."""
+
+    async def action(session):
+        _echo_json(await refresh_source_quality_scores(session))
 
     _run(_with_session(action))

@@ -72,9 +72,14 @@ class NewsSource(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     polling_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
     source_score: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    auto_quality_score: Mapped[int | None] = mapped_column(Integer)
+    quality_metrics: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    quality_calculated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paywall_risk: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
     requires_auth: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     parser_type: Mapped[str] = mapped_column(String(32), nullable=False, default="rss")
+    etag: Mapped[str | None] = mapped_column(Text)
+    last_modified: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consecutive_failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     burst_until_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -86,12 +91,20 @@ class NewsSource(Base):
 
     __table_args__ = (UniqueConstraint("url", name="uq_news_sources_url"),)
 
+    @property
+    def effective_source_score(self) -> int:
+        if self.auto_quality_score is None:
+            return int(self.source_score)
+        return round(int(self.source_score) * 0.7 + int(self.auto_quality_score) * 0.3)
+
 
 class SourceFetchLog(Base):
     __tablename__ = "source_fetch_logs"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("fetch"))
-    source_id: Mapped[str] = mapped_column(ForeignKey("news_sources.id"), nullable=False)
+    source_id: Mapped[str] = mapped_column(
+        ForeignKey("news_sources.id", ondelete="CASCADE"), nullable=False
+    )
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     http_status: Mapped[int | None] = mapped_column(Integer)
@@ -105,7 +118,9 @@ class RawNewsItem(Base):
     __tablename__ = "raw_news_items"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("raw"))
-    source_id: Mapped[str] = mapped_column(ForeignKey("news_sources.id"), nullable=False)
+    source_id: Mapped[str] = mapped_column(
+        ForeignKey("news_sources.id", ondelete="CASCADE"), nullable=False
+    )
     raw_title: Mapped[str | None] = mapped_column(Text)
     raw_description: Mapped[str | None] = mapped_column(Text)
     raw_content: Mapped[str | None] = mapped_column(Text)
@@ -125,8 +140,12 @@ class NormalizedNewsItem(Base):
     __tablename__ = "normalized_news_items"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("news"))
-    source_id: Mapped[str] = mapped_column(ForeignKey("news_sources.id"), nullable=False)
-    raw_item_id: Mapped[str | None] = mapped_column(ForeignKey("raw_news_items.id"))
+    source_id: Mapped[str] = mapped_column(
+        ForeignKey("news_sources.id", ondelete="CASCADE"), nullable=False
+    )
+    raw_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("raw_news_items.id", ondelete="SET NULL")
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     snippet: Mapped[str | None] = mapped_column(Text)
     raw_content: Mapped[str | None] = mapped_column(Text)
@@ -157,7 +176,7 @@ class NewsEntity(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("ent"))
     news_item_id: Mapped[str] = mapped_column(
-        ForeignKey("normalized_news_items.id"), nullable=False
+        ForeignKey("normalized_news_items.id", ondelete="CASCADE"), nullable=False
     )
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     raw_text: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -192,6 +211,8 @@ class EventCluster(Base):
     final_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     alert_level: Mapped[str | None] = mapped_column(String(32))
+    archive_summary: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    compacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -201,9 +222,11 @@ class EventCluster(Base):
 class EventClusterItem(Base):
     __tablename__ = "event_cluster_items"
 
-    event_cluster_id: Mapped[str] = mapped_column(ForeignKey("event_clusters.id"), primary_key=True)
+    event_cluster_id: Mapped[str] = mapped_column(
+        ForeignKey("event_clusters.id", ondelete="CASCADE"), primary_key=True
+    )
     news_item_id: Mapped[str] = mapped_column(
-        ForeignKey("normalized_news_items.id"), primary_key=True
+        ForeignKey("normalized_news_items.id", ondelete="CASCADE"), primary_key=True
     )
     relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="related")
     similarity_score: Mapped[int | None] = mapped_column(Integer)
@@ -214,7 +237,9 @@ class EventScoreHistory(Base):
     __tablename__ = "event_score_history"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("score"))
-    event_cluster_id: Mapped[str] = mapped_column(ForeignKey("event_clusters.id"), nullable=False)
+    event_cluster_id: Mapped[str] = mapped_column(
+        ForeignKey("event_clusters.id", ondelete="CASCADE"), nullable=False
+    )
     score_breakdown: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     final_score: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -224,7 +249,7 @@ class NewsItemEmbedding(Base):
     __tablename__ = "news_item_embeddings"
 
     news_item_id: Mapped[str] = mapped_column(
-        ForeignKey("normalized_news_items.id"), primary_key=True
+        ForeignKey("normalized_news_items.id", ondelete="CASCADE"), primary_key=True
     )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -239,7 +264,7 @@ class EventClusterEmbedding(Base):
     __tablename__ = "event_cluster_embeddings"
 
     event_cluster_id: Mapped[str] = mapped_column(
-        ForeignKey("event_clusters.id"), primary_key=True
+        ForeignKey("event_clusters.id", ondelete="CASCADE"), primary_key=True
     )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -333,7 +358,9 @@ class MissedCatalystReview(Base):
     move_window: Mapped[str] = mapped_column(String(16), nullable=False)
     price_change_pct: Mapped[float] = mapped_column(nullable=False)
     volume_change_pct: Mapped[float | None] = mapped_column()
-    detected_event_cluster_id: Mapped[str | None] = mapped_column(ForeignKey("event_clusters.id"))
+    detected_event_cluster_id: Mapped[str | None] = mapped_column(
+        ForeignKey("event_clusters.id", ondelete="SET NULL")
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     agent_summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -346,7 +373,9 @@ class AlertDecisionRecord(Base):
     __tablename__ = "alert_decisions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("alert"))
-    event_cluster_id: Mapped[str] = mapped_column(ForeignKey("event_clusters.id"), nullable=False)
+    event_cluster_id: Mapped[str] = mapped_column(
+        ForeignKey("event_clusters.id", ondelete="CASCADE"), nullable=False
+    )
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     score_breakdown: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
@@ -392,7 +421,9 @@ class AlertDeliveryRecord(Base):
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: new_id("delivery")
     )
-    alert_decision_id: Mapped[str | None] = mapped_column(ForeignKey("alert_decisions.id"))
+    alert_decision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("alert_decisions.id", ondelete="CASCADE")
+    )
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

@@ -10,6 +10,7 @@ app = typer.Typer(
     context_settings=_CONTEXT_SETTINGS,
 )
 source_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
+source_quality_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 worker_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 job_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 pipeline_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
@@ -30,6 +31,7 @@ investigate_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SE
 server_app = typer.Typer(no_args_is_help=True, context_settings=_CONTEXT_SETTINGS)
 
 app.add_typer(source_app, name="source")
+source_app.add_typer(source_quality_app, name="quality")
 app.add_typer(worker_app, name="worker")
 app.add_typer(job_app, name="job")
 app.add_typer(pipeline_app, name="pipeline")

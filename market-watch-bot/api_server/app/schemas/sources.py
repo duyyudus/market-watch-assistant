@@ -47,6 +47,10 @@ class SourceRead(BaseModel):
     enabled: bool
     polling_interval_seconds: int
     source_score: int
+    auto_quality_score: int | None = None
+    quality_metrics: dict[str, object] | None = None
+    quality_calculated_at: datetime | None = None
+    effective_source_score: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

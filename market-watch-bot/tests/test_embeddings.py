@@ -19,6 +19,7 @@ from bot_worker.embeddings import (
     embedding_text_hash,
     local_embedding,
 )
+from bot_worker.services.embeddings import validate_embedding_dimensions
 
 
 class ScalarRows:
@@ -142,6 +143,11 @@ def test_embedding_config_reads_api_key_from_env(monkeypatch) -> None:
 
     assert config.api_key == "from-env"
     assert config.max_concurrency == 3
+
+
+def test_validate_embedding_dimensions_rejects_unsupported_vector_column_size() -> None:
+    with pytest.raises(ValueError, match="configured embedding dimensions 768 do not match"):
+        validate_embedding_dimensions(EmbeddingConfig(dimensions=768))
 
 
 @pytest.mark.asyncio

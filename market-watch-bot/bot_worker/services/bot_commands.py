@@ -16,7 +16,12 @@ from bot_worker.services.alert_delivery import (
     send_test_alert_to_channel,
 )
 from bot_worker.services.digests import build_digest_record, send_digest_record
-from bot_worker.services.events import recluster_recent_event_clusters
+from bot_worker.services.events import (
+    compact_archived_events,
+    merge_event_clusters,
+    recluster_recent_event_clusters,
+    split_event_cluster,
+)
 from bot_worker.services.investigation import run_event_investigation
 from bot_worker.services.jobs import record_job_run
 from bot_worker.services.market import (
@@ -27,7 +32,7 @@ from bot_worker.services.market import (
 )
 from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
-from bot_worker.services.sources import fetch_source
+from bot_worker.services.sources import fetch_source, refresh_source_quality_scores
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 
 ALLOWED_COMMAND_TYPES = {
@@ -39,6 +44,10 @@ ALLOWED_COMMAND_TYPES = {
     "event.rescore",
     "event.mark",
     "event.recluster",
+    "event.merge",
+    "event.split",
+    "event.compact_archived",
+    "source.quality.refresh",
     "investigation.run_event",
     "retention.preview",
     "retention.run",
@@ -268,6 +277,45 @@ async def execute_bot_command(
             limit=int(payload.get("limit", 500)),
         )
         return dict(result)
+
+    if command_type == "event.merge":
+        return dict(
+            await merge_event_clusters(
+                session,
+                source_id=str(payload["source_event_id"]),
+                target_id=str(payload["target_event_id"]),
+            )
+        )
+
+    if command_type == "event.split":
+        news_item_ids = payload["news_item_ids"]
+        if isinstance(news_item_ids, str):
+            parsed_news_item_ids = [
+                item.strip() for item in news_item_ids.split(",") if item.strip()
+            ]
+        else:
+            parsed_news_item_ids = [str(item) for item in news_item_ids]
+        return dict(
+            await split_event_cluster(
+                session,
+                source_id=str(payload["event_id"]),
+                news_item_ids=parsed_news_item_ids,
+            )
+        )
+
+    if command_type == "event.compact_archived":
+        older_than = since_cutoff(str(payload.get("older_than", "30d")))
+        return dict(
+            await compact_archived_events(
+                session,
+                older_than=older_than,
+                dry_run=not bool(payload.get("apply", False)),
+                limit=int(payload.get("limit", 500)),
+            )
+        )
+
+    if command_type == "source.quality.refresh":
+        return dict(await refresh_source_quality_scores(session))
 
     if command_type == "investigation.run_event":
         run = await run_event_investigation(

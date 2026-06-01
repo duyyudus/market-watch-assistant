@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
@@ -19,6 +19,7 @@ from bot_worker.normalize import (
 )
 from bot_worker.rss import ParsedFeedItem
 from bot_worker.services.common import _json_safe, _published_to_string
+from bot_worker.services.sources import effective_source_score
 
 
 def is_rss_item_fresh(
@@ -86,7 +87,7 @@ async def normalize_pending_raw_items(
             canonical_url=canonical_url,
             source_name=source.name,
             source_type=source.source_type,
-            source_score=source.source_score,
+            source_score=effective_source_score(source),
             published_at=published_at,
             fetched_at=raw.fetched_at,
             language=source.language,
@@ -101,15 +102,29 @@ async def normalize_pending_raw_items(
         inserted += 1
     return inserted
 async def mark_exact_duplicates(session: AsyncSession) -> int:
-    stmt = select(NormalizedNewsItem).where(NormalizedNewsItem.processing_status == "normalized")
-    items = list((await session.scalars(stmt)).all())
-    seen: set[tuple[str | None, str]] = set()
-    duplicates = 0
-    for item in items:
-        key = (item.canonical_url_hash, item.title_hash)
-        if key in seen:
-            item.processing_status = "deduped"
-            duplicates += 1
-        else:
-            seen.add(key)
-    return duplicates
+    ranked = (
+        select(
+            NormalizedNewsItem.id.label("news_id"),
+            func.row_number()
+            .over(
+                partition_by=(
+                    NormalizedNewsItem.canonical_url_hash,
+                    NormalizedNewsItem.title_hash,
+                ),
+                order_by=(
+                    NormalizedNewsItem.created_at.asc(),
+                    NormalizedNewsItem.id.asc(),
+                ),
+            )
+            .label("row_number"),
+        )
+        .where(NormalizedNewsItem.processing_status == "normalized")
+        .subquery()
+    )
+    duplicate_ids = select(ranked.c.news_id).where(ranked.c.row_number > 1)
+    result = await session.execute(
+        update(NormalizedNewsItem)
+        .where(NormalizedNewsItem.id.in_(duplicate_ids))
+        .values(processing_status="deduped")
+    )
+    return int(result.rowcount or 0)

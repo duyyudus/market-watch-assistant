@@ -19,6 +19,9 @@ from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.pipeline_metrics import PipelineRunMetrics, slow_pipeline_stages
 from bot_worker.services.sources import (
     SourcePollingDecision,
+    compute_source_quality,
+    effective_source_score,
+    fetch_source,
     mark_source_fetch_result,
     should_poll_source,
 )
@@ -139,6 +142,93 @@ def test_source_polling_skips_interval_enters_burst_and_failure_cooldown() -> No
     assert source.consecutive_failure_count == 3
     assert source.disabled_until_at == now + timedelta(minutes=32)
     assert should_poll_source(source, now=now + timedelta(minutes=10)).reason == "failure_cooldown"
+
+
+def test_effective_source_score_blends_manual_and_auto_quality() -> None:
+    source = NewsSource(
+        source_score=80,
+        auto_quality_score=50,
+    )
+
+    assert effective_source_score(source) == 71
+
+
+@pytest.mark.asyncio
+async def test_compute_source_quality_uses_30_day_operational_signals() -> None:
+    source = NewsSource(id="src_1", source_score=80)
+
+    class QualitySession:
+        async def scalar(self, stmt):
+            text = str(stmt)
+            if "source_fetch_logs" in text and "status = :status_1" in text:
+                return 8
+            if "source_fetch_logs" in text:
+                return 10
+            if (
+                "normalized_news_items" in text
+                and "processing_status = :processing_status_1" in text
+            ):
+                return 2
+            if "event_cluster_items" in text:
+                return 6
+            if "normalized_news_items" in text:
+                return 10
+            return None
+
+    score, metrics = await compute_source_quality(QualitySession(), source)
+
+    assert score == 74
+    assert metrics == {
+        "reliability": 80,
+        "duplicate_rate": 20,
+        "event_contribution": 60,
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_uses_conditional_headers_and_handles_not_modified(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_1",
+        name="Feed",
+        source_type="rss",
+        category="global_macro",
+        region="global",
+        asset_classes=["global_macro"],
+        url="https://example.com/rss",
+        etag='"abc"',
+        last_modified="Mon, 01 Jun 2026 00:00:00 GMT",
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_fetch_source_content(source_arg):
+        calls.append(
+            {
+                "etag": source_arg.etag,
+                "last_modified": source_arg.last_modified,
+            }
+        )
+        return 304, "", {}
+
+    class FetchSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+    monkeypatch.setattr(
+        "bot_worker.services.sources.fetch_source_content",
+        fake_fetch_source_content,
+    )
+    session = FetchSession()
+
+    result = await fetch_source(session, source)
+
+    assert result == {"status": "not_modified", "items": 0, "inserted": 0}
+    assert calls == [{"etag": '"abc"', "last_modified": "Mon, 01 Jun 2026 00:00:00 GMT"}]
+    assert source.last_fetched_at is not None
+    assert session.added[0].status == "success"
+    assert session.added[0].http_status == 304
 
 
 def test_format_digest_message_groups_events_and_persists_digest_shape() -> None:

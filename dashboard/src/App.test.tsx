@@ -988,6 +988,81 @@ describe("Phase 3 command center", () => {
     );
   });
 
+  it("queues event merge, split, compaction, and quality refresh commands", async () => {
+    apiMock.events.mockResolvedValue(
+      envelope([
+        {
+          id: "evt_1",
+          canonical_headline: "Fed signals a slower rate path",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["Federal Reserve"],
+          affected_tickers: [],
+          source_count: 2,
+          final_score: 84,
+        },
+        {
+          id: "evt_2",
+          canonical_headline: "Treasury yields fall after jobs report",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["rates"],
+          affected_entities: ["Treasury"],
+          affected_tickers: [],
+          source_count: 1,
+          final_score: 70,
+        },
+      ]),
+    );
+
+    await renderLoadedApp();
+    switchTo("commands");
+
+    fireEvent.change(await screen.findByLabelText("Select event"), {
+      target: { value: "evt_1" },
+    });
+    fireEvent.change(screen.getByLabelText("Select merge target event"), {
+      target: { value: "evt_2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", {
+      name: /execute/i,
+    }));
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("event.merge", {
+        source_event_id: "evt_1",
+        target_event_id: "evt_2",
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Split news item IDs"), {
+      target: { value: "news_1, news_2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Split" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", {
+      name: /execute/i,
+    }));
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("event.split", {
+        event_id: "evt_1",
+        news_item_ids: ["news_1", "news_2"],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh quality/i }));
+    fireEvent.click(screen.getByRole("button", { name: /preview compaction/i }));
+
+    expect(apiMock.createCommand).toHaveBeenCalledWith("source.quality.refresh", {});
+    expect(apiMock.createCommand).toHaveBeenCalledWith("event.compact_archived", {
+      older_than: "30d",
+      limit: 500,
+      apply: false,
+    });
+  });
+
   it("requires confirmation for live pipeline run", async () => {
     await renderLoadedApp();
     switchTo("commands");

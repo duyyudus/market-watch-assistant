@@ -15,12 +15,14 @@ from bot_worker.db.models import (
     EventScoreHistory,
 )
 from bot_worker.services import (
+    compact_archived_events,
     digest_preview,
     event_report_time_range,
     format_report_time_range,
     recluster_recent_event_clusters,
 )
 from bot_worker.services.bot_commands import apply_event_score, score_event_cluster
+from bot_worker.services.events import merge_event_clusters, split_event_cluster
 
 
 @event_app.command("list")
@@ -113,51 +115,40 @@ def event_show(identifier: str) -> None:
     _run(_with_session(action))
 @event_app.command("merge")
 def event_merge(
-    left: str,
-    right: str,
+    source: str,
+    target: str,
     confirm: Annotated[bool, typer.Option("--confirm")] = False,
 ) -> None:
-    """Manually mark two event clusters as merged."""
+    """Merge one event cluster into another and move its news items."""
     if not confirm:
         typer.echo("Use --confirm to merge event clusters.")
         raise typer.Exit(1)
 
     async def action(session):
-        left_event = await session.get(EventCluster, left)
-        right_event = await session.get(EventCluster, right)
-        if left_event is None or right_event is None:
-            typer.echo("Event cluster not found")
-            raise typer.Exit(1)
-        left_event.source_count = max(
-            left_event.source_count,
-            left_event.source_count + right_event.source_count,
-        )
-        left_event.top_source_score = max(left_event.top_source_score, right_event.top_source_score)
-        left_event.confirmation_score = max(
-            left_event.confirmation_score, right_event.confirmation_score
-        )
-        left_event.market_impact_score = max(
-            left_event.market_impact_score, right_event.market_impact_score
-        )
-        left_event.relevance_score = max(left_event.relevance_score, right_event.relevance_score)
-        left_event.final_score = max(left_event.final_score, right_event.final_score)
-        left_event.regions = sorted({*left_event.regions, *right_event.regions})
-        left_event.asset_classes = sorted({*left_event.asset_classes, *right_event.asset_classes})
-        left_event.affected_entities = sorted(
-            {*left_event.affected_entities, *right_event.affected_entities}
-        )
-        left_event.affected_tickers = sorted(
-            {*left_event.affected_tickers, *right_event.affected_tickers}
-        )
-        right_event.status = "merged"
-        right_event.summary = f"Merged into {left_event.id}"
+        _echo_json(await merge_event_clusters(session, source_id=source, target_id=target))
+
+    _run(_with_session(action))
+
+
+@event_app.command("split")
+def event_split(
+    event_id: str,
+    news_ids: str,
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+) -> None:
+    """Split selected news items into a new event cluster."""
+    if not confirm:
+        typer.echo("Use --confirm to split event clusters.")
+        raise typer.Exit(1)
+    parsed_news_ids = [item.strip() for item in news_ids.split(",") if item.strip()]
+
+    async def action(session):
         _echo_json(
-            {
-                "merged_into": left_event.id,
-                "merged_from": right_event.id,
-                "status": right_event.status,
-                "final_score": left_event.final_score,
-            }
+            await split_event_cluster(
+                session,
+                source_id=event_id,
+                news_item_ids=parsed_news_ids,
+            )
         )
 
     _run(_with_session(action))
@@ -190,6 +181,31 @@ def event_recluster(
         result = await recluster_recent_event_clusters(
             session,
             since=since,
+            dry_run=not apply,
+            limit=limit,
+        )
+        _echo_json(result)
+
+    _run(_with_session(action))
+
+
+@event_app.command("compact-archived")
+def event_compact_archived(
+    older_than_value: Annotated[str, typer.Option("--older-than")] = "30d",
+    apply: Annotated[bool, typer.Option("--apply")] = False,
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+    limit: Annotated[int, typer.Option("--limit")] = 500,
+) -> None:
+    """Compact old archive-only event data; dry-run by default."""
+    if apply and not confirm:
+        typer.echo("Use --confirm with --apply to compact archived events.")
+        raise typer.Exit(1)
+    older_than = _since_cutoff(older_than_value)
+
+    async def action(session):
+        result = await compact_archived_events(
+            session,
+            older_than=older_than,
             dry_run=not apply,
             limit=limit,
         )

@@ -78,6 +78,8 @@ export function CommandsTable({
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [eventSelectCmd, setEventSelectCmd] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
+  const [targetEventId, setTargetEventId] = useState("");
+  const [splitNewsIds, setSplitNewsIds] = useState("");
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [markStatus, setMarkStatus] = useState<string>("confirmed");
 
@@ -246,6 +248,70 @@ export function CommandsTable({
                 Mark
               </button>
             </div>
+            <select
+              className="select select-bordered select-sm max-w-[220px] text-xs"
+              value={targetEventId}
+              onChange={(e) => setTargetEventId(e.target.value)}
+              aria-label="Select merge target event"
+            >
+              <option value="">Merge target…</option>
+              {events
+                .filter((event) => event.id !== selectedEventId)
+                .slice(0, 50)
+                .map((event) => (
+                  <option key={event.id} value={event.id}>
+                    {event.canonical_headline.slice(0, 60)}
+                  </option>
+                ))}
+            </select>
+            <button
+              className="btn btn-sm btn-outline btn-warning"
+              disabled={queueUnavailable || !selectedEventId || !targetEventId}
+              onClick={() =>
+                confirmThenQueue({
+                  title: "Merge event clusters?",
+                  description:
+                    "This will move all source event news items into the target event and mark the source event as merged.",
+                  commandType: "event.merge",
+                  payload: {
+                    source_event_id: selectedEventId,
+                    target_event_id: targetEventId,
+                  },
+                })
+              }
+              type="button"
+            >
+              Merge
+            </button>
+            <input
+              className="input input-bordered input-sm max-w-[240px] text-xs"
+              value={splitNewsIds}
+              onChange={(e) => setSplitNewsIds(e.target.value)}
+              placeholder="news_1,news_2"
+              aria-label="Split news item IDs"
+            />
+            <button
+              className="btn btn-sm btn-outline btn-warning"
+              disabled={queueUnavailable || !selectedEventId || !splitNewsIds.trim()}
+              onClick={() =>
+                confirmThenQueue({
+                  title: "Split event cluster?",
+                  description:
+                    "This will move the listed news items into a new event cluster and rescore both clusters.",
+                  commandType: "event.split",
+                  payload: {
+                    event_id: selectedEventId,
+                    news_item_ids: splitNewsIds
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                  },
+                })
+              }
+              type="button"
+            >
+              Split
+            </button>
           </>
         ) : (
           <span className="text-xs text-zinc-500">No events loaded</span>
@@ -282,6 +348,54 @@ export function CommandsTable({
         >
           <Layers className="h-3.5 w-3.5" />
           Apply recluster
+        </button>
+      </div>
+
+      {/* Data quality */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 w-20">
+          Quality
+        </span>
+        <button
+          className="btn btn-sm btn-outline"
+          disabled={queueUnavailable}
+          onClick={() => queue("source.quality.refresh", {})}
+          type="button"
+        >
+          <RefreshCcw className="h-3.5 w-3.5" />
+          Refresh quality
+        </button>
+        <button
+          className="btn btn-sm btn-outline"
+          disabled={queueUnavailable}
+          onClick={() =>
+            queue("event.compact_archived", {
+              older_than: "30d",
+              limit: 500,
+              apply: false,
+            })
+          }
+          type="button"
+        >
+          <Layers className="h-3.5 w-3.5" />
+          Preview compaction
+        </button>
+        <button
+          className="btn btn-sm btn-outline btn-warning"
+          disabled={queueUnavailable}
+          onClick={() =>
+            confirmThenQueue({
+              title: "Compact archived events?",
+              description:
+                "This will store compact summaries for old archive-only events and remove their embeddings.",
+              commandType: "event.compact_archived",
+              payload: { older_than: "30d", limit: 500, apply: true },
+            })
+          }
+          type="button"
+        >
+          <Layers className="h-3.5 w-3.5" />
+          Compact archived
         </button>
       </div>
 

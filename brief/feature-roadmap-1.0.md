@@ -335,11 +335,12 @@ Replace the in-memory dedup with a database-level approach:
 ### 6.2 Source Quality Auto-Scoring (Priority: P2)
 
 Currently `source_score` is manually set. Add automatic quality signals:
-- **Reliability score**: % of successful fetches over the past 30 days
-- **Freshness score**: average delay between `published_at` and `fetched_at`
-- **Duplicate rate**: % of items from this source that get deduped
-- **Event contribution**: % of items that end up in event clusters
-- Combine into an auto-calculated quality metric that modulates the static `source_score`
+- **Reliability score**: % of successful fetches over the past 30 days (50% weight)
+- **Duplicate rate**: % of items from this source that get deduped (20% weight)
+- **Event contribution**: % of items that end up in event clusters (30% weight)
+- Combine into an auto-calculated quality metric that modulates the static `source_score` using a robust blend of reliability (50%), originality (20%), and signal density (30%).
+
+Note: this is just my suggestion, if you think there is better way to do it, then feel free to suggest.
 
 ### 6.3 Incremental RSS Polling with ETags / Last-Modified (Priority: P2)
 
@@ -359,6 +360,8 @@ Events older than 30 days with `archive_only` alert level are rarely accessed. C
 - Drop their embeddings and entity associations
 - Keep the cluster and alert decision for historical reporting
 - This reduces storage without losing the audit trail
+
+However, i am still not sure how and where should be this compaction executed, just suggest some idea.
 
 ### 6.6 Configurable Embedding Dimensions (Priority: P3)
 

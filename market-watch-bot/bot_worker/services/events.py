@@ -14,6 +14,7 @@ from bot_worker.db.models import (
     NewsItemEmbedding,
     NormalizedNewsItem,
     Vector,
+    new_id,
     utcnow,
 )
 from bot_worker.embeddings import (
@@ -574,3 +575,248 @@ async def build_event_clusters(
         llm_cluster_decisions=llm_cluster_decisions,
         llm_cluster_attaches=llm_cluster_attaches,
     )
+
+
+async def _cluster_items(session: AsyncSession, cluster_id: str) -> list[NormalizedNewsItem]:
+    if hasattr(session, "links") and hasattr(session, "items"):
+        return [
+            session.items[link.news_item_id]
+            for link in session.links
+            if link.event_cluster_id == cluster_id and link.news_item_id in session.items
+        ]
+    return list(
+        (
+            await session.scalars(
+                select(NormalizedNewsItem)
+                .join(EventClusterItem, EventClusterItem.news_item_id == NormalizedNewsItem.id)
+                .where(EventClusterItem.event_cluster_id == cluster_id)
+            )
+        ).all()
+    )
+
+
+def _apply_cluster_item_summary(
+    cluster: EventCluster,
+    items: list[NormalizedNewsItem],
+    watch_entries: list[WatchlistEntry] | None = None,
+) -> None:
+    if not items:
+        _mark_cluster_stale(cluster)
+        return
+    latest = max(
+        items,
+        key=lambda item: item.published_at or item.fetched_at or item.created_at or utcnow(),
+    )
+    cluster.canonical_headline = latest.title
+    cluster.last_updated_at = utcnow()
+    cluster.regions = sorted({item.region for item in items})
+    cluster.asset_classes = sorted(
+        {asset_class for item in items for asset_class in item.asset_classes}
+    )
+    cluster.source_count = len(items)
+    cluster.high_quality_source_count = sum(1 for item in items if item.source_score >= 75)
+    cluster.top_source_score = max(item.source_score for item in items)
+    _rescore_cluster(cluster, watch_entries)
+
+
+async def _delete_cluster_embeddings(session: AsyncSession, cluster_ids: list[str]) -> int:
+    if not cluster_ids:
+        return 0
+    result = await session.execute(
+        delete(EventClusterEmbedding).where(EventClusterEmbedding.event_cluster_id.in_(cluster_ids))
+    )
+    return _result_rowcount(result)
+
+
+async def merge_event_clusters(
+    session: AsyncSession,
+    *,
+    source_id: str,
+    target_id: str,
+) -> dict[str, object]:
+    if source_id == target_id:
+        raise ValueError("source and target event clusters must be different")
+    source = await session.get(EventCluster, source_id)
+    target = await session.get(EventCluster, target_id)
+    if source is None:
+        raise ValueError(f"Event not found: {source_id}")
+    if target is None:
+        raise ValueError(f"Event not found: {target_id}")
+
+    moved = 0
+    if hasattr(session, "links"):
+        existing_target_news = {
+            link.news_item_id for link in session.links if link.event_cluster_id == target_id
+        }
+        for link in session.links:
+            if link.event_cluster_id != source_id:
+                continue
+            if link.news_item_id in existing_target_news:
+                continue
+            link.event_cluster_id = target_id
+            moved += 1
+    else:
+        source_news_ids = list(
+            (
+                await session.scalars(
+                    select(EventClusterItem.news_item_id).where(
+                        EventClusterItem.event_cluster_id == source_id
+                    )
+                )
+            ).all()
+        )
+        for news_id in source_news_ids:
+            exists_stmt = select(EventClusterItem.news_item_id).where(
+                EventClusterItem.event_cluster_id == target_id,
+                EventClusterItem.news_item_id == news_id,
+            )
+            if await session.scalar(exists_stmt):
+                continue
+            session.add(EventClusterItem(event_cluster_id=target_id, news_item_id=news_id))
+            moved += 1
+        await session.execute(
+            delete(EventClusterItem).where(EventClusterItem.event_cluster_id == source_id)
+        )
+
+    watch_entries = None if hasattr(session, "links") else await watchlist_entries(session)
+    _apply_cluster_item_summary(target, await _cluster_items(session, target_id), watch_entries)
+    source.status = "merged"
+    source.summary = f"Merged into {target.id}"
+    source.last_updated_at = utcnow()
+    embeddings_deleted = await _delete_cluster_embeddings(session, [source_id, target_id])
+    if hasattr(session, "flush"):
+        await session.flush()
+    return {
+        "status": "merged",
+        "source_event_id": source.id,
+        "target_event_id": target.id,
+        "moved_items": moved,
+        "event_cluster_embeddings_deleted": embeddings_deleted,
+        "final_score": target.final_score,
+    }
+
+
+async def split_event_cluster(
+    session: AsyncSession,
+    *,
+    source_id: str,
+    news_item_ids: list[str],
+) -> dict[str, object]:
+    source = await session.get(EventCluster, source_id)
+    if source is None:
+        raise ValueError(f"Event not found: {source_id}")
+    selected_ids = [item_id for item_id in dict.fromkeys(news_item_ids) if item_id]
+    if not selected_ids:
+        raise ValueError("at least one news item is required")
+    items = [await session.get(NormalizedNewsItem, item_id) for item_id in selected_ids]
+    selected_items = [item for item in items if item is not None]
+    if len(selected_items) != len(selected_ids):
+        raise ValueError("one or more news items were not found")
+
+    new_cluster = EventCluster(
+        id=new_id("evt"),
+        canonical_headline=selected_items[0].title,
+        first_seen_at=utcnow(),
+        last_updated_at=utcnow(),
+        status="reported",
+        regions=[],
+        asset_classes=[],
+        affected_entities=[],
+        affected_tickers=[],
+        source_count=0,
+        top_source_score=0,
+    )
+    session.add(new_cluster)
+    if hasattr(session, "flush"):
+        await session.flush()
+
+    if hasattr(session, "links"):
+        for link in session.links:
+            if link.event_cluster_id == source_id and link.news_item_id in selected_ids:
+                link.event_cluster_id = new_cluster.id
+    else:
+        await session.execute(
+            delete(EventClusterItem).where(
+                EventClusterItem.event_cluster_id == source_id,
+                EventClusterItem.news_item_id.in_(selected_ids),
+            )
+        )
+        for item_id in selected_ids:
+            session.add(EventClusterItem(event_cluster_id=new_cluster.id, news_item_id=item_id))
+
+    watch_entries = None if hasattr(session, "links") else await watchlist_entries(session)
+    _apply_cluster_item_summary(new_cluster, selected_items, watch_entries)
+    _apply_cluster_item_summary(source, await _cluster_items(session, source_id), watch_entries)
+    embeddings_deleted = await _delete_cluster_embeddings(session, [source_id, new_cluster.id])
+    if hasattr(session, "flush"):
+        await session.flush()
+    return {
+        "status": "split",
+        "source_event_id": source.id,
+        "new_event_id": new_cluster.id,
+        "moved_items": len(selected_items),
+        "event_cluster_embeddings_deleted": embeddings_deleted,
+    }
+
+
+async def compact_archived_events(
+    session: AsyncSession,
+    *,
+    older_than: datetime,
+    dry_run: bool = True,
+    limit: int = 500,
+) -> dict[str, object]:
+    if hasattr(session, "clusters"):
+        clusters = [
+            cluster
+            for cluster in session.clusters.values()
+            if cluster.alert_level == "archive_only"
+            and cluster.created_at < older_than
+            and cluster.compacted_at is None
+        ][:limit]
+    else:
+        clusters = list(
+            (
+                await session.scalars(
+                    select(EventCluster)
+                    .where(EventCluster.alert_level == "archive_only")
+                    .where(EventCluster.created_at < older_than)
+                    .where(EventCluster.compacted_at.is_(None))
+                    .order_by(EventCluster.created_at.asc())
+                    .limit(limit)
+                )
+            ).all()
+        )
+    if dry_run:
+        return {"status": "dry_run", "eligible": len(clusters), "compacted": 0}
+    cluster_ids = [cluster.id for cluster in clusters]
+    for cluster in clusters:
+        cluster.archive_summary = {
+            "id": cluster.id,
+            "canonical_headline": cluster.canonical_headline,
+            "summary": cluster.summary,
+            "regions": cluster.regions,
+            "asset_classes": cluster.asset_classes,
+            "affected_entities": cluster.affected_entities,
+            "affected_tickers": cluster.affected_tickers,
+            "source_count": cluster.source_count,
+            "final_score": cluster.final_score,
+        }
+        cluster.compacted_at = utcnow()
+    event_embeddings_deleted = await _delete_cluster_embeddings(session, cluster_ids)
+    news_embeddings_deleted = 0
+    if cluster_ids:
+        news_ids = select(EventClusterItem.news_item_id).where(
+            EventClusterItem.event_cluster_id.in_(cluster_ids)
+        )
+        result = await session.execute(
+            delete(NewsItemEmbedding).where(NewsItemEmbedding.news_item_id.in_(news_ids))
+        )
+        news_embeddings_deleted = _result_rowcount(result)
+    return {
+        "status": "compacted",
+        "eligible": len(clusters),
+        "compacted": len(clusters),
+        "event_cluster_embeddings_deleted": event_embeddings_deleted,
+        "news_item_embeddings_deleted": news_embeddings_deleted,
+    }

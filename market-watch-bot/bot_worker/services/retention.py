@@ -17,6 +17,7 @@ from bot_worker.db.models import (
     LLMAnalysisRun,
     MarketMove,
     MissedCatalystReview,
+    NewsEntity,
     NewsItemEmbedding,
     NormalizedNewsItem,
     RawNewsItem,
@@ -119,6 +120,15 @@ async def retention_preview(session: AsyncSession, policy: RetentionPolicy) -> d
 async def run_retention(session: AsyncSession, policy: RetentionPolicy) -> dict[str, int]:
     cutoffs = retention_cutoffs(datetime.now(UTC), policy)
     deleted: dict[str, int] = {}
+    stale_news_ids = select(NormalizedNewsItem.id).where(
+        NormalizedNewsItem.created_at < cutoffs["normalized_news_items"]
+    )
+    stale_cluster_ids = select(EventCluster.id).where(
+        EventCluster.created_at < cutoffs["event_clusters"]
+    )
+    stale_alert_ids = select(AlertDecisionRecord.id).where(
+        AlertDecisionRecord.created_at < cutoffs["alert_decisions"]
+    )
     deleted["source_fetch_logs"] = (
         await session.execute(
             delete(SourceFetchLog).where(SourceFetchLog.fetched_at < cutoffs["source_fetch_logs"])
@@ -127,6 +137,62 @@ async def run_retention(session: AsyncSession, policy: RetentionPolicy) -> dict[
     deleted["raw_news_items"] = (
         await session.execute(
             delete(RawNewsItem).where(RawNewsItem.fetched_at < cutoffs["raw_news_items"])
+        )
+    ).rowcount or 0
+    deleted["alert_deliveries"] = (
+        await session.execute(
+            delete(AlertDeliveryRecord).where(AlertDeliveryRecord.alert_decision_id.in_(stale_alert_ids))
+        )
+    ).rowcount or 0
+    deleted["alert_decisions"] = (
+        await session.execute(
+            delete(AlertDecisionRecord).where(
+                AlertDecisionRecord.created_at < cutoffs["alert_decisions"]
+            )
+        )
+    ).rowcount or 0
+    deleted["event_score_history"] = (
+        await session.execute(
+            delete(EventScoreHistory).where(EventScoreHistory.event_cluster_id.in_(stale_cluster_ids))
+        )
+    ).rowcount or 0
+    deleted["event_cluster_embeddings"] = (
+        await session.execute(
+            delete(EventClusterEmbedding).where(
+                EventClusterEmbedding.event_cluster_id.in_(stale_cluster_ids)
+            )
+        )
+    ).rowcount or 0
+    deleted["agent_investigations"] = (
+        await session.execute(
+            delete(AgentInvestigation).where(
+                _stale_agent_investigation_filter(cutoffs["event_clusters"])
+            )
+        )
+    ).rowcount or 0
+    deleted["missed_catalyst_reviews_updated"] = (
+        await session.execute(
+            delete(MissedCatalystReview).where(
+                MissedCatalystReview.detected_event_cluster_id.in_(stale_cluster_ids)
+            )
+        )
+    ).rowcount or 0
+    deleted["event_cluster_items"] = (
+        await session.execute(
+            delete(EventClusterItem).where(EventClusterItem.event_cluster_id.in_(stale_cluster_ids))
+        )
+    ).rowcount or 0
+    deleted["news_entities"] = (
+        await session.execute(delete(NewsEntity).where(NewsEntity.news_item_id.in_(stale_news_ids)))
+    ).rowcount or 0
+    deleted["news_item_embeddings"] = (
+        await session.execute(
+            delete(NewsItemEmbedding).where(NewsItemEmbedding.news_item_id.in_(stale_news_ids))
+        )
+    ).rowcount or 0
+    deleted["event_cluster_items_for_news"] = (
+        await session.execute(
+            delete(EventClusterItem).where(EventClusterItem.news_item_id.in_(stale_news_ids))
         )
     ).rowcount or 0
     deleted["normalized_news_items"] = (
@@ -139,20 +205,6 @@ async def run_retention(session: AsyncSession, policy: RetentionPolicy) -> dict[
     deleted["event_clusters"] = (
         await session.execute(
             delete(EventCluster).where(EventCluster.created_at < cutoffs["event_clusters"])
-        )
-    ).rowcount or 0
-    deleted["alert_decisions"] = (
-        await session.execute(
-            delete(AlertDecisionRecord).where(
-                AlertDecisionRecord.created_at < cutoffs["alert_decisions"]
-            )
-        )
-    ).rowcount or 0
-    deleted["agent_investigations"] = (
-        await session.execute(
-            delete(AgentInvestigation).where(
-                _stale_agent_investigation_filter(cutoffs["event_clusters"])
-            )
         )
     ).rowcount or 0
     session.add(

@@ -156,3 +156,28 @@ async def test_run_retention_deletes_agent_investigations() -> None:
 
     assert deleted["agent_investigations"] == 1
     assert "agent_investigations" in session.deleted_tables
+
+
+async def test_run_retention_deletes_child_tables_before_parent_tables() -> None:
+    session = RetentionDeleteSession()
+
+    await run_retention(session, RetentionPolicy())
+
+    assert session.deleted_tables.index("event_cluster_items") < session.deleted_tables.index(
+        "event_clusters"
+    )
+    assert session.deleted_tables.index("event_cluster_embeddings") < session.deleted_tables.index(
+        "event_clusters"
+    )
+    assert session.deleted_tables.index("event_score_history") < session.deleted_tables.index(
+        "event_clusters"
+    )
+    assert session.deleted_tables.index("news_entities") < session.deleted_tables.index(
+        "normalized_news_items"
+    )
+    assert session.deleted_tables.index("news_item_embeddings") < session.deleted_tables.index(
+        "normalized_news_items"
+    )
+    assert session.deleted_tables.index("alert_deliveries") < session.deleted_tables.index(
+        "alert_decisions"
+    )

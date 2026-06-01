@@ -15,6 +15,12 @@ _PAYLOAD_VALIDATORS: dict[str, Any] = {
     "event.rescore": {"required": {"event_id": str}},
     "event.mark": {"required": {"event_id": str, "status": str}},
     "event.recluster": {"optional": {"since": str, "limit": int, "apply": bool}},
+    "event.merge": {"required": {"source_event_id": str, "target_event_id": str}},
+    "event.split": {"required": {"event_id": str, "news_item_ids": list}},
+    "event.compact_archived": {
+        "optional": {"older_than": str, "limit": int, "apply": bool},
+    },
+    "source.quality.refresh": {},
     "investigation.run_event": {"required": {"event_id": str}},
     "retention.preview": {},
     "retention.run": {},

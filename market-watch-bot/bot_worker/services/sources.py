@@ -7,7 +7,7 @@ from time import perf_counter
 
 import httpx
 import yaml
-from sqlalchemy import Select, delete, or_, select, update
+from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -367,7 +367,110 @@ async def purge_source(session: AsyncSession, identifier: str) -> dict[str, int 
         await session.execute(delete(NewsSource).where(NewsSource.id == source_id))
     )
     return {"status": "purged", "source": source_name, **deleted}
-async def fetch_source_content(source: NewsSource) -> tuple[int, str]:
+def effective_source_score(source: NewsSource) -> int:
+    auto_score = getattr(source, "auto_quality_score", None)
+    if auto_score is None:
+        return int(source.source_score)
+    return round(int(source.source_score) * 0.7 + int(auto_score) * 0.3)
+
+
+async def compute_source_quality(
+    session: AsyncSession,
+    source: NewsSource,
+    *,
+    now: datetime | None = None,
+) -> tuple[int, dict[str, int]]:
+    current = now or datetime.now(UTC)
+    since = current - timedelta(days=30)
+    fetch_total = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(SourceFetchLog)
+            .where(SourceFetchLog.source_id == source.id, SourceFetchLog.fetched_at >= since)
+        )
+        or 0
+    )
+    fetch_success = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(SourceFetchLog)
+            .where(
+                SourceFetchLog.source_id == source.id,
+                SourceFetchLog.fetched_at >= since,
+                SourceFetchLog.status == "success",
+            )
+        )
+        or 0
+    )
+    news_total = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(NormalizedNewsItem)
+            .where(
+                NormalizedNewsItem.source_id == source.id,
+                NormalizedNewsItem.created_at >= since,
+            )
+        )
+        or 0
+    )
+    deduped = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(NormalizedNewsItem)
+            .where(
+                NormalizedNewsItem.source_id == source.id,
+                NormalizedNewsItem.created_at >= since,
+                NormalizedNewsItem.processing_status == "deduped",
+            )
+        )
+        or 0
+    )
+    clustered = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(EventClusterItem)
+            .join(NormalizedNewsItem, NormalizedNewsItem.id == EventClusterItem.news_item_id)
+            .where(
+                NormalizedNewsItem.source_id == source.id,
+                NormalizedNewsItem.created_at >= since,
+            )
+        )
+        or 0
+    )
+    reliability = round((fetch_success / fetch_total) * 100) if fetch_total else 60
+    duplicate_rate = round((deduped / news_total) * 100) if news_total else 0
+    event_contribution = round((clustered / news_total) * 100) if news_total else 0
+    metrics = {
+        "reliability": reliability,
+        "duplicate_rate": duplicate_rate,
+        "event_contribution": event_contribution,
+    }
+    score = round(
+        reliability * 0.50
+        + (100 - duplicate_rate) * 0.20
+        + event_contribution * 0.30
+    )
+    return min(100, max(0, score)), metrics
+
+
+async def refresh_source_quality_scores(session: AsyncSession) -> dict[str, int]:
+    sources = await list_sources(session)
+    updated = 0
+    for source in sources:
+        score, metrics = await compute_source_quality(session, source)
+        source.auto_quality_score = score
+        source.quality_metrics = metrics
+        source.quality_calculated_at = datetime.now(UTC)
+        updated += 1
+    return {"sources_updated": updated}
+
+
+async def fetch_source_content(source: NewsSource) -> tuple[int, str, dict[str, str]]:
+    headers = {}
+    if getattr(source, "etag", None):
+        headers["If-None-Match"] = source.etag
+    if getattr(source, "last_modified", None):
+        headers["If-Modified-Since"] = source.last_modified
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await request_with_retry(
             provider="rss",
@@ -375,15 +478,32 @@ async def fetch_source_content(source: NewsSource) -> tuple[int, str]:
             url=source.url,
             retry_policy=PROVIDER_RETRY_POLICIES["rss"],
             client=client,
+            headers=headers or None,
         )
-        return response.status_code, response.text
+        return response.status_code, response.text, dict(response.headers)
 async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, int | str]:
     started = perf_counter()
     try:
         decision = should_poll_source(source)
         if not decision.should_poll:
             return {"status": "skipped", "reason": decision.reason}
-        http_status, body = await fetch_source_content(source)
+        http_status, body, headers = await fetch_source_content(source)
+        if http_status == 304:
+            session.add(
+                SourceFetchLog(
+                    source_id=source.id,
+                    status="success",
+                    http_status=http_status,
+                    item_count=0,
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+            )
+            mark_source_fetch_result(source, status="success", inserted=0)
+            return {"status": "not_modified", "items": 0, "inserted": 0}
+        if headers.get("etag"):
+            source.etag = headers["etag"]
+        if headers.get("last-modified"):
+            source.last_modified = headers["last-modified"]
         items = parse_rss_items(body)
         inserted = 0
         for item in items:

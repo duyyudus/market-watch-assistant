@@ -205,23 +205,64 @@ Status: Completed
 - Added Maintenance dashboard tabs for LLM cost tracking and pipeline performance metrics.
 - Kept LLM cost estimation conservative: known models use built-in pricing defaults, and unknown models report token usage with zero estimated cost.
 
+## Track 6: Data Quality & Scale
+
+Status: Completed
+
+### Database-Level Deduplication
+
+- Added Alembic revision `0011_data_quality_scale.py` with a partial active normalized-news dedup index on `(canonical_url_hash, title_hash)`.
+- Replaced in-memory duplicate detection with a database window-update flow that marks later normalized rows as `deduped`.
+- Updated normalization to use the effective source score for newly normalized items.
+
+### Source Quality Auto-Scoring
+
+- Added persisted source quality fields: `auto_quality_score`, `quality_metrics`, and `quality_calculated_at`.
+- Added quality scoring based on 30-day reliability (50% weight), duplicate rate (20% weight), and event contribution (30% weight), simplified to ensure complete immunity to worker downtime and network-induced freshness delays.
+- Added `market-watch source quality refresh` and `source.quality.refresh` worker command support.
+
+### Incremental RSS Polling
+
+- Added `etag` and `last_modified` source metadata.
+- RSS fetches now send conditional headers and handle `304 Not Modified` without parsing or inserting raw items.
+- Successful `200` fetches persist returned `ETag` and `Last-Modified` headers.
+
+### Event Merge/Split Operations
+
+- Reworked event merge to move cluster item links, delete stale embeddings, rescore the target cluster, and mark the source cluster as `merged`.
+- Added event split support that moves selected news items into a new event cluster and rescores both clusters.
+- Added CLI commands, worker command types, API command validation, and dashboard command-center controls for merge and split.
+
+### Archived Event Compaction
+
+- Added `archive_summary` and `compacted_at` fields on event clusters.
+- Added archived-event compaction service, CLI command, worker command, and dashboard controls.
+- Compaction preserves cluster rows, item links, alert decisions, and score history while removing old event/news embeddings.
+
+### Embedding Dimension Validation
+
+- Added explicit validation that non-local embedding configurations match the current `vector(1536)` database columns.
+- Kept local embedding tests flexible for small-dimension unit vectors while preventing incompatible persisted vectors.
+
+### Retention Integrity
+
+- Updated retention sweeps to delete dependent rows before parent rows for alerts, event clusters, normalized news items, embeddings, entities, and related reviews.
+- Added model/migration `ON DELETE` metadata where appropriate while keeping service-level deletion order portable across SQLite and Postgres.
+
+### Dashboard/API Surface
+
+- Extended source API responses and dashboard source types with optional quality score fields.
+- Dashboard queues all new operational actions through `bot_commands`; it does not call worker services directly.
+
 ## Verification
 
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 194 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_api_contract.py -q` -> 19 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_alert_delivery.py tests/test_migration_0010.py tests/test_bot_commands.py -q` -> 26 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` outside the sandbox -> 210 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run ruff check .` -> all checks passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_logging.py tests/test_bot_commands.py tests/test_api_contract.py -q` outside the sandbox -> 38 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 201 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> all checks passed.
-- `cd market-watch-bot && uv run market-watch --help` -> rendered CLI help successfully.
-- `cd market-watch-bot && uv run market-watch pipeline run --dry-run` -> rendered dry-run pipeline path successfully.
-- `cd dashboard && npm test` -> 38 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 212 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_api_contract.py -q` -> 20 passed.
+- `cd market-watch-bot && uv run pytest tests/test_migration_0010.py tests/test_normalization.py tests/test_pipeline_intelligence.py tests/test_events.py tests/test_retention.py tests/test_embeddings.py tests/test_bot_commands.py -q` -> 57 passed.
+- `cd market-watch-bot && uv run ruff check .` -> all checks passed.
+- `cd dashboard && npm test -- --run` -> 39 passed.
 - `cd dashboard && npm run lint` -> TypeScript check passed.
 - `cd dashboard && npm run build` -> build completed.
-- Playwright rendered validation against local Vite server -> desktop/mobile event detail and source health screenshots captured successfully under `/tmp/dashboard-live-*.png`.
-- `docker compose config` -> Compose syntax rendered successfully.
 
 ## Operational Notes
 

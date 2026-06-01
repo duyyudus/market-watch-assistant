@@ -20,3 +20,25 @@ def test_alert_delivery_controls_migration_declares_tables_columns_and_indexes()
     ]
     for fragment in expected_fragments:
         assert fragment in migration
+
+
+def test_data_quality_scale_migration_declares_columns_indexes_and_fk_policy() -> None:
+    migration = Path("alembic/versions/0011_data_quality_scale.py").read_text(
+        encoding="utf-8"
+    )
+
+    expected_fragments = [
+        "etag",
+        "last_modified",
+        "auto_quality_score",
+        "quality_metrics",
+        "quality_calculated_at",
+        "archive_summary",
+        "compacted_at",
+        "ix_normalized_news_items_active_dedup",
+        "postgresql_where",
+        "processing_status = 'normalized'",
+        "ondelete=",
+    ]
+    for fragment in expected_fragments:
+        assert fragment in migration
