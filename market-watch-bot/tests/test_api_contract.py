@@ -11,9 +11,8 @@ from api_server.app.db import Base, get_session
 from api_server.app.main import app
 from common.config import Settings
 from common.db.models import (
-    AlertDecisionRecord as AlertDecision,
-)
-from common.db.models import (
+    AlertChannel,
+    AlertSuppressionRule,
     AppSetting,
     EventCluster,
     EventClusterEmbedding,
@@ -27,6 +26,9 @@ from common.db.models import (
     RetentionJob,
     SourceFetchLog,
     WatchlistEntity,
+)
+from common.db.models import (
+    AlertDecisionRecord as AlertDecision,
 )
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
@@ -92,6 +94,21 @@ async def client():
             reason="score_above_immediate_threshold",
             score_breakdown={"final_score": 84},
             channel="telegram",
+        )
+        channel = AlertChannel(
+            id="chan_1",
+            name="Primary Telegram",
+            channel_type="telegram",
+            config={"chat_id": "chat_1"},
+            enabled=True,
+            is_default=True,
+        )
+        suppression_rule = AlertSuppressionRule(
+            id="rule_1",
+            name="Quiet hours",
+            rule_type="quiet_hours",
+            config={"start_hour": 23, "end_hour": 7, "timezone": "Asia/Ho_Chi_Minh"},
+            enabled=True,
         )
         job = JobRun(
             id="jobrun_1",
@@ -224,7 +241,7 @@ async def client():
             deleted_counts={"news": 10},
         )
         session.add_all([
-            source, event, news, alert, job, watch, presets,
+            source, event, news, alert, channel, suppression_rule, job, watch, presets,
             fetch_log, score_history, catalyst, news_embedding,
             event_embedding, llm_run, retention
         ])
@@ -277,6 +294,89 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
     alerts = await client.get("/alerts")
     assert alerts.status_code == 200
     assert alerts.json()["items"][0]["event"]["id"] == "evt_1"
+    assert alerts.json()["items"][0]["acknowledged_at"] is None
+
+    channels = await client.get("/alert-channels")
+    assert channels.status_code == 200
+    assert channels.json()["items"][0]["name"] == "Primary Telegram"
+
+    rules = await client.get("/alert-suppression-rules")
+    assert rules.status_code == 200
+    assert rules.json()["items"][0]["rule_type"] == "quiet_hours"
+
+
+@pytest.mark.asyncio
+async def test_alert_controls_crud_acknowledge_and_channel_test_command(
+    client: AsyncClient,
+) -> None:
+    created_channel = await client.post(
+        "/alert-channels",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "Webhook",
+            "channel_type": "webhook",
+            "config": {"url": "https://hooks.example.test/alert"},
+            "enabled": True,
+            "is_default": False,
+        },
+    )
+    assert created_channel.status_code == 201
+    channel_id = created_channel.json()["id"]
+
+    patched_channel = await client.patch(
+        f"/alert-channels/{channel_id}",
+        headers=AUTH_HEADERS,
+        json={"enabled": False},
+    )
+    assert patched_channel.status_code == 200
+    assert patched_channel.json()["enabled"] is False
+
+    test_command = await client.post(
+        f"/alert-channels/{channel_id}/test",
+        headers=AUTH_HEADERS,
+        json={"message": "hello"},
+    )
+    assert test_command.status_code == 201
+    assert test_command.json()["command_type"] == "alert.test_channel"
+    assert test_command.json()["payload"]["channel_id"] == channel_id
+
+    created_rule = await client.post(
+        "/alert-suppression-rules",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "Mute BTC",
+            "rule_type": "entity_mute",
+            "config": {"entities": ["BTC"]},
+            "enabled": True,
+        },
+    )
+    assert created_rule.status_code == 201
+    rule_id = created_rule.json()["id"]
+
+    patched_rule = await client.patch(
+        f"/alert-suppression-rules/{rule_id}",
+        headers=AUTH_HEADERS,
+        json={"enabled": False},
+    )
+    assert patched_rule.status_code == 200
+    assert patched_rule.json()["enabled"] is False
+
+    acknowledged = await client.post("/alerts/alert_1/acknowledge", headers=AUTH_HEADERS)
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["acknowledged_at"] is not None
+
+    dismissed = await client.post("/alerts/alert_1/dismiss", headers=AUTH_HEADERS)
+    assert dismissed.status_code == 200
+    assert dismissed.json()["suppression_reason"] == "dismissed"
+
+    deleted_rule = await client.delete(
+        f"/alert-suppression-rules/{rule_id}",
+        headers=AUTH_HEADERS,
+    )
+    assert deleted_rule.status_code == 204
+
+    deleted_channel = await client.delete(f"/alert-channels/{channel_id}", headers=AUTH_HEADERS)
+    assert deleted_channel.status_code == 204
 
 
 @pytest.mark.asyncio
@@ -475,6 +575,19 @@ async def test_configuration_presets_are_served_by_api(client: AsyncClient) -> N
     assert payload["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
     assert "etf" in payload["watchlist"]["entity_types"]
     assert "equity" in payload["watchlist"]["asset_classes"]
+    
+    # Assert dynamic alert presets
+    assert "alerts" in payload
+    assert len(payload["alerts"]["channels"]) > 0
+    assert len(payload["alerts"]["rules"]) > 0
+    
+    webhook_preset = next(c for c in payload["alerts"]["channels"] if c["type"] == "webhook")
+    assert webhook_preset["placeholder"] == "e.g. Discord Webhook Alerts"
+    assert "url" in webhook_preset["template"]
+    
+    cooldown_preset = next(r for r in payload["alerts"]["rules"] if r["type"] == "cooldown")
+    assert cooldown_preset["placeholder"] == "e.g. 6-Hour Cooldown"
+    assert cooldown_preset["template"]["hours"] == 6
 
 
 @pytest.mark.asyncio

@@ -5,12 +5,16 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot_worker.db.models import BotCommand, EventCluster, NewsSource
+from bot_worker.db.models import AlertChannel, BotCommand, EventCluster, NewsSource
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
 from bot_worker.llm import LLMConfig
 from bot_worker.scoring import ScoreInput, score_event
-from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pending_alerts
+from bot_worker.services.alert_delivery import (
+    AlertDeliveryConfig,
+    dispatch_pending_alerts,
+    send_test_alert_to_channel,
+)
 from bot_worker.services.digests import build_digest_record, send_digest_record
 from bot_worker.services.events import recluster_recent_event_clusters
 from bot_worker.services.investigation import run_event_investigation
@@ -30,6 +34,7 @@ ALLOWED_COMMAND_TYPES = {
     "pipeline.run",
     "source.fetch",
     "alert.dispatch",
+    "alert.test_channel",
     "digest.send",
     "event.rescore",
     "event.mark",
@@ -159,6 +164,20 @@ async def execute_bot_command(
             dry_run=bool(payload.get("dry_run", False)),
         )
         return dict(result)
+
+    if command_type == "alert.test_channel":
+        channel_id = str(payload["channel_id"])
+        channel = await session.get(AlertChannel, channel_id)
+        if channel is None:
+            raise ValueError(f"Alert channel not found: {channel_id}")
+        return dict(
+            await send_test_alert_to_channel(
+                session,
+                channel,
+                AlertDeliveryConfig.from_settings(settings, channel=channel.channel_type),
+                str(payload.get("message", "Market watch alert delivery test.")),
+            )
+        )
 
     if command_type == "digest.send":
         until = utcnow()

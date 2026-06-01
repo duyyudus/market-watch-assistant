@@ -353,7 +353,37 @@ class AlertDecisionRecord(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     channel: Mapped[str | None] = mapped_column(String(32))
     suppression_reason: Mapped[str | None] = mapped_column(Text)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AlertChannel(Base):
+    __tablename__ = "alert_channels"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("chan"))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    config: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AlertSuppressionRule(Base):
+    __tablename__ = "alert_suppression_rules"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("rule"))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    config: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class AlertDeliveryRecord(Base):
@@ -370,6 +400,9 @@ class AlertDeliveryRecord(Base):
     provider_response: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)
     attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    permanently_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

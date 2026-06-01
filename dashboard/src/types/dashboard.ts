@@ -1,6 +1,8 @@
 import type {
   AlertPolicy,
   AlertDecision,
+  AlertChannel,
+  AlertSuppressionRule,
   BotCommand,
   BotStatus,
   ConfigurationPresets,
@@ -29,6 +31,8 @@ export type DashboardState = {
   events: EventCluster[];
   news: NewsItem[];
   alerts: AlertDecision[];
+  alertChannels: AlertChannel[];
+  alertSuppressionRules: AlertSuppressionRule[];
   jobs: JobRun[];
   watchlist: WatchlistEntry[];
   commands: BotCommand[];
@@ -42,6 +46,8 @@ export type ResourceKey =
   | "events"
   | "news"
   | "alerts"
+  | "alertChannels"
+  | "alertSuppressionRules"
   | "jobs"
   | "watchlist"
   | "commands"

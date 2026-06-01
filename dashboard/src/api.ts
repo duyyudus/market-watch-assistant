@@ -74,9 +74,47 @@ export type AlertDecision = {
   reason: string;
   channel?: string | null;
   sent_at?: string | null;
+  acknowledged_at?: string | null;
+  suppression_reason?: string | null;
   created_at?: string | null;
   event?: { id: string; headline: string; final_score?: number; status?: string } | null;
   latest_delivery_status?: string | null;
+};
+
+export type AlertChannel = {
+  id: string;
+  name: string;
+  channel_type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  is_default: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AlertChannelPayload = {
+  name: string;
+  channel_type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  is_default: boolean;
+};
+
+export type AlertSuppressionRule = {
+  id: string;
+  name: string;
+  rule_type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AlertSuppressionRulePayload = {
+  name: string;
+  rule_type: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
 };
 
 export type JobRun = {
@@ -119,6 +157,14 @@ export type AlertPolicy = {
   default_channel: string;
 };
 
+export type AlertPresetItem = {
+  type: string;
+  placeholder: string;
+  template: Record<string, any>;
+  description: string;
+  parameters: Record<string, string>;
+};
+
 export type ConfigurationPresets = {
   sources: {
     source_types: string[];
@@ -131,6 +177,10 @@ export type ConfigurationPresets = {
     tiers: string[];
     regions: string[];
     asset_classes: string[];
+  };
+  alerts: {
+    channels: AlertPresetItem[];
+    rules: AlertPresetItem[];
   };
 };
 
@@ -274,6 +324,9 @@ export const api = {
   event: (id: string) => request<EventCluster>(`/events/${id}`),
   news: () => request<ListEnvelope<NewsItem>>("/news?limit=100"),
   alerts: () => request<ListEnvelope<AlertDecision>>("/alerts?limit=100"),
+  alertChannels: () => request<ListEnvelope<AlertChannel>>("/alert-channels"),
+  alertSuppressionRules: () =>
+    request<ListEnvelope<AlertSuppressionRule>>("/alert-suppression-rules"),
   jobs: () => request<ListEnvelope<JobRun>>("/jobs/runs?limit=50"),
   watchlist: () => request<ListEnvelope<WatchlistEntry>>("/watchlist"),
   alertPolicy: () => request<AlertPolicy>("/settings/alert-policy"),
@@ -296,6 +349,39 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  createAlertChannel: (payload: AlertChannelPayload) =>
+    request<AlertChannel>("/alert-channels", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateAlertChannel: (id: string, payload: Partial<AlertChannelPayload>) =>
+    request<AlertChannel>(`/alert-channels/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteAlertChannel: (id: string) =>
+    request<void>(`/alert-channels/${id}`, { method: "DELETE" }),
+  testAlertChannel: (id: string, message: string) =>
+    request<BotCommand>(`/alert-channels/${id}/test`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  createAlertSuppressionRule: (payload: AlertSuppressionRulePayload) =>
+    request<AlertSuppressionRule>("/alert-suppression-rules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateAlertSuppressionRule: (id: string, payload: Partial<AlertSuppressionRulePayload>) =>
+    request<AlertSuppressionRule>(`/alert-suppression-rules/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteAlertSuppressionRule: (id: string) =>
+    request<void>(`/alert-suppression-rules/${id}`, { method: "DELETE" }),
+  acknowledgeAlert: (id: string) =>
+    request<AlertDecision>(`/alerts/${id}/acknowledge`, { method: "POST" }),
+  dismissAlert: (id: string) =>
+    request<AlertDecision>(`/alerts/${id}/dismiss`, { method: "POST" }),
   createCommand: (command_type: string, payload: Record<string, unknown>) =>
     request<BotCommand>("/bot/commands", {
       method: "POST",

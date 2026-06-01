@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import type {
   AlertDecision,
+  AlertChannel,
   AlertPolicy,
+  AlertSuppressionRule,
   BotCommand,
   BotStatus,
   ConfigurationPresets,
@@ -17,6 +19,7 @@ import { api, normalizeListResponse } from "../api";
 import { Badge } from "../components/Badge";
 import { Panel } from "../components/Panel";
 import { AlertsTable } from "../features/alerts/AlertsTable";
+import { AlertControls } from "../features/alerts/AlertControls";
 import { CommandsTable } from "../features/commands/CommandsTable";
 import { Events } from "../features/events/Events";
 import { NewsTable } from "../features/news/NewsTable";
@@ -41,6 +44,7 @@ export function App() {
   const [theme, setTheme] = useState<string>(
     () => localStorage.getItem("mw-theme") ?? "emerald_terminal",
   );
+  const [alertSubTab, setAlertSubTab] = useState<"decisions" | "controls">("decisions");
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
@@ -56,6 +60,8 @@ export function App() {
       settle("events", api.events()),
       settle("news", api.news()),
       settle("alerts", api.alerts()),
+      settle("alertChannels", api.alertChannels()),
+      settle("alertSuppressionRules", api.alertSuppressionRules()),
       settle("jobs", api.jobs()),
       settle("watchlist", api.watchlist()),
       settle("commands", api.commands()),
@@ -82,6 +88,13 @@ export function App() {
       }
       if (result.key === "alerts") {
         nextState.alerts = normalizeListResponse<AlertDecision>(result.value).items;
+      }
+      if (result.key === "alertChannels") {
+        nextState.alertChannels = normalizeListResponse<AlertChannel>(result.value).items;
+      }
+      if (result.key === "alertSuppressionRules") {
+        nextState.alertSuppressionRules =
+          normalizeListResponse<AlertSuppressionRule>(result.value).items;
       }
       if (result.key === "jobs") {
         nextState.jobs = normalizeListResponse<JobRun>(result.value).items;
@@ -119,7 +132,7 @@ export function App() {
       .includes(query.toLowerCase()),
   );
   const errorCount = Object.keys(resourceErrors).length;
-  const apiResourceCount = 10;
+  const apiResourceCount = 12;
   const apiBadgeLabel =
     errorCount === 0 ? "API ok" : errorCount === apiResourceCount ? "API offline" : "API degraded";
   const apiBadgeTone = errorCount === 0 ? "success" : errorCount === apiResourceCount ? "error" : "warning";
@@ -129,6 +142,20 @@ export function App() {
     await load();
     setView("commands");
   }
+
+  async function acknowledgeAlert(id: string) {
+    await api.acknowledgeAlert(id);
+    await load();
+  }
+
+  async function dismissAlert(id: string) {
+    await api.dismissAlert(id);
+    await load();
+  }
+
+  const unacknowledgedAlerts = state.alerts.filter(
+    (alert) => alert.decision === "immediate_alert" && !alert.acknowledged_at,
+  ).length;
 
   return (
     <div
@@ -190,6 +217,9 @@ export function App() {
                 <Badge tone="warning">queue unavailable</Badge>
               ) : null}
               <Badge tone="info">{state.status?.pending_commands ?? 0} pending</Badge>
+              {unacknowledgedAlerts > 0 ? (
+                <Badge tone="warning">{unacknowledgedAlerts} unacknowledged</Badge>
+              ) : null}
 
               <div className="dropdown dropdown-end dropdown-bottom">
                 <label
@@ -289,9 +319,49 @@ export function App() {
           ) : view === "news" ? (
             <NewsTable rows={state.news} error={resourceErrors.news} retry={load} />
           ) : view === "alerts" ? (
-            <Panel title="Alert decisions">
-              <AlertsTable rows={state.alerts} error={resourceErrors.alerts} retry={load} />
-            </Panel>
+            <div className="space-y-4">
+              <div className="tabs tabs-boxed border border-zinc-800/60 bg-zinc-950/60 p-1 flex flex-wrap gap-1">
+                <button
+                  className={`tab tab-sm sm:tab-md transition-all duration-200 flex items-center gap-2 ${alertSubTab === "decisions"
+                      ? "tab-active bg-indigo-600/90 text-white font-bold"
+                      : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  onClick={() => setAlertSubTab("decisions")}
+                  type="button"
+                >
+                  Overview
+                </button>
+                <button
+                  className={`tab tab-sm sm:tab-md transition-all duration-200 flex items-center gap-2 ${alertSubTab === "controls"
+                      ? "tab-active bg-indigo-600/90 text-white font-bold"
+                      : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  onClick={() => setAlertSubTab("controls")}
+                  type="button"
+                >
+                  Setting
+                </button>
+              </div>
+
+              {alertSubTab === "decisions" ? (
+                <Panel title="Alert decisions">
+                  <AlertsTable
+                    rows={state.alerts}
+                    error={resourceErrors.alerts}
+                    retry={load}
+                    acknowledge={acknowledgeAlert}
+                    dismiss={dismissAlert}
+                  />
+                </Panel>
+              ) : (
+                <AlertControls
+                  channels={state.alertChannels}
+                  rules={state.alertSuppressionRules}
+                  reload={load}
+                  presets={state.presets}
+                />
+              )}
+            </div>
           ) : view === "sources" ? (
             <SourcesTable
               rows={state.sources}

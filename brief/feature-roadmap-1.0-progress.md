@@ -1,6 +1,6 @@
 # Market Watch Assistant 1.0 Roadmap Progress
 
-Updated: 2026-05-31
+Updated: 2026-06-01
 
 ## Track 1: Infrastructure & Deployment
 
@@ -112,17 +112,50 @@ Status: Completed
 
 - Removed nonexistent `run_move_investigation` from `bot_worker.services.__all__`.
 
+## Track 3: Alert & Delivery
+
+Status: Completed
+
+### 3.1 Alert Channel Abstraction
+
+- Added persisted `alert_channels` records with channel type, configuration, enabled state, default flag, and timestamps.
+- Added channel-aware delivery support for log, Telegram, and generic webhook JSON alerts.
+- Added Telegram text and webhook JSON formatting paths.
+- Added dashboard channel management and channel test actions that enqueue worker commands through `bot_commands`.
+
+### 3.2 Alert Suppression Rules
+
+- Added persisted `alert_suppression_rules` records with rule type, configuration, enabled state, and timestamps.
+- Added cooldown, quiet-hours, region/category filter, and entity/ticker mute evaluation before immediate delivery.
+- Added dashboard suppression rule management for the supported rule types.
+
+### 3.3 Alert Acknowledgement Flow
+
+- Added `acknowledged_at` to alert decisions.
+- Added API endpoints to acknowledge and dismiss alerts.
+- Added dashboard unacknowledged alert badge plus acknowledge/dismiss controls in the alerts view.
+
+### 3.4 Failed Alert Retry Queue
+
+- Added delivery retry metadata: `attempt_count`, `next_attempt_at`, and `permanently_failed_at`.
+- Updated alert dispatch to retry failed delivery records after the retry window.
+- Added max-attempt handling that marks exhausted deliveries as `permanently_failed`.
+
 ## Verification
 
-- `cd market-watch-bot && uv run pytest` -> 204 passed.
-- `cd market-watch-bot && uv run ruff check .` -> all checks passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 194 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_api_contract.py -q` -> 16 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_alert_delivery.py tests/test_migration_0010.py tests/test_bot_commands.py -q` -> 26 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` outside the sandbox -> 210 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run ruff check .` -> all checks passed.
 - `cd market-watch-bot && uv run market-watch --help` -> rendered CLI help successfully.
 - `cd market-watch-bot && uv run market-watch pipeline run --dry-run` -> rendered dry-run pipeline path successfully.
-- `cd dashboard && npm test` -> 24 passed.
+- `cd dashboard && npm test` -> 25 passed.
 - `cd dashboard && npm run build` -> build completed.
 - `docker compose config` -> Compose syntax rendered successfully.
 
 ## Operational Notes
 
 - `docker-compose.yml` mounts `market-watch-bot/.env` into backend containers instead of using Compose `env_file`, so `docker compose config` does not expand local secrets into rendered service environment output.
-- No live containers, live migrations, live market-data calls, OpenRouter calls, Brave calls, Telegram sends, or live pipeline commands were run for Track 2 verification.
+- Sandboxed `aiosqlite.connect(":memory:")` timed out in this Codex environment, but the same API contract suite passed outside the sandbox. The timeout was isolated to sandboxed async SQLite startup rather than API endpoint behavior.
+- No live containers, live migrations, live market-data calls, OpenRouter calls, Brave calls, Telegram sends, webhook posts, or live pipeline commands were run for Track 3 verification.

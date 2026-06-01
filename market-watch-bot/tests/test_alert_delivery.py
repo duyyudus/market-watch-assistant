@@ -8,14 +8,18 @@ import pytest
 import bot_worker.services.pipeline as pipeline_services
 from bot_worker.db.models import (
     AgentInvestigation,
+    AlertChannel,
     AlertDecisionRecord,
     AlertDeliveryRecord,
+    AlertSuppressionRule,
     EventCluster,
 )
 from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
+    apply_alert_suppression,
     dispatch_pending_alerts,
     format_alert_message,
+    format_webhook_payload,
     send_test_alert,
 )
 
@@ -85,6 +89,19 @@ def _alert(**overrides: object) -> AlertDecisionRecord:
     return AlertDecisionRecord(**data)
 
 
+def _channel(**overrides: object) -> AlertChannel:
+    data = {
+        "id": "chan_1",
+        "name": "Primary webhook",
+        "channel_type": "webhook",
+        "config": {"url": "https://hooks.example.test/alert"},
+        "enabled": True,
+        "is_default": True,
+    }
+    data.update(overrides)
+    return AlertChannel(**data)
+
+
 def test_format_alert_message_uses_deterministic_fallback() -> None:
     message = format_alert_message(
         _alert(),
@@ -120,6 +137,94 @@ def test_format_alert_message_prefers_llm_alert_message() -> None:
     assert "Oil rises on reported Gulf shipping disruption." in message
     assert "A disruption could lift inflation expectations." in message
     assert "score_above_immediate_threshold" not in message
+
+
+def test_format_webhook_payload_includes_alert_event_and_ack_state() -> None:
+    alert = _alert(acknowledged_at=datetime(2026, 5, 27, 1, tzinfo=UTC))
+    event = _event(regions=["global"], asset_classes=["commodity"])
+
+    payload = format_webhook_payload(alert, event)
+
+    assert payload["alert"]["id"] == "alert_1"
+    assert payload["alert"]["decision"] == "immediate_alert"
+    assert payload["alert"]["acknowledged_at"] == "2026-05-27T01:00:00+00:00"
+    assert payload["event"]["id"] == "evt_1"
+    assert payload["event"]["regions"] == ["global"]
+
+
+@pytest.mark.asyncio
+async def test_apply_alert_suppression_marks_cooldown_quiet_hours_and_entity_mute() -> None:
+    alert = _alert()
+    event = _event(
+        id="evt_1",
+        last_alerted_at=datetime(2026, 5, 27, 15, 0, tzinfo=UTC),
+        affected_entities=["Federal Reserve"],
+        regions=["us"],
+    )
+    rules = [
+        AlertSuppressionRule(
+            name="Cooldown",
+            rule_type="cooldown",
+            config={"hours": 6},
+        ),
+        AlertSuppressionRule(
+            name="Quiet hours",
+            rule_type="quiet_hours",
+            config={"start_hour": 23, "end_hour": 7, "timezone": "Asia/Ho_Chi_Minh"},
+        ),
+        AlertSuppressionRule(
+            name="Mute Fed",
+            rule_type="entity_mute",
+            config={"entities": ["Federal Reserve"], "until": "2026-05-28T00:00:00+00:00"},
+        ),
+    ]
+
+    reason = apply_alert_suppression(
+        alert,
+        event,
+        rules,
+        now=datetime(2026, 5, 27, 16, 0, tzinfo=UTC),
+    )
+
+    assert reason == "cooldown: repeated alert inside 6h"
+    assert alert.suppression_reason == reason
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_alerts_retries_failed_delivery_then_marks_permanent() -> None:
+    alert = _alert()
+    event = _event()
+    retry_delivery = AlertDeliveryRecord(
+        id="delivery_1",
+        alert_decision_id=alert.id,
+        channel="telegram",
+        recipient="chat_1",
+        status="failed",
+        message_text="old message",
+        attempted_at=datetime(2026, 5, 27, 1, 0, tzinfo=UTC),
+        attempt_count=3,
+        next_attempt_at=datetime(2026, 5, 27, 1, 5, tzinfo=UTC),
+    )
+    session = DeliverySession([(alert, event)])
+    session.retry_deliveries = [retry_delivery]
+
+    async def fake_send(_config: AlertDeliveryConfig, _recipient: str, _message: str) -> dict:
+        raise RuntimeError("telegram unavailable")
+
+    result = await dispatch_pending_alerts(
+        session,
+        AlertDeliveryConfig(
+            channel="telegram",
+            telegram_bot_token="token",
+            telegram_chat_id="chat_1",
+        ),
+        now=datetime(2026, 5, 27, 1, 6, tzinfo=UTC),
+        send_telegram_message=fake_send,
+    )
+
+    assert result["permanently_failed"] == 1
+    assert retry_delivery.status == "permanently_failed"
+    assert retry_delivery.permanently_failed_at == datetime(2026, 5, 27, 1, 6, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

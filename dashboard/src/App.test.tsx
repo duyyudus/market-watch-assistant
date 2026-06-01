@@ -9,6 +9,17 @@ const apiMock = vi.hoisted(() => ({
   events: vi.fn(),
   news: vi.fn(),
   alerts: vi.fn(),
+  alertChannels: vi.fn(),
+  alertSuppressionRules: vi.fn(),
+  createAlertChannel: vi.fn(),
+  updateAlertChannel: vi.fn(),
+  deleteAlertChannel: vi.fn(),
+  testAlertChannel: vi.fn(),
+  createAlertSuppressionRule: vi.fn(),
+  updateAlertSuppressionRule: vi.fn(),
+  deleteAlertSuppressionRule: vi.fn(),
+  acknowledgeAlert: vi.fn(),
+  dismissAlert: vi.fn(),
   jobs: vi.fn(),
   watchlist: vi.fn(),
   commands: vi.fn(),
@@ -116,6 +127,30 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         created_at: "2026-05-29T13:05:00Z",
         event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
         latest_delivery_status: "sent",
+        acknowledged_at: null,
+      },
+    ]),
+  );
+  apiMock.alertChannels.mockResolvedValue(
+    envelope([
+      {
+        id: "chan_1",
+        name: "Primary Telegram",
+        channel_type: "telegram",
+        config: { chat_id: "chat_1" },
+        enabled: true,
+        is_default: true,
+      },
+    ]),
+  );
+  apiMock.alertSuppressionRules.mockResolvedValue(
+    envelope([
+      {
+        id: "rule_1",
+        name: "Quiet hours",
+        rule_type: "quiet_hours",
+        config: { start_hour: 23, end_hour: 7 },
+        enabled: true,
       },
     ]),
   );
@@ -166,6 +201,26 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       tiers: ["S", "A", "B", "C", "D"],
       regions: ["global", "us", "vietnam", "crypto"],
       asset_classes: ["equity", "crypto", "global_macro"],
+    },
+    alerts: {
+      channels: [
+        {
+          type: "webhook",
+          placeholder: "e.g. Discord Webhook Alerts",
+          template: { url: "https://hooks.example.test/alert" },
+          description: "Submits JSON payloads.",
+          parameters: { url: "required" },
+        },
+      ],
+      rules: [
+        {
+          type: "cooldown",
+          placeholder: "e.g. 6-Hour Cooldown",
+          template: { hours: 6 },
+          description: "Dampens frequent repetitions.",
+          parameters: { hours: "required" },
+        },
+      ],
     },
   });
   apiMock.createSource.mockResolvedValue({
@@ -227,6 +282,43 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     watchlist_threshold: 60,
     digest_threshold: 35,
     default_channel: "telegram",
+  });
+  apiMock.createAlertChannel.mockResolvedValue({
+    id: "chan_2",
+    name: "Webhook",
+    channel_type: "webhook",
+    config: { url: "https://hooks.example.test/alert" },
+    enabled: true,
+    is_default: false,
+  });
+  apiMock.testAlertChannel.mockResolvedValue({
+    id: "cmd_channel",
+    command_type: "alert.test_channel",
+    status: "pending",
+    payload: { channel_id: "chan_1" },
+  });
+  apiMock.createAlertSuppressionRule.mockResolvedValue({
+    id: "rule_2",
+    name: "Cooldown",
+    rule_type: "cooldown",
+    config: { hours: 6 },
+    enabled: true,
+  });
+  apiMock.acknowledgeAlert.mockResolvedValue({
+    id: "alert_1",
+    event_cluster_id: "evt_1",
+    decision: "immediate_alert",
+    reason: "score_above_immediate_threshold",
+    channel: "telegram",
+    acknowledged_at: "2026-05-29T14:00:00Z",
+    event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
+  });
+  apiMock.dismissAlert.mockResolvedValue({
+    id: "alert_1",
+    event_cluster_id: "evt_1",
+    decision: "immediate_alert",
+    reason: "score_above_immediate_threshold",
+    suppression_reason: "dismissed",
   });
   Object.assign(apiMock, overrides);
 }
@@ -427,6 +519,121 @@ describe("App data states", () => {
         default_channel: "telegram",
       }),
     );
+  });
+
+  it("acknowledges alerts and manages delivery controls", async () => {
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    expect(await screen.findByText("1 unacknowledged")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /acknowledge/i }));
+
+    await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
+
+    // Switch to controls sub-tab to make inputs visible in DOM
+    fireEvent.click(screen.getByRole("button", { name: /setting/i }));
+
+    fireEvent.change(screen.getByLabelText("Channel name"), { target: { value: "Webhook" } });
+    fireEvent.change(screen.getByLabelText("Channel config"), {
+      target: { value: '{"url":"https://hooks.example.test/alert"}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save channel/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createAlertChannel).toHaveBeenCalledWith({
+        name: "Webhook",
+        channel_type: "webhook",
+        config: { url: "https://hooks.example.test/alert" },
+        enabled: true,
+        is_default: false,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /test Primary Telegram/i }));
+    await waitFor(() =>
+      expect(apiMock.testAlertChannel).toHaveBeenCalledWith(
+        "chan_1",
+        "Dashboard test alert",
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Rule name"), { target: { value: "Cooldown" } });
+    fireEvent.click(screen.getByRole("button", { name: /save suppression rule/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createAlertSuppressionRule).toHaveBeenCalledWith({
+        name: "Cooldown",
+        rule_type: "cooldown",
+        config: { hours: 6 },
+        enabled: true,
+      }),
+    );
+  });
+
+  it("dismisses alerts and updates state", async () => {
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    expect(await screen.findByText("unacknowledged")).toBeInTheDocument();
+
+    // Setup mock for subsequent reload
+    apiMock.alerts.mockResolvedValue(
+      envelope([
+        {
+          id: "alert_1",
+          event_cluster_id: "evt_1",
+          decision: "immediate_alert",
+          reason: "score_above_immediate_threshold",
+          channel: "telegram",
+          sent_at: "2026-05-29T13:05:00Z",
+          created_at: "2026-05-29T13:05:00Z",
+          event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
+          latest_delivery_status: "sent",
+          acknowledged_at: "2026-05-29T14:00:00Z",
+          suppression_reason: "dismissed",
+        },
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+
+    await waitFor(() => expect(apiMock.dismissAlert).toHaveBeenCalledWith("alert_1"));
+    expect(await screen.findByText("dismissed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /acknowledge/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
+  });
+
+  it("acknowledges alerts and hides buttons", async () => {
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    expect(await screen.findByText("unacknowledged")).toBeInTheDocument();
+
+    // Setup mock for subsequent reload
+    apiMock.alerts.mockResolvedValue(
+      envelope([
+        {
+          id: "alert_1",
+          event_cluster_id: "evt_1",
+          decision: "immediate_alert",
+          reason: "score_above_immediate_threshold",
+          channel: "telegram",
+          sent_at: "2026-05-29T13:05:00Z",
+          created_at: "2026-05-29T13:05:00Z",
+          event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
+          latest_delivery_status: "sent",
+          acknowledged_at: "2026-05-29T14:00:00Z",
+          suppression_reason: null,
+        },
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /acknowledge/i }));
+
+    await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
+    expect(await screen.findByText("acknowledged")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /acknowledge/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
   });
 });
 

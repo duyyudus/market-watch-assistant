@@ -13,11 +13,15 @@ export function AlertsTable({
   compact = false,
   error,
   retry,
+  acknowledge,
+  dismiss,
 }: {
   rows: AlertDecision[];
   compact?: boolean;
   error?: string;
   retry: () => Promise<void>;
+  acknowledge?: (id: string) => Promise<void>;
+  dismiss?: (id: string) => Promise<void>;
 }) {
   const { items: sortedRows, requestSort, sortConfig } = useSortableData(rows, {
     key: "sent",
@@ -79,6 +83,7 @@ export function AlertsTable({
               direction={sortConfig.direction}
               onSort={requestSort}
             />
+            {!compact ? <th className="px-4 py-3 text-left">State</th> : null}
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-800/40">
@@ -107,6 +112,37 @@ export function AlertsTable({
               <td className="py-3 px-4 text-zinc-500 font-normal text-xs">
                 {formatTime(row.sent_at ?? row.created_at)}
               </td>
+              {!compact ? (
+                <td className="py-3 px-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-zinc-500">
+                      {row.suppression_reason === "dismissed"
+                        ? "dismissed"
+                        : row.acknowledged_at
+                        ? "acknowledged"
+                        : "unacknowledged"}
+                    </span>
+                    {!row.acknowledged_at && row.suppression_reason !== "dismissed" && acknowledge ? (
+                      <button
+                        className="btn btn-xs btn-outline"
+                        onClick={() => void acknowledge(row.id)}
+                        type="button"
+                      >
+                        Acknowledge
+                      </button>
+                    ) : null}
+                    {!row.acknowledged_at && row.suppression_reason !== "dismissed" && dismiss ? (
+                      <button
+                        className="btn btn-xs btn-outline"
+                        onClick={() => void dismiss(row.id)}
+                        type="button"
+                      >
+                        Dismiss
+                      </button>
+                    ) : null}
+                  </div>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -114,4 +150,3 @@ export function AlertsTable({
     </div>
   );
 }
-

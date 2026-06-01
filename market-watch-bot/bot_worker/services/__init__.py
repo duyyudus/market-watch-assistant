@@ -4,7 +4,9 @@ from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
     dispatch_pending_alerts,
     format_alert_message,
+    format_webhook_payload,
     send_test_alert,
+    send_test_alert_to_channel,
 )
 from bot_worker.services.alerts import (
     record_alert_decisions,
@@ -124,6 +126,7 @@ __all__ = [
     "format_report_time_span",
     "format_digest_message",
     "format_alert_message",
+    "format_webhook_payload",
     "get_source",
     "import_sources_yaml",
     "is_rss_item_fresh",
@@ -162,6 +165,7 @@ __all__ = [
     "select_digest_headline",
     "select_report_time_range",
     "send_test_alert",
+    "send_test_alert_to_channel",
     "send_digest_record",
     "set_source_enabled",
     "store_market_moves",

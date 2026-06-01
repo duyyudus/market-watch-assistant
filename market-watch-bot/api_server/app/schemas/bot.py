@@ -11,6 +11,7 @@ _PAYLOAD_VALIDATORS: dict[str, Any] = {
     "pipeline.run": {"optional": {"dry_run": bool}},
     "source.fetch": {"required": {"source_id": str}},
     "alert.dispatch": {"optional": {"channel": str, "limit": int, "dry_run": bool}},
+    "alert.test_channel": {"required": {"channel_id": str}, "optional": {"message": str}},
     "event.rescore": {"required": {"event_id": str}},
     "event.mark": {"required": {"event_id": str, "status": str}},
     "event.recluster": {"optional": {"since": str, "limit": int, "apply": bool}},

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from common.db.models import (
     AgentInvestigation,
+    AlertChannel,
     AlertDecisionRecord,
     AlertDeliveryRecord,
+    AlertSuppressionRule,
     AppSetting,
     Base,
     BotCommand,
@@ -45,10 +47,12 @@ __all__ = [
     "EventClusterEmbedding",
     "LLMAnalysisRun",
     "AgentInvestigation",
+    "AlertChannel",
     "MarketMove",
     "MissedCatalystReview",
     "AlertDecisionRecord",
     "AlertDeliveryRecord",
+    "AlertSuppressionRule",
     "ProviderCooldown",
     "DigestRecord",
     "WatchlistEntity",

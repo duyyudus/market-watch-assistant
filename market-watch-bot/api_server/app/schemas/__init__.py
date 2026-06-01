@@ -1,4 +1,13 @@
-from api_server.app.schemas.alerts import AlertRead
+from api_server.app.schemas.alerts import (
+    AlertChannelCreate,
+    AlertChannelRead,
+    AlertChannelTestPayload,
+    AlertChannelUpdate,
+    AlertRead,
+    AlertSuppressionRuleCreate,
+    AlertSuppressionRuleRead,
+    AlertSuppressionRuleUpdate,
+)
 from api_server.app.schemas.bot import (
     ALLOWED_COMMAND_TYPES,
     BotCommandCreate,
@@ -24,7 +33,14 @@ from api_server.app.schemas.watchlist import WatchlistCreate, WatchlistRead, Wat
 __all__ = [
     "ALLOWED_COMMAND_TYPES",
     "AlertPolicy",
+    "AlertChannelCreate",
+    "AlertChannelRead",
+    "AlertChannelTestPayload",
+    "AlertChannelUpdate",
     "AlertRead",
+    "AlertSuppressionRuleCreate",
+    "AlertSuppressionRuleRead",
+    "AlertSuppressionRuleUpdate",
     "BotCommandCreate",
     "BotCommandRead",
     "CatalystReviewRead",
@@ -47,4 +63,3 @@ __all__ = [
     "WatchlistUpdate",
     "validate_command_payload",
 ]
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from pydantic import BaseModel, Field
 
 
@@ -24,6 +25,28 @@ class WatchlistPresets(BaseModel):
     asset_classes: list[str]
 
 
+class AlertChannelPreset(BaseModel):
+    type: str
+    placeholder: str
+    template: dict[str, Any]
+    description: str
+    parameters: dict[str, str]
+
+
+class AlertSuppressionPreset(BaseModel):
+    type: str
+    placeholder: str
+    template: dict[str, Any]
+    description: str
+    parameters: dict[str, str]
+
+
+class AlertPresets(BaseModel):
+    channels: list[AlertChannelPreset]
+    rules: list[AlertSuppressionPreset]
+
+
 class ConfigurationPresets(BaseModel):
     sources: SourcePresets
     watchlist: WatchlistPresets
+    alerts: AlertPresets
