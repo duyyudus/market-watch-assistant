@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +13,7 @@ from bot_worker.services.bot_commands import (
     execute_bot_command,
     fail_bot_command,
     process_pending_bot_commands,
+    reap_stale_running_bot_commands,
     score_event_cluster,
 )
 
@@ -38,6 +39,17 @@ class CommandSession:
         pass
 
 
+class RunningCommandSession:
+    def __init__(self, commands: list[BotCommand]) -> None:
+        self.commands = commands
+
+    async def scalars(self, _stmt):
+        return ScalarResult([command for command in self.commands if command.status == "running"])
+
+    async def flush(self):
+        pass
+
+
 @pytest.mark.asyncio
 async def test_claim_pending_bot_command_marks_oldest_command_running() -> None:
     command = BotCommand(
@@ -55,6 +67,38 @@ async def test_claim_pending_bot_command_marks_oldest_command_running() -> None:
     assert claimed.status == "running"
     assert claimed.started_at is not None
     assert "pipeline.run" in ALLOWED_COMMAND_TYPES
+
+
+@pytest.mark.asyncio
+async def test_reap_stale_running_bot_commands_marks_timed_out_commands_failed() -> None:
+    now = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    stale = BotCommand(
+        id="cmd_stale",
+        command_type="pipeline.run",
+        status="running",
+        payload={},
+        started_at=now - timedelta(minutes=11),
+    )
+    fresh = BotCommand(
+        id="cmd_fresh",
+        command_type="pipeline.run",
+        status="running",
+        payload={},
+        started_at=now - timedelta(minutes=2),
+    )
+    session = RunningCommandSession([stale, fresh])
+
+    reaped = await reap_stale_running_bot_commands(
+        session,
+        timeout_seconds=600,
+        now=now,
+    )
+
+    assert reaped == 1
+    assert stale.status == "failed"
+    assert stale.error_message == "timed out (worker restart?)"
+    assert stale.completed_at == now
+    assert fresh.status == "running"
 
 
 def test_complete_and_fail_bot_command_record_terminal_state() -> None:
@@ -357,4 +401,3 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
     )
     res_review = await execute_bot_command(MockSession(), cmd_review, settings=settings)
     assert res_review == {"created": 2, "window": "1d"}
-

@@ -128,7 +128,27 @@ async def client():
             id="jobrun_1",
             job_name="pipeline",
             status="success",
-            result={"clusters": 1},
+            result={
+                "clusters": 1,
+                "pipeline_metrics": {
+                    "status": "success",
+                    "started_at": "2026-05-29T13:00:00+00:00",
+                    "completed_at": "2026-05-29T13:00:02+00:00",
+                    "duration_ms": 2000,
+                    "stages": [
+                        {
+                            "stage_name": "poll_sources",
+                            "start_time": "2026-05-29T13:00:00+00:00",
+                            "end_time": "2026-05-29T13:00:01+00:00",
+                            "duration_ms": 1000,
+                            "items_in": 1,
+                            "items_out": 5,
+                            "status": "success",
+                        }
+                    ],
+                    "slow_stages": [],
+                },
+            },
             started_at=datetime(2026, 5, 29, tzinfo=UTC),
             completed_at=datetime(2026, 5, 29, tzinfo=UTC),
         )
@@ -279,6 +299,7 @@ async def client():
             status="succeeded",
             result={"summary": "Less hawkish Fed path.", "risk_flags": ["rates"]},
             usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+            created_at=datetime(2026, 5, 29, 13, 7, tzinfo=UTC),
         )
         investigation = AgentInvestigation(
             id="inv_1",
@@ -410,6 +431,29 @@ async def test_source_health_endpoint_reports_status_latency_and_daily_counts(
     assert source["average_latency_ms"] == 120
     assert source["consecutive_failure_count"] == 0
     assert source["daily_item_counts"] == [{"date": "2026-05-29", "count": 5}]
+
+
+@pytest.mark.asyncio
+async def test_maintenance_observability_endpoints_return_costs_and_pipeline_metrics(
+    client: AsyncClient,
+) -> None:
+    costs = await client.get("/maintenance/llm-costs")
+
+    assert costs.status_code == 200
+    cost_payload = costs.json()
+    assert cost_payload["daily"][0]["date"] == "2026-05-29"
+    assert cost_payload["daily"][0]["total_tokens"] == 150
+    assert cost_payload["weekly"]["total_tokens"] == 150
+    assert cost_payload["by_model"][0]["model"] == "gpt-4o"
+    assert cost_payload["by_analysis_type"][0]["analysis_type"] == "event_cluster"
+
+    metrics = await client.get("/maintenance/pipeline-metrics")
+
+    assert metrics.status_code == 200
+    metric_payload = metrics.json()
+    assert metric_payload["items"][0]["job_run_id"] == "jobrun_1"
+    assert metric_payload["items"][0]["stages"][0]["stage_name"] == "poll_sources"
+    assert metric_payload["items"][0]["stages"][0]["duration_ms"] == 1000
 
 
 @pytest.mark.asyncio

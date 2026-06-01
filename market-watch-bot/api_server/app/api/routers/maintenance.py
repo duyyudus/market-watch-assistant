@@ -8,7 +8,9 @@ from api_server.app.schemas import (
     EmbeddingStats,
     FetchLogRead,
     ListEnvelope,
+    LLMCostSummary,
     LLMRunRead,
+    PipelineMetricsRead,
     RetentionJobRead,
     ScoreHistoryRead,
 )
@@ -85,6 +87,29 @@ async def list_llm_runs(
     )
     return ListEnvelope(
         items=[LLMRunRead.model_validate(row) for row in rows],
+        total=total,
+    )
+
+
+@router.get("/llm-costs", response_model=LLMCostSummary)
+async def get_llm_costs(session: SessionDep) -> LLMCostSummary:
+    stats = await maintenance_service.get_llm_cost_summary(session)
+    return LLMCostSummary.model_validate(stats)
+
+
+@router.get("/pipeline-metrics", response_model=ListEnvelope[PipelineMetricsRead])
+async def list_pipeline_metrics(
+    session: SessionDep,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> ListEnvelope[PipelineMetricsRead]:
+    rows, total = await maintenance_service.list_pipeline_metrics(
+        session,
+        limit=limit,
+        offset=offset,
+    )
+    return ListEnvelope(
+        items=[PipelineMetricsRead.model_validate(row) for row in rows],
         total=total,
     )
 

@@ -1,8 +1,9 @@
+import json
 import logging
 from pathlib import Path
 
 from bot_worker.config import load_settings
-from bot_worker.logging import LineRotatingFileHandler
+from bot_worker.logging import JsonLogFormatter, LineRotatingFileHandler
 
 
 def test_logging_config_defaults(tmp_path: Path) -> None:
@@ -120,6 +121,61 @@ def test_line_rotating_file_handler_lazy_counting(tmp_path: Path) -> None:
         
         rotated_lines = Path(f"{log_file}.1").read_text(encoding="utf-8").splitlines()
         assert rotated_lines == ["existing line 1", "existing line 2", "new line 3"]
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+
+
+def test_json_log_formatter_outputs_structured_fields_and_redacts_token() -> None:
+    formatter = JsonLogFormatter(redacted_secrets=["secret-token"])
+    record = logging.LogRecord(
+        name="bot_worker.pipeline",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="LLM call used secret-token",
+        args=(),
+        exc_info=None,
+    )
+    record.stage_name = "extract_entities"
+    record.duration_ms = 42
+    record.items_processed = 7
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["timestamp"]
+    assert payload["level"] == "INFO"
+    assert payload["logger"] == "bot_worker.pipeline"
+    assert payload["message"] == "LLM call used [REDACTED_TELEGRAM_TOKEN]"
+    assert payload["stage_name"] == "extract_entities"
+    assert payload["duration_ms"] == 42
+    assert payload["items_processed"] == 7
+
+
+def test_line_rotating_file_handler_counts_lines_from_single_formatted_message(
+    tmp_path: Path,
+) -> None:
+    class CountingFormatter(logging.Formatter):
+        def __init__(self) -> None:
+            super().__init__("%(message)s")
+            self.calls = 0
+
+        def format(self, record: logging.LogRecord) -> str:
+            self.calls += 1
+            return super().format(record)
+
+    log_file = tmp_path / "single_format.log"
+    formatter = CountingFormatter()
+    handler = LineRotatingFileHandler(log_file, mode="w", max_lines=5, backupCount=1)
+    handler.setFormatter(formatter)
+    logger = logging.getLogger("test_single_format_rotation")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    try:
+        logger.info("line one")
+        assert formatter.calls == 1
+        assert log_file.read_text(encoding="utf-8").splitlines() == ["line one"]
     finally:
         logger.removeHandler(handler)
         handler.close()

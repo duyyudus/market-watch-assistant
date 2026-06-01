@@ -177,6 +177,34 @@ Status: Completed
 - Added persisted theme selection for `system`, `dark`, and `light`.
 - Added a light daisyUI theme and system-mode handling through `prefers-color-scheme`.
 
+## Track 5: Observability & Operations
+
+Status: Completed
+
+### Structured Logging
+
+- Added JSON log formatting for backend console and file handlers with timestamp, level, logger, message, and contextual fields.
+- Preserved Telegram token redaction in structured log messages and contextual payloads.
+- Fixed line-based log rotation so each record is formatted once and that formatted value is reused for line counting.
+
+### Pipeline Metrics
+
+- Added pipeline run and stage metrics with timing, throughput, and stage status.
+- Persisted metrics in `JobRun.result["pipeline_metrics"]`.
+- Added slow-stage detection against recent successful pipeline run averages using the configured 2x threshold.
+
+### Worker Operations
+
+- Added stale running-command reaping with a 10-minute default timeout and timeout failure reason.
+- Added graceful worker shutdown handling for `SIGTERM` and `SIGINT`.
+- Added operational self-monitoring alerts for stale pipeline heartbeat, broad source failures, and repeated LLM failures with one-hour duplicate suppression.
+
+### Maintenance Dashboard
+
+- Added API endpoints for LLM token/cost summaries and pipeline metrics.
+- Added Maintenance dashboard tabs for LLM cost tracking and pipeline performance metrics.
+- Kept LLM cost estimation conservative: known models use built-in pricing defaults, and unknown models report token usage with zero estimated cost.
+
 ## Verification
 
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 194 passed.
@@ -184,9 +212,12 @@ Status: Completed
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_alert_delivery.py tests/test_migration_0010.py tests/test_bot_commands.py -q` -> 26 passed.
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q` outside the sandbox -> 210 passed.
 - `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run ruff check .` -> all checks passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_logging.py tests/test_bot_commands.py tests/test_api_contract.py -q` outside the sandbox -> 38 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 201 passed.
+- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> all checks passed.
 - `cd market-watch-bot && uv run market-watch --help` -> rendered CLI help successfully.
 - `cd market-watch-bot && uv run market-watch pipeline run --dry-run` -> rendered dry-run pipeline path successfully.
-- `cd dashboard && npm test` -> 37 passed.
+- `cd dashboard && npm test` -> 38 passed.
 - `cd dashboard && npm run lint` -> TypeScript check passed.
 - `cd dashboard && npm run build` -> build completed.
 - Playwright rendered validation against local Vite server -> desktop/mobile event detail and source health screenshots captured successfully under `/tmp/dashboard-live-*.png`.

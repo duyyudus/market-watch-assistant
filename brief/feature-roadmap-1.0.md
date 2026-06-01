@@ -280,7 +280,7 @@ Track per-stage timing and throughput:
 
 ### 5.3 LLM Cost Tracking Dashboard (Priority: P1)
 
-The `LLMAnalysisRun` model already stores `usage` with token counts. Build a dashboard panel showing:
+The `LLMAnalysisRun` model already stores `usage` with token counts. Build a dashboard panel in `Maintenance` page showing:
 - Total tokens consumed per day/week
 - Cost estimate based on model pricing
 - Breakdown by analysis type (entity extraction, event enrichment, investigation, cluster decision)

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRequestHeaders, defaultApiBaseUrl, normalizeListResponse } from "./api";
+import {
+  buildMaintenanceLLMCostsPath,
+  buildMaintenancePipelineMetricsPath,
+  buildRequestHeaders,
+  defaultApiBaseUrl,
+  normalizeListResponse,
+} from "./api";
 import { createResourceCache, debounceAsync } from "./lib/apiCache";
 
 describe("normalizeListResponse", () => {
@@ -35,6 +41,13 @@ describe("normalizeListResponse", () => {
     const headers = buildRequestHeaders(undefined);
 
     expect(headers).toEqual({ "Content-Type": "application/json" });
+  });
+
+  it("builds observability maintenance endpoint paths", () => {
+    expect(buildMaintenanceLLMCostsPath()).toBe("/maintenance/llm-costs");
+    expect(buildMaintenancePipelineMetricsPath(20, 40)).toBe(
+      "/maintenance/pipeline-metrics?limit=20&offset=40",
+    );
   });
 });
 

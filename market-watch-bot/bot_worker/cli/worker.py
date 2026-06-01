@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import signal
+from contextlib import suppress
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated
@@ -25,6 +27,7 @@ from bot_worker.services import (
 )
 from bot_worker.services.bot_commands import process_pending_bot_commands
 from bot_worker.services.digests import build_digest_record, send_digest_record
+from bot_worker.services.operations import run_operational_checks
 
 COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25
@@ -69,6 +72,11 @@ async def run_worker_tick(
         await record_job_run(session, "agent_investigation", pending_result)
         typer.echo(f"agent_investigation: {pending_result}")
     await maybe_send_daily_digest(session, settings)
+    await run_operational_checks(
+        session,
+        settings=settings,
+        alert_delivery_config=AlertDeliveryConfig.from_settings(settings, channel="telegram"),
+    )
     return now
 
 
@@ -109,8 +117,13 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
     async def loop() -> None:
         settings = _settings()
         session_factory = make_session_factory(settings)
+        shutdown = asyncio.Event()
+        running_loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with suppress(NotImplementedError, RuntimeError):
+                running_loop.add_signal_handler(sig, shutdown.set)
         last_pipeline_run_at = asyncio.get_running_loop().time()
-        while True:
+        while not shutdown.is_set():
             now = asyncio.get_running_loop().time()
 
             async def action(
@@ -131,7 +144,13 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
                 settings=settings,
                 session_factory=session_factory,
             )
-            await asyncio.sleep(getattr(settings.bot, "command_poll_interval_seconds", 2))
+            try:
+                await asyncio.wait_for(
+                    shutdown.wait(),
+                    timeout=getattr(settings.bot, "command_poll_interval_seconds", 2),
+                )
+            except TimeoutError:
+                continue
 
     _run(loop())
 @worker_app.command("status")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,7 @@ from bot_worker.services.market import (
     run_missed_catalyst_review,
     store_market_moves,
 )
+from bot_worker.services.pipeline_metrics import PipelineRunMetrics
 from bot_worker.services.sources import fetch_source
 from bot_worker.services.watchlists import watchlist_entries
 
@@ -66,6 +68,8 @@ async def run_pipeline(
     if dry_run:
         return {"status": "dry_run", "jobs": len(CORE_JOBS)}
 
+    metrics = PipelineRunMetrics()
+
     logger.info("======================================================================")
     logger.info(
         "🚀 Starting pipeline run [freshness_hours=%d, embeddings=%s]",
@@ -84,6 +88,7 @@ async def run_pipeline(
     failed_stages: list[str] = []
     rate_limit_skips: dict[str, int] = {}
     provider_retries: dict[str, object] = {}
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 1/11] Polling News Sources ───")
     logger.info("  Found %d enabled news sources to poll", len(sources))
     for source in sources:
@@ -111,42 +116,88 @@ async def run_pipeline(
         degraded_stages.append("poll_sources")
     if failed_sources:
         degraded_stages.append("poll_sources")
+    metrics.record_stage(
+        stage_name="poll_sources",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_in=len(sources),
+        items_out=fetched,
+        status="degraded" if skipped_sources or failed_sources else "success",
+    )
 
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 2/11] Normalizing Raw Items ───")
     normalized = await normalize_pending_raw_items(
         session, freshness_hours=freshness_hours, tracking_params=tracking_params
     )
     logger.info("  ✓ Normalized %d news items", normalized)
+    metrics.record_stage(
+        stage_name="normalize_raw_items",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=normalized,
+    )
 
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 3/11] Deduplicating News Items ───")
     duplicates = await mark_exact_duplicates(session)
     logger.info("  ✓ Marked %d duplicate news items", duplicates)
+    metrics.record_stage(
+        stage_name="dedupe_news_items",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=duplicates,
+    )
 
     news_embeddings = 0
     entities_extracted = 0
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 4/11] Extracting News Entities ───")
+    stage_status = "success"
     if llm_config is not None and llm_config.enabled:
         try:
             entities_extracted = await extract_entities_with_llm(session, config=llm_config)
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("extract_entities")
+            stage_status = "degraded"
             logger.error("  ❌ Failed to extract entities with LLM: %s", exc)
         logger.info("  ✓ Extracted entities for %d news items", entities_extracted)
     else:
+        stage_status = "skipped"
         logger.info("  ⚠ LLM config disabled or not provided, skipping entity extraction")
+    metrics.record_stage(
+        stage_name="extract_entities",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=entities_extracted,
+        status=stage_status,
+    )
 
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 5/11] Generating News Embeddings ───")
+    stage_status = "success"
     if embedding_config is not None:
         try:
             news_embeddings = await embed_pending_news_items(session, config=embedding_config)
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("generate_embeddings")
+            stage_status = "degraded"
             logger.error("  ❌ Failed to generate news embeddings: %s", exc)
         logger.info("  ✓ Generated embeddings for %d news items", news_embeddings)
     else:
+        stage_status = "skipped"
         logger.info("  ⚠ Embedding config not provided, skipping news embedding generation")
+    metrics.record_stage(
+        stage_name="generate_embeddings",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=news_embeddings,
+        status=stage_status,
+    )
 
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 6/11] Building Event Clusters ───")
+    stage_status = "success"
     try:
         cluster_stats: ClusterBuildStats = await build_event_clusters(
             session,
@@ -155,6 +206,7 @@ async def run_pipeline(
         )
     except Exception as exc:  # noqa: BLE001
         failed_stages.append("cluster_events")
+        stage_status = "failed"
         logger.error("  ❌ Failed to build event clusters: %s", exc)
         cluster_stats = ClusterBuildStats()
     logger.info("  ✓ Built %d new event clusters", cluster_stats.created_clusters)
@@ -164,35 +216,66 @@ async def run_pipeline(
         cluster_stats.llm_cluster_decisions,
         cluster_stats.llm_cluster_attaches,
     )
+    metrics.record_stage(
+        stage_name="cluster_events",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=cluster_stats.created_clusters + cluster_stats.attached_existing,
+        status=stage_status,
+    )
 
     event_embeddings = 0
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 7/11] Generating Event Embeddings ───")
+    stage_status = "success"
     if embedding_config is not None:
         try:
             event_embeddings = await embed_pending_event_clusters(session, config=embedding_config)
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("generate_event_embeddings")
+            stage_status = "degraded"
             logger.error("  ❌ Failed to generate event embeddings: %s", exc)
         logger.info("  ✓ Generated embeddings for %d event clusters", event_embeddings)
     else:
+        stage_status = "skipped"
         logger.info(
             "  ⚠ Embedding config not provided, skipping event cluster embedding generation"
         )
+    metrics.record_stage(
+        stage_name="generate_event_embeddings",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=event_embeddings,
+        status=stage_status,
+    )
 
     llm_enriched = 0
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 8/11] LLM Event Enrichment ───")
+    stage_status = "success"
     if llm_config is not None and llm_config.enabled:
         try:
             llm_enriched = await enrich_event_clusters_with_llm(session, config=llm_config)
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("enrich_events_with_llm")
+            stage_status = "degraded"
             logger.error("  ❌ Failed to enrich events with LLM: %s", exc)
         logger.info("  ✓ Enriched %d event clusters with LLM analysis", llm_enriched)
     else:
+        stage_status = "skipped"
         logger.info("  ⚠ LLM config disabled or not provided, skipping event enrichment")
+    metrics.record_stage(
+        stage_name="enrich_events_with_llm",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=llm_enriched,
+        status=stage_status,
+    )
 
     market_moves_fetched = 0
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 9/11] Fetching Market Moves ───")
+    stage_status = "success"
     try:
         from common.config import load_settings
         settings = load_settings()
@@ -219,29 +302,53 @@ async def run_pipeline(
             }
             if market_result.degraded_providers:
                 degraded_stages.append("fetch_market_moves")
+                stage_status = "degraded"
             if market_result.failed_providers:
                 degraded_stages.append("fetch_market_moves")
+                stage_status = "degraded"
             market_moves_fetched = await store_market_moves(session, market_result.moves)
             logger.info("  ✓ Successfully fetched and stored %d market moves", market_moves_fetched)
         else:
+            stage_status = "skipped"
             logger.info("  ⚠ No watchlisted assets with symbols found, skipping market fetch")
     except Exception as exc:  # noqa: BLE001
         failed_stages.append("fetch_market_moves")
+        stage_status = "failed"
         logger.error("  ❌ Failed to fetch market moves: %s", exc)
+    metrics.record_stage(
+        stage_name="fetch_market_moves",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=market_moves_fetched,
+        status=stage_status,
+    )
 
     full_text_extracted = 0
     full_text_failed = 0
+    stage_start = datetime.now(UTC)
+    stage_status = "success"
     try:
         full_text_stats = await extract_full_text_for_priority_events(session)
         full_text_extracted = full_text_stats.extracted
         full_text_failed = full_text_stats.failed
         if full_text_failed:
             degraded_stages.append("full_text_extraction")
+            stage_status = "degraded"
     except Exception as exc:  # noqa: BLE001
         degraded_stages.append("full_text_extraction")
+        stage_status = "degraded"
         logger.error("  ❌ Failed to extract full text: %s", exc)
+    metrics.record_stage(
+        stage_name="full_text_extraction",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=full_text_extracted,
+        status=stage_status,
+    )
 
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 10/11] Recording Alert Decisions ───")
+    stage_status = "success"
     queued_investigations = 0
     completed_investigations = 0
     failed_investigations = 0
@@ -275,6 +382,7 @@ async def run_pipeline(
             )
         except Exception as exc:  # noqa: BLE001 - investigation queueing must not block alerts
             degraded_stages.append("investigation")
+            stage_status = "degraded"
             logger.error("  ❌ Failed to queue agent investigations: %s", exc)
     alerts = await record_alert_decisions(session)
     logger.info("  ✓ Recorded alert decisions for %d event clusters", alerts)
@@ -286,6 +394,7 @@ async def run_pipeline(
         failed_alert_deliveries = delivery_counts["failed"]
         if failed_alert_deliveries:
             degraded_stages.append("dispatch_alerts")
+            stage_status = "degraded"
         logger.info(
             "  ✓ Delivered %d Telegram alerts (%d failed)",
             delivered_alerts,
@@ -293,9 +402,18 @@ async def run_pipeline(
         )
     else:
         logger.info("  ⚠ Alert delivery config not provided or not Telegram, skipping dispatch")
+    metrics.record_stage(
+        stage_name="record_alert_decisions",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=alerts,
+        status=stage_status,
+    )
 
     missed_catalysts_created = 0
+    stage_start = datetime.now(UTC)
     logger.info("─── [Stage 11/11] Missed Catalyst Review ───")
+    stage_status = "success"
     try:
         missed_catalysts_created = await run_missed_catalyst_review(session, window="1d")
         logger.info(
@@ -304,7 +422,16 @@ async def run_pipeline(
         )
     except Exception as exc:  # noqa: BLE001
         degraded_stages.append("run_missed_catalyst_review")
+        stage_status = "degraded"
         logger.error("  ❌ Failed to run missed catalyst review: %s", exc)
+    metrics.record_stage(
+        stage_name="run_missed_catalyst_review",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=missed_catalysts_created,
+        status=stage_status,
+    )
+    metrics.finish(status="degraded" if degraded_stages or failed_stages else "success")
 
     logger.info("======================================================================")
     logger.info("🎉 Pipeline run completed successfully!")
@@ -337,4 +464,5 @@ async def run_pipeline(
         "failed_stages": sorted(set(failed_stages)),
         "rate_limit_skips": rate_limit_skips,
         "provider_retries": provider_retries,
+        "pipeline_metrics": metrics.to_dict(),
     }

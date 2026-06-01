@@ -77,6 +77,57 @@ class LLMRunRead(BaseModel):
     updated_at: datetime | None = None
 
 
+class LLMCostBucket(BaseModel):
+    date: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
+
+
+class LLMCostBreakdown(BaseModel):
+    model: str | None = None
+    analysis_type: str | None = None
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_cost_usd: float
+
+
+class LLMCostSummary(BaseModel):
+    daily: list[LLMCostBucket]
+    weekly: LLMCostBucket
+    by_model: list[LLMCostBreakdown]
+    by_analysis_type: list[LLMCostBreakdown]
+
+
+class PipelineStageMetricRead(BaseModel):
+    stage_name: str
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_ms: int
+    items_in: int | None = None
+    items_out: int | None = None
+    status: str
+
+
+class SlowPipelineStageRead(BaseModel):
+    stage_name: str
+    duration_ms: int
+    average_duration_ms: int
+    threshold_ms: int
+
+
+class PipelineMetricsRead(BaseModel):
+    job_run_id: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    status: str
+    duration_ms: int
+    stages: list[PipelineStageMetricRead]
+    slow_stages: list[SlowPipelineStageRead]
+
+
 class RetentionJobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

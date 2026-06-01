@@ -15,6 +15,8 @@ from bot_worker.services.external_providers import (
     request_with_retry,
 )
 from bot_worker.services.market import fetch_market_moves_with_stats
+from bot_worker.services.pipeline import run_pipeline
+from bot_worker.services.pipeline_metrics import PipelineRunMetrics, slow_pipeline_stages
 from bot_worker.services.sources import (
     SourcePollingDecision,
     mark_source_fetch_result,
@@ -34,6 +36,16 @@ class SequencedClient:
             raise response
         response.request = httpx.Request(method, url)
         return response
+
+
+class EmptyScalarResult:
+    def all(self) -> list[object]:
+        return []
+
+
+class EmptyPipelineSession:
+    async def scalars(self, _stmt):
+        return EmptyScalarResult()
 
 
 @pytest.mark.asyncio
@@ -258,6 +270,88 @@ def test_normalized_news_item_supports_raw_content_for_full_text_extraction() ->
     )
 
     assert item.raw_content.startswith("VN-Index")
+
+
+def test_pipeline_metrics_detects_stages_slower_than_prior_average() -> None:
+    current = PipelineRunMetrics()
+    current.record_stage(
+        stage_name="poll_sources",
+        start_time=datetime(2026, 6, 1, 1, 0, tzinfo=UTC),
+        end_time=datetime(2026, 6, 1, 1, 0, 3, tzinfo=UTC),
+        items_in=10,
+        items_out=8,
+        status="success",
+    )
+    prior_results = [
+        {
+            "pipeline_metrics": {
+                "stages": [
+                    {"stage_name": "poll_sources", "duration_ms": 1000},
+                    {"stage_name": "poll_sources", "duration_ms": 1200},
+                ]
+            }
+        }
+    ]
+
+    slow = slow_pipeline_stages(current.to_dict(), prior_results)
+
+    assert slow == [
+        {
+            "stage_name": "poll_sources",
+            "duration_ms": 3000,
+            "average_duration_ms": 1100,
+            "threshold_ms": 2200,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> None:
+    async def return_zero(*_args, **_kwargs):
+        return 0
+
+    async def return_empty_list(*_args, **_kwargs):
+        return []
+
+    async def return_cluster_stats(*_args, **_kwargs):
+        from bot_worker.services.events import ClusterBuildStats
+
+        return ClusterBuildStats()
+
+    async def return_full_text_stats(*_args, **_kwargs):
+        return type("FullTextStats", (), {"extracted": 0, "failed": 0})()
+
+    monkeypatch.setattr("bot_worker.services.pipeline.normalize_pending_raw_items", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.mark_exact_duplicates", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.build_event_clusters", return_cluster_stats)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.extract_full_text_for_priority_events",
+        return_full_text_stats,
+    )
+    monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.watchlist_entries", return_empty_list)
+
+    result = await run_pipeline(EmptyPipelineSession())
+
+    assert "pipeline_metrics" in result
+    metrics = result["pipeline_metrics"]
+    assert metrics["status"] == "success"
+    assert [stage["stage_name"] for stage in metrics["stages"]] == [
+        "poll_sources",
+        "normalize_raw_items",
+        "dedupe_news_items",
+        "extract_entities",
+        "generate_embeddings",
+        "cluster_events",
+        "generate_event_embeddings",
+        "enrich_events_with_llm",
+        "fetch_market_moves",
+        "full_text_extraction",
+        "record_alert_decisions",
+        "run_missed_catalyst_review",
+    ]
+    assert all("duration_ms" in stage for stage in metrics["stages"])
 
 
 def test_validate_pgvector_rejects_invalid_arrays_before_sql_execution() -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +10,7 @@ from common.db.models import (
     EventCluster,
     EventClusterEmbedding,
     EventScoreHistory,
+    JobRun,
     LLMAnalysisRun,
     MissedCatalystReview,
     NewsItemEmbedding,
@@ -15,6 +18,13 @@ from common.db.models import (
     RetentionJob,
     SourceFetchLog,
 )
+
+MODEL_PRICING_PER_1K = {
+    "openai/gpt-4.1-mini": {"prompt": 0.0004, "completion": 0.0016},
+    "gpt-4o": {"prompt": 0.005, "completion": 0.015},
+    "gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
+    "openai/text-embedding-3-large": {"prompt": 0.00013, "completion": 0.0},
+}
 
 
 async def list_source_fetch_logs(
@@ -138,6 +148,87 @@ async def list_llm_runs(
     return rows, total
 
 
+async def get_llm_cost_summary(session: AsyncSession) -> dict[str, object]:
+    since = datetime.now(UTC) - timedelta(days=7)
+    rows = list(
+        (
+            await session.scalars(
+                select(LLMAnalysisRun)
+                .where(LLMAnalysisRun.created_at >= since)
+                .order_by(LLMAnalysisRun.created_at.asc())
+            )
+        ).all()
+    )
+    daily: dict[str, dict[str, object]] = {}
+    by_model: dict[str, dict[str, object]] = {}
+    by_analysis_type: dict[str, dict[str, object]] = {}
+    weekly = _empty_cost_bucket("last_7_days")
+    for row in rows:
+        usage = row.usage or {}
+        prompt_tokens = _int_usage(usage, "prompt_tokens")
+        completion_tokens = _int_usage(usage, "completion_tokens")
+        total_tokens = _int_usage(usage, "total_tokens") or prompt_tokens + completion_tokens
+        cost = _estimated_cost(row.model, prompt_tokens, completion_tokens)
+        day = row.created_at.astimezone(UTC).date().isoformat()
+        _add_cost(
+            daily.setdefault(day, _empty_cost_bucket(day)),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cost,
+        )
+        _add_cost(weekly, prompt_tokens, completion_tokens, total_tokens, cost)
+        model_bucket = by_model.setdefault(
+            row.model,
+            _empty_breakdown(model=row.model),
+        )
+        _add_cost(model_bucket, prompt_tokens, completion_tokens, total_tokens, cost)
+        type_bucket = by_analysis_type.setdefault(
+            row.target_type,
+            _empty_breakdown(analysis_type=row.target_type),
+        )
+        _add_cost(type_bucket, prompt_tokens, completion_tokens, total_tokens, cost)
+    return {
+        "daily": list(daily.values()),
+        "weekly": weekly,
+        "by_model": list(by_model.values()),
+        "by_analysis_type": list(by_analysis_type.values()),
+    }
+
+
+async def list_pipeline_metrics(
+    session: AsyncSession,
+    *,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, object]], int]:
+    stmt = (
+        select(JobRun)
+        .where(JobRun.job_name == "pipeline")
+        .order_by(JobRun.started_at.desc())
+    )
+    total = await count_for(session, stmt)
+    rows = list((await session.scalars(apply_pagination(stmt, limit=limit, offset=offset))).all())
+    items: list[dict[str, object]] = []
+    for row in rows:
+        result = row.result or {}
+        metrics = result.get("pipeline_metrics")
+        if not isinstance(metrics, dict):
+            continue
+        items.append(
+            {
+                "job_run_id": row.id,
+                "started_at": row.started_at,
+                "completed_at": row.completed_at,
+                "status": str(metrics.get("status") or row.status),
+                "duration_ms": int(metrics.get("duration_ms") or 0),
+                "stages": metrics.get("stages") or [],
+                "slow_stages": metrics.get("slow_stages") or [],
+            }
+        )
+    return items, total
+
+
 async def list_retention_jobs(
     session: AsyncSession,
     *,
@@ -149,3 +240,59 @@ async def list_retention_jobs(
     total = await count_for(session, stmt)
     rows = list((await session.scalars(apply_pagination(stmt, limit=limit, offset=offset))).all())
     return rows, total
+
+
+def _int_usage(usage: dict[str, object], key: str) -> int:
+    value = usage.get(key)
+    if isinstance(value, int | float):
+        return int(value)
+    return 0
+
+
+def _estimated_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    pricing = MODEL_PRICING_PER_1K.get(model)
+    if pricing is None:
+        return 0.0
+    return round(
+        (prompt_tokens / 1000 * pricing["prompt"])
+        + (completion_tokens / 1000 * pricing["completion"]),
+        6,
+    )
+
+
+def _empty_cost_bucket(date: str) -> dict[str, object]:
+    return {
+        "date": date,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cost_usd": 0.0,
+    }
+
+
+def _empty_breakdown(
+    *,
+    model: str | None = None,
+    analysis_type: str | None = None,
+) -> dict[str, object]:
+    return {
+        "model": model,
+        "analysis_type": analysis_type,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cost_usd": 0.0,
+    }
+
+
+def _add_cost(
+    bucket: dict[str, object],
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+    cost: float,
+) -> None:
+    bucket["prompt_tokens"] = int(bucket["prompt_tokens"]) + prompt_tokens
+    bucket["completion_tokens"] = int(bucket["completion_tokens"]) + completion_tokens
+    bucket["total_tokens"] = int(bucket["total_tokens"]) + total_tokens
+    bucket["estimated_cost_usd"] = round(float(bucket["estimated_cost_usd"]) + cost, 6)

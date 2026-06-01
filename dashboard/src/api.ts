@@ -359,6 +359,57 @@ export type LLMRun = {
   updated_at?: string | null;
 };
 
+export type LLMCostBucket = {
+  date: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+};
+
+export type LLMCostBreakdown = {
+  model?: string | null;
+  analysis_type?: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+};
+
+export type LLMCostSummary = {
+  daily: LLMCostBucket[];
+  weekly: LLMCostBucket;
+  by_model: LLMCostBreakdown[];
+  by_analysis_type: LLMCostBreakdown[];
+};
+
+export type PipelineStageMetric = {
+  stage_name: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  duration_ms: number;
+  items_in?: number | null;
+  items_out?: number | null;
+  status: string;
+};
+
+export type SlowPipelineStage = {
+  stage_name: string;
+  duration_ms: number;
+  average_duration_ms: number;
+  threshold_ms: number;
+};
+
+export type PipelineMetricsRun = {
+  job_run_id: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  status: string;
+  duration_ms: number;
+  stages: PipelineStageMetric[];
+  slow_stages: SlowPipelineStage[];
+};
+
 export type RetentionJob = {
   id: string;
   status: string;
@@ -388,6 +439,14 @@ export function buildRequestHeaders(token: string | undefined): Record<string, s
 
 export function eventStreamUrl(): string {
   return `${API_BASE_URL}/events/stream`;
+}
+
+export function buildMaintenanceLLMCostsPath(): string {
+  return "/maintenance/llm-costs";
+}
+
+export function buildMaintenancePipelineMetricsPath(limit?: number, offset?: number): string {
+  return `/maintenance/pipeline-metrics?limit=${limit || 20}&offset=${offset || 0}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -490,6 +549,11 @@ export const api = {
     request<EmbeddingStats>("/maintenance/embeddings/stats"),
   maintenanceLLMRuns: (limit?: number, offset?: number) =>
     request<ListEnvelope<LLMRun>>(`/maintenance/llm-runs?limit=${limit || 100}&offset=${offset || 0}`),
+  maintenanceLLMCosts: () => request<LLMCostSummary>(buildMaintenanceLLMCostsPath()),
+  maintenancePipelineMetrics: (limit?: number, offset?: number) =>
+    request<ListEnvelope<PipelineMetricsRun>>(
+      buildMaintenancePipelineMetricsPath(limit, offset),
+    ),
   maintenanceRetentionJobs: (limit?: number, offset?: number) =>
     request<ListEnvelope<RetentionJob>>(`/maintenance/retention-jobs?limit=${limit || 100}&offset=${offset || 0}`),
 };

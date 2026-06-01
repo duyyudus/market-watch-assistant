@@ -81,6 +81,43 @@ async def claim_pending_bot_command(session: AsyncSession) -> BotCommand | None:
     return command
 
 
+async def reap_stale_running_bot_commands(
+    session: AsyncSession,
+    *,
+    timeout_seconds: int,
+    now: datetime | None = None,
+) -> int:
+    current = now or utcnow()
+    cutoff = current - timedelta(seconds=timeout_seconds)
+    if hasattr(session, "commands"):
+        candidates = [
+            command
+            for command in session.commands
+            if command.status == "running" and command.started_at and command.started_at < cutoff
+        ]
+        for command in candidates:
+            command.status = "failed"
+            command.error_message = "timed out (worker restart?)"
+            command.completed_at = current
+        if candidates:
+            await session.flush()
+        return len(candidates)
+    result = await session.scalars(
+        select(BotCommand)
+        .where(BotCommand.status == "running", BotCommand.started_at < cutoff)
+        .order_by(BotCommand.started_at.asc())
+    )
+    reaped = 0
+    for command in result.all():
+        command.status = "failed"
+        command.error_message = "timed out (worker restart?)"
+        command.completed_at = current
+        reaped += 1
+    if reaped:
+        await session.flush()
+    return reaped
+
+
 async def score_event_cluster(session: AsyncSession, event: EventCluster):
     market_score = await market_move_score_for_cluster(session, event)
     watch_entries = await watchlist_entries(session)
@@ -306,6 +343,11 @@ async def process_pending_bot_commands(
     settings,
     limit: int = 25,
 ) -> list[BotCommand]:
+    bot_settings = getattr(settings, "bot", settings)
+    await reap_stale_running_bot_commands(
+        session,
+        timeout_seconds=getattr(bot_settings, "stale_command_timeout_seconds", 600),
+    )
     processed: list[BotCommand] = []
     for _ in range(limit):
         command = await process_one_bot_command(session, settings=settings)
