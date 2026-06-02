@@ -1,6 +1,6 @@
 # Market Watch Assistant 1.0 Roadmap Progress
 
-Updated: 2026-06-01
+Updated: 2026-06-02
 
 ## Track 1: Infrastructure & Deployment
 
@@ -254,15 +254,35 @@ Status: Completed
 - Extended source API responses and dashboard source types with optional quality score fields.
 - Dashboard queues all new operational actions through `bot_commands`; it does not call worker services directly.
 
-## Verification
+## Track 7: Architecture, Quality & Testing
 
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache uv run pytest --ignore=tests/test_api_contract.py -q` -> 212 passed.
-- `cd market-watch-bot && UV_CACHE_DIR=/tmp/uv-cache DATABASE_URL=sqlite+aiosqlite:///:memory: uv run pytest tests/test_api_contract.py -q` -> 20 passed.
-- `cd market-watch-bot && uv run pytest tests/test_migration_0010.py tests/test_normalization.py tests/test_pipeline_intelligence.py tests/test_events.py tests/test_retention.py tests/test_embeddings.py tests/test_bot_commands.py -q` -> 57 passed.
-- `cd market-watch-bot && uv run ruff check .` -> all checks passed.
-- `cd dashboard && npm test -- --run` -> 39 passed.
-- `cd dashboard && npm run lint` -> TypeScript check passed.
-- `cd dashboard && npm run build` -> build completed.
+Status: Completed
+
+### API Transaction Safety
+
+- Updated the API session dependency to commit once after successful request handling and roll back unhandled exceptions.
+- Removed request-write commits from API services and replaced them with flush/refresh where response data needs generated defaults.
+- Updated API contract fixtures to mirror the request-scoped transaction boundary.
+- Added regression coverage for successful dependency commits and exception rollbacks.
+
+### Codebase Decoupling
+
+- Moved bot command type constants, event status constants, and payload validation into `common.bot_commands`.
+- Updated the API schema layer and worker command executor to share the common command contract without API-to-worker imports.
+- Added a static architecture regression test that fails if `api_server` imports `bot_worker`.
+
+### Real PostgreSQL Integration Tests
+
+- Added opt-in real-database pytest coverage in `tests/test_real_database.py`.
+- The suite reads `DATABASE_URL` from process environment or `market-watch-bot/.env.test` when `RUN_REAL_DB_TESTS=1`.
+- Coverage includes Alembic upgrade, pgvector distance operations, `FOR UPDATE SKIP LOCKED` command claiming, and PostgreSQL JSONB path querying.
+- The suite remains skipped in normal fast test runs.
+
+### Dashboard End-to-End Tests
+
+- Added Playwright configuration and `npm run e2e`.
+- Added mocked API-route E2E coverage for source enable/disable, watchlist create/edit/delete, alert acknowledgement, and manual command queueing.
+- Kept E2E specs out of Vitest collection and ignored generated Playwright reports/results.
 
 ## Operational Notes
 

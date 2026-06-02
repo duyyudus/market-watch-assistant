@@ -34,28 +34,7 @@ from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
 from bot_worker.services.sources import fetch_source, refresh_source_quality_scores
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
-
-ALLOWED_COMMAND_TYPES = {
-    "pipeline.run",
-    "source.fetch",
-    "alert.dispatch",
-    "alert.test_channel",
-    "digest.send",
-    "event.rescore",
-    "event.mark",
-    "event.recluster",
-    "event.merge",
-    "event.split",
-    "event.compact_archived",
-    "source.quality.refresh",
-    "investigation.run_event",
-    "retention.preview",
-    "retention.run",
-    "market.fetch",
-    "catalyst.review",
-}
-
-EVENT_STATUSES = {"reported", "confirmed", "official", "stale", "false_signal", "merged"}
+from common.bot_commands import ALLOWED_COMMAND_TYPES, EVENT_STATUSES
 
 
 def utcnow() -> datetime:

@@ -31,7 +31,7 @@ async def create_source(session: AsyncSession, payload: SourceCreate) -> NewsSou
         enabled=payload.enabled,
     )
     session.add(source)
-    await session.commit()
+    await session.flush()
     await session.refresh(source)
     return source
 
@@ -46,7 +46,7 @@ async def update_source(
         setattr(source, key, str(value) if key == "url" else value)
     if "category" in updates:
         source.asset_classes = [source.category]
-    await session.commit()
+    await session.flush()
     await session.refresh(source)
     return source
 
@@ -57,7 +57,7 @@ async def set_source_enabled(
     enabled: bool,
 ) -> NewsSource:
     source.enabled = enabled
-    await session.commit()
+    await session.flush()
     await session.refresh(source)
     return source
 

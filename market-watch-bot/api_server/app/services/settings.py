@@ -22,7 +22,7 @@ async def update_alert_policy(session: AsyncSession, payload: AlertPolicy) -> Al
         session.add(setting)
     else:
         setting.value = payload.model_dump()
-    await session.commit()
+    await session.flush()
     return payload
 
 

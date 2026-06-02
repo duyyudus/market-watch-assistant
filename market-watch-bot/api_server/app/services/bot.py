@@ -53,7 +53,7 @@ async def create_bot_command(session: AsyncSession, payload: BotCommandCreate) -
         requested_by=payload.requested_by,
     )
     session.add(command)
-    await session.commit()
+    await session.flush()
     await session.refresh(command)
     return command
 
@@ -80,6 +80,6 @@ async def get_bot_command(session: AsyncSession, command_id: str) -> BotCommand 
 async def cancel_bot_command(session: AsyncSession, command: BotCommand) -> BotCommand:
     command.status = "cancelled"
     command.completed_at = datetime.now(UTC)
-    await session.commit()
+    await session.flush()
     await session.refresh(command)
     return command

@@ -401,6 +401,8 @@ Eliminate SQLite testing discrepancies:
 - Enable integration testing against a real local PostgreSQL container with the `pgvector` extension instead of relying on pure SQLite in-memory shims.
 - Ensure that pgvector features, database locks (`FOR UPDATE SKIP LOCKED`), and custom PostgreSQL JSON operators are fully covered by pytest suites.
 
+Use configured DB url in `.env.test` to run real PostgreSQL test.
+
 ### 7.4 Dashboard End-to-End (E2E) Test Suite (Priority: P2)
 
 Secure the web user interface:

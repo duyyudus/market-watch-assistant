@@ -97,7 +97,7 @@ async def acknowledge_alert(session: AsyncSession, alert_id: str) -> AlertRead |
     if alert is None:
         return None
     alert.acknowledged_at = datetime.now(UTC)
-    await session.commit()
+    await session.flush()
     return await get_alert_detail(session, alert_id)
 
 
@@ -107,7 +107,7 @@ async def dismiss_alert(session: AsyncSession, alert_id: str) -> AlertRead | Non
         return None
     alert.suppression_reason = "dismissed"
     alert.acknowledged_at = alert.acknowledged_at or datetime.now(UTC)
-    await session.commit()
+    await session.flush()
     return await get_alert_detail(session, alert_id)
 
 
@@ -129,7 +129,7 @@ async def create_channel(
     _validate_channel(payload.channel_type, payload.config)
     row = AlertChannel(**payload.model_dump())
     session.add(row)
-    await session.commit()
+    await session.flush()
     await session.refresh(row)
     return AlertChannelRead(**row.__dict__)
 
@@ -148,7 +148,7 @@ async def update_channel(
     _validate_channel(channel_type, config)
     for key, value in data.items():
         setattr(row, key, value)
-    await session.commit()
+    await session.flush()
     await session.refresh(row)
     return AlertChannelRead(**row.__dict__)
 
@@ -158,7 +158,7 @@ async def delete_channel(session: AsyncSession, channel_id: str) -> bool:
     if row is None:
         return False
     await session.delete(row)
-    await session.commit()
+    await session.flush()
     return True
 
 
@@ -176,7 +176,7 @@ async def queue_channel_test(
         requested_by="dashboard",
     )
     session.add(command)
-    await session.commit()
+    await session.flush()
     await session.refresh(command)
     return BotCommandRead(**command.__dict__)
 
@@ -201,7 +201,7 @@ async def create_suppression_rule(
     _validate_rule(payload.rule_type)
     row = AlertSuppressionRule(**payload.model_dump())
     session.add(row)
-    await session.commit()
+    await session.flush()
     await session.refresh(row)
     return AlertSuppressionRuleRead(**row.__dict__)
 
@@ -218,7 +218,7 @@ async def update_suppression_rule(
     _validate_rule(str(data.get("rule_type", row.rule_type)))
     for key, value in data.items():
         setattr(row, key, value)
-    await session.commit()
+    await session.flush()
     await session.refresh(row)
     return AlertSuppressionRuleRead(**row.__dict__)
 
@@ -228,7 +228,7 @@ async def delete_suppression_rule(session: AsyncSession, rule_id: str) -> bool:
     if row is None:
         return False
     await session.delete(row)
-    await session.commit()
+    await session.flush()
     return True
 
 

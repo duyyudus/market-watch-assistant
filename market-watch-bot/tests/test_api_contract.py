@@ -335,7 +335,12 @@ async def client():
 
     async def override_session():
         async with factory() as session:
-            yield session
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
     app.dependency_overrides[get_session] = override_session
     async with AsyncClient(
@@ -899,7 +904,7 @@ async def test_creating_command_returns_503_when_table_missing() -> None:
         def add(self, _obj):
             pass
 
-        async def commit(self):
+        async def flush(self):
             raise SQLAlchemyError("relation bot_commands does not exist")
 
         async def rollback(self):
