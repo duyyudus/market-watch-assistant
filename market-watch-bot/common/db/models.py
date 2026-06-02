@@ -161,6 +161,14 @@ class NormalizedNewsItem(Base):
     asset_classes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     is_paywalled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     full_text_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    full_text_extraction_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending"
+    )
+    full_text_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    full_text_last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    full_text_last_http_status: Mapped[int | None] = mapped_column(Integer)
+    full_text_last_error: Mapped[str | None] = mapped_column(Text)
+    full_text_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     title_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     canonical_url_hash: Mapped[str | None] = mapped_column(String(64))
     normalized_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)

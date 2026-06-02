@@ -109,7 +109,7 @@ async def request_with_retry(
                 if attempt < attempts - 1:
                     await _sleep(delay, sleeper)
                     continue
-            if hasattr(response, "raise_for_status"):
+            if status_code != 304 and hasattr(response, "raise_for_status"):
                 response.raise_for_status()
             return response
         except Exception as exc:  # noqa: BLE001 - provider boundary normalizes failures

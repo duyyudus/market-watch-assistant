@@ -83,6 +83,7 @@ async def run_pipeline(
     )
     fetched = 0
     skipped_sources = 0
+    poll_source_cooldown_skips = 0
     failed_sources = 0
     degraded_stages: list[str] = []
     failed_stages: list[str] = []
@@ -107,12 +108,15 @@ async def run_pipeline(
             skipped_sources += 1
             reason = str(result.get("reason", "skipped"))
             if reason == "failure_cooldown":
+                poll_source_cooldown_skips += 1
                 rate_limit_skips["rss"] = rate_limit_skips.get("rss", 0) + 1
             logger.info("  ⚠ Skipped source %s: %s", source.name, reason)
+        elif result.get("status") == "not_modified":
+            logger.info("  ✓ Source %s not modified (304)", source.name)
         else:
             failed_sources += 1
             logger.error("  ❌ Failed to fetch source %s: %s", source.name, result.get("error"))
-    if skipped_sources:
+    if poll_source_cooldown_skips:
         degraded_stages.append("poll_sources")
     if failed_sources:
         degraded_stages.append("poll_sources")
@@ -122,7 +126,7 @@ async def run_pipeline(
         end_time=datetime.now(UTC),
         items_in=len(sources),
         items_out=fetched,
-        status="degraded" if skipped_sources or failed_sources else "success",
+        status="degraded" if poll_source_cooldown_skips or failed_sources else "success",
     )
 
     stage_start = datetime.now(UTC)
@@ -324,14 +328,22 @@ async def run_pipeline(
     )
 
     full_text_extracted = 0
+    full_text_attempted = 0
+    full_text_fallback_used = 0
+    full_text_skipped = 0
+    full_text_retryable_failed = 0
     full_text_failed = 0
     stage_start = datetime.now(UTC)
     stage_status = "success"
     try:
         full_text_stats = await extract_full_text_for_priority_events(session)
+        full_text_attempted = getattr(full_text_stats, "attempted", 0)
         full_text_extracted = full_text_stats.extracted
-        full_text_failed = full_text_stats.failed
-        if full_text_failed:
+        full_text_fallback_used = getattr(full_text_stats, "fallback_used", 0)
+        full_text_skipped = getattr(full_text_stats, "skipped", 0)
+        full_text_retryable_failed = getattr(full_text_stats, "retryable_failed", 0)
+        full_text_failed = getattr(full_text_stats, "failed", full_text_retryable_failed)
+        if full_text_retryable_failed:
             degraded_stages.append("full_text_extraction")
             stage_status = "degraded"
     except Exception as exc:  # noqa: BLE001
@@ -439,6 +451,7 @@ async def run_pipeline(
     return {
         "fetched": fetched,
         "skipped_sources": skipped_sources,
+        "poll_source_cooldown_skips": poll_source_cooldown_skips,
         "failed_sources": failed_sources,
         "normalized": normalized,
         "duplicates": duplicates,
@@ -451,7 +464,11 @@ async def run_pipeline(
         "event_embeddings": event_embeddings,
         "llm_enriched": llm_enriched,
         "market_moves_fetched": market_moves_fetched,
+        "full_text_attempted": full_text_attempted,
         "full_text_extracted": full_text_extracted,
+        "full_text_fallback_used": full_text_fallback_used,
+        "full_text_skipped": full_text_skipped,
+        "full_text_retryable_failed": full_text_retryable_failed,
         "full_text_failed": full_text_failed,
         "queued_investigations": queued_investigations,
         "completed_investigations": completed_investigations,

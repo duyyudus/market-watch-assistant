@@ -42,3 +42,23 @@ def test_data_quality_scale_migration_declares_columns_indexes_and_fk_policy() -
     ]
     for fragment in expected_fragments:
         assert fragment in migration
+
+
+def test_full_text_extraction_state_migration_declares_item_state_columns() -> None:
+    migration = Path("alembic/versions/0012_full_text_extraction_state.py").read_text(
+        encoding="utf-8"
+    )
+
+    expected_fragments = [
+        "full_text_extraction_status",
+        "full_text_attempt_count",
+        "full_text_last_attempted_at",
+        "full_text_last_http_status",
+        "full_text_last_error",
+        "full_text_next_retry_at",
+        "full_text_available = true",
+        "full_text_available = false",
+        "ix_normalized_news_items_full_text_retry",
+    ]
+    for fragment in expected_fragments:
+        assert fragment in migration
