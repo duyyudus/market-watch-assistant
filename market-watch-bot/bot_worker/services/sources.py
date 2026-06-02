@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.config import Settings, validate_source_type
+from bot_worker.crawler import ParsedCrawlerArticle, crawl_section_articles
 from bot_worker.db.models import (
     AlertDecisionRecord,
     AppSetting,
@@ -64,6 +65,7 @@ async def seed_starter_sources(session: AsyncSession) -> int:
         language = str(source.get("language", "en"))
         source_score = int(source.get("score", 60))
         polling_interval_seconds = int(source.get("interval", 300))
+        enabled = bool(source.get("enabled", True))
 
         existing = await session.scalar(select(NewsSource).where(NewsSource.name == name))
         if existing is not None:
@@ -75,6 +77,7 @@ async def seed_starter_sources(session: AsyncSession) -> int:
                 existing.language,
                 existing.source_score,
                 existing.polling_interval_seconds,
+                existing.enabled,
             )
             existing.url = url
             existing.region = region
@@ -83,7 +86,8 @@ async def seed_starter_sources(session: AsyncSession) -> int:
             existing.language = language
             existing.source_score = source_score
             existing.polling_interval_seconds = polling_interval_seconds
-            existing.parser_type = "rss"
+            existing.enabled = enabled
+            existing.parser_type = source_type
             existing.asset_classes = [category]
             after = (
                 existing.url,
@@ -93,6 +97,7 @@ async def seed_starter_sources(session: AsyncSession) -> int:
                 existing.language,
                 existing.source_score,
                 existing.polling_interval_seconds,
+                existing.enabled,
             )
             changed += int(before != after)
             continue
@@ -108,7 +113,8 @@ async def seed_starter_sources(session: AsyncSession) -> int:
                 language=language,
                 source_score=source_score,
                 polling_interval_seconds=polling_interval_seconds,
-                parser_type="rss",
+                enabled=enabled,
+                parser_type=source_type,
             )
             .on_conflict_do_nothing(index_elements=["url"])
         )
@@ -140,6 +146,7 @@ async def add_source(
     language: str = "en",
     score: int = 60,
     interval: int = 300,
+    enabled: bool = True,
 ) -> NewsSource:
     source = NewsSource(
         name=name,
@@ -150,7 +157,9 @@ async def add_source(
         language=language,
         source_score=score,
         polling_interval_seconds=interval,
+        enabled=enabled,
         asset_classes=[category],
+        parser_type=source_type,
     )
     session.add(source)
     await session.flush()
@@ -483,16 +492,76 @@ async def fetch_source_content(source: NewsSource) -> tuple[int, str, dict[str, 
         headers["If-None-Match"] = source.etag
     if getattr(source, "last_modified", None):
         headers["If-Modified-Since"] = source.last_modified
+    provider = source.source_type if source.source_type in {"rss", "crawler"} else "rss"
+    if provider == "crawler":
+        headers.setdefault(
+            "User-Agent",
+            "market-watch-assistant/0.1 (+https://github.com/market-watch-assistant)",
+        )
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await request_with_retry(
-            provider="rss",
+            provider=provider,
             method="GET",
             url=source.url,
-            retry_policy=PROVIDER_RETRY_POLICIES["rss"],
+            retry_policy=PROVIDER_RETRY_POLICIES[provider],
             client=client,
             headers=headers or None,
         )
         return response.status_code, response.text, dict(response.headers)
+
+
+async def _fetch_crawler_article_html(url: str) -> str:
+    headers = {
+        "User-Agent": "market-watch-assistant/0.1 (+https://github.com/market-watch-assistant)"
+    }
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        response = await request_with_retry(
+            provider="crawler",
+            method="GET",
+            url=url,
+            retry_policy=PROVIDER_RETRY_POLICIES["crawler"],
+            client=client,
+            headers=headers,
+        )
+        return response.text
+
+
+async def _parsed_source_items(source: NewsSource, body: str):
+    if source.source_type == "rss":
+        return parse_rss_items(body)
+    if source.source_type == "crawler":
+        return await crawl_section_articles(
+            section_url=source.url,
+            section_html=body,
+            fetch_html=_fetch_crawler_article_html,
+        )
+    return []
+
+
+def _raw_item_values(source: NewsSource, item) -> dict[str, object]:
+    if isinstance(item, ParsedCrawlerArticle):
+        raw_text = " ".join([item.title, item.description, item.content or "", item.url])
+        return {
+            "source_id": source.id,
+            "raw_title": item.title,
+            "raw_description": item.description,
+            "raw_content": item.content,
+            "raw_url": item.url,
+            "raw_published_at": _published_to_string(item.published),
+            "raw_payload": _json_safe(item.raw_payload),
+            "content_hash": content_hash(raw_text),
+        }
+    return {
+        "source_id": source.id,
+        "raw_title": item.title,
+        "raw_description": item.description,
+        "raw_url": item.url,
+        "raw_published_at": _published_to_string(item.published),
+        "raw_payload": _json_safe(item.raw_payload),
+        "content_hash": content_hash(" ".join([item.title, item.description, item.url])),
+    }
+
+
 async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, int | str]:
     started = perf_counter()
     try:
@@ -528,20 +597,12 @@ async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, i
             source.etag = headers["etag"]
         if headers.get("last-modified"):
             source.last_modified = headers["last-modified"]
-        items = parse_rss_items(body)
+        items = await _parsed_source_items(source, body)
         inserted = 0
         for item in items:
             stmt = (
                 insert(RawNewsItem)
-                .values(
-                    source_id=source.id,
-                    raw_title=item.title,
-                    raw_description=item.description,
-                    raw_url=item.url,
-                    raw_published_at=_published_to_string(item.published),
-                    raw_payload=_json_safe(item.raw_payload),
-                    content_hash=content_hash(" ".join([item.title, item.description, item.url])),
-                )
+                .values(**_raw_item_values(source, item))
                 .on_conflict_do_nothing(index_elements=["source_id", "content_hash"])
             )
             result = await session.execute(stmt)
@@ -558,6 +619,34 @@ async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, i
         )
         mark_source_fetch_result(source, status="success", inserted=inserted)
         return {"status": "success", "items": len(items), "inserted": inserted}
+    except httpx.HTTPStatusError as exc:
+        if source.source_type == "crawler" and exc.response.status_code in {401, 403}:
+            mark_source_fetch_result(source, status="success", inserted=0)
+            session.add(
+                SourceFetchLog(
+                    source_id=source.id,
+                    status="skipped",
+                    http_status=exc.response.status_code,
+                    error_message="crawler access denied",
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+            )
+            return {
+                "status": "skipped",
+                "reason": "access_denied",
+                "http_status": exc.response.status_code,
+            }
+        mark_source_fetch_result(source, status="failed", inserted=0)
+        session.add(
+            SourceFetchLog(
+                source_id=source.id,
+                status="failed",
+                http_status=exc.response.status_code,
+                error_message=str(exc),
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+        )
+        return {"status": "failed", "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - command should persist source diagnostics
         mark_source_fetch_result(source, status="failed", inserted=0)
         session.add(

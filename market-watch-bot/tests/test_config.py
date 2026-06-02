@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from bot_worker.config import Settings, load_settings
-from bot_worker.db.models import AppSetting
-from bot_worker.services.sources import seed_configuration_presets
+from bot_worker.db.models import AppSetting, NewsSource
+from bot_worker.services.sources import seed_configuration_presets, seed_starter_sources
 
 
 def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_p
     assert "reuters.com" in settings.investigation.high_quality_domains
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
-    assert settings.configuration_presets.sources.source_types == ["rss"]
+    assert settings.configuration_presets.sources.source_types == ["rss", "crawler"]
     assert settings.configuration_presets.watchlist.tiers == ["S", "A", "B", "C", "D"]
 
 
@@ -112,7 +112,7 @@ async def test_seed_configuration_presets_writes_bot_settings_to_shared_app_sett
 
     assert changed is True
     assert session.added[0].key == "configuration_presets"
-    assert session.added[0].value["sources"]["source_types"] == ["rss"]
+    assert session.added[0].value["sources"]["source_types"] == ["rss", "crawler"]
     assert session.added[0].value["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
 
 
@@ -141,7 +141,7 @@ def test_vietnam_starter_source_points_to_real_rss_feed() -> None:
     assert vietstock["url"] == "http://vietstock.vn/144/chung-khoan.rss"
 
 
-def test_market_starter_source_uses_reachable_rss_feed() -> None:
+def test_coindesk_starter_source_uses_reachable_rss_feed() -> None:
     import yaml
     paths_to_try = [
         Path("starter-sources.yml"),
@@ -149,8 +149,68 @@ def test_market_starter_source_uses_reachable_rss_feed() -> None:
     ]
     sources_path = next(p for p in paths_to_try if p.exists())
     data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
-    marketwatch = next(
-        source for source in data["sources"] if source["name"] == "MarketWatch Top Stories"
+    coindesk = next(
+        source for source in data["sources"] if source["name"] == "CoinDesk"
     )
 
-    assert marketwatch["url"] == "https://feeds.marketwatch.com/marketwatch/topstories/"
+    assert coindesk["url"] == "https://www.coindesk.com/arc/outboundfeeds/rss/"
+
+
+def test_starter_crawler_sources_keep_known_access_denied_sections_disabled() -> None:
+    import yaml
+    paths_to_try = [
+        Path("starter-sources.yml"),
+        Path(__file__).resolve().parent.parent / "starter-sources.yml",
+    ]
+    sources_path = next(p for p in paths_to_try if p.exists())
+    data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
+    crawler_sources = [source for source in data["sources"] if source["type"] == "crawler"]
+    blocked_sources = [
+        source
+        for source in crawler_sources
+        if "reuters.com" in source["url"] or "ft.com" in source["url"]
+    ]
+
+    assert crawler_sources
+    assert blocked_sources
+    assert all(source["enabled"] is False for source in blocked_sources)
+
+
+async def test_seed_starter_sources_preserves_disabled_source_flag(monkeypatch, tmp_path) -> None:
+    starter = tmp_path / "starter-sources.yml"
+    starter.write_text(
+        """
+sources:
+  - name: Blocked Crawler
+    url: https://www.reuters.com/business/
+    region: global
+    category: global_macro
+    type: crawler
+    language: en
+    score: 85
+    interval: 900
+    enabled: false
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    added: list[NewsSource] = []
+
+    class SeedSession:
+        async def scalar(self, _stmt):
+            return None
+
+        async def execute(self, stmt):
+            source = NewsSource(**stmt.compile().params)
+            added.append(source)
+
+            class Result:
+                rowcount = 1
+
+            return Result()
+
+    changed = await seed_starter_sources(SeedSession())
+
+    assert changed == 1
+    assert added[0].source_type == "crawler"
+    assert added[0].enabled is False

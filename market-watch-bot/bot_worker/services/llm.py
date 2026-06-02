@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import asdict
 
 from sqlalchemy import delete, select
@@ -36,6 +37,26 @@ from bot_worker.llm import (
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.market import market_move_score_for_cluster
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
+
+NEWS_ENTITY_TEXT_MAX_LENGTH = 255
+NEWS_ENTITY_CODE_MAX_LENGTH = 32
+TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-:/]{0,31}$")
+
+
+def _entity_text(value: object) -> str:
+    text = str(value).strip()
+    if len(text) > NEWS_ENTITY_TEXT_MAX_LENGTH:
+        return text[:NEWS_ENTITY_TEXT_MAX_LENGTH]
+    return text
+
+
+def _ticker_text(value: object) -> str | None:
+    ticker = str(value).strip().upper()
+    if not ticker or len(ticker) > NEWS_ENTITY_CODE_MAX_LENGTH:
+        return None
+    if not TICKER_RE.fullmatch(ticker):
+        return None
+    return ticker
 
 
 async def latest_successful_llm_analysis(
@@ -297,7 +318,7 @@ def _classification_entities(
     entities: list[NewsEntity] = []
     seen: set[tuple[str, str | None]] = set()
     for value in result.get("entities") or []:
-        name = str(value).strip()
+        name = _entity_text(value)
         if not name:
             continue
         key = (name.casefold(), None)
@@ -314,23 +335,35 @@ def _classification_entities(
             )
         )
     for value in result.get("tickers") or []:
-        ticker = str(value).strip().upper()
-        if not ticker:
+        raw_text = _entity_text(value)
+        if not raw_text:
             continue
-        key = (ticker.casefold(), ticker)
+        ticker = _ticker_text(value)
+        key = (raw_text.casefold(), ticker)
         if key in seen:
             continue
         seen.add(key)
-        entities.append(
-            NewsEntity(
-                news_item_id=item_id,
-                entity_type="ticker",
-                raw_text=ticker,
-                normalized_name=ticker,
-                ticker=ticker,
-                confidence=confidence,
+        if ticker is None:
+            entities.append(
+                NewsEntity(
+                    news_item_id=item_id,
+                    entity_type="market_entity",
+                    raw_text=raw_text,
+                    normalized_name=raw_text,
+                    confidence=confidence,
+                )
             )
-        )
+        else:
+            entities.append(
+                NewsEntity(
+                    news_item_id=item_id,
+                    entity_type="ticker",
+                    raw_text=ticker,
+                    normalized_name=ticker,
+                    ticker=ticker,
+                    confidence=confidence,
+                )
+            )
     return entities
 
 
@@ -446,6 +479,7 @@ async def extract_entities_with_llm(
         for entity in entities:
             session.add(entity)
         extracted += 1
+    await session.flush()
     return extracted
 
 

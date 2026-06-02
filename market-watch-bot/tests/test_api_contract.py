@@ -772,6 +772,27 @@ async def test_source_create_rejects_unsupported_source_type(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_source_create_accepts_crawler_source_type(client: AsyncClient) -> None:
+    response = await client.post(
+        "/sources",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "Reuters Business Crawler",
+            "url": "https://www.reuters.com/business/",
+            "region": "global",
+            "category": "global_macro",
+            "source_type": "crawler",
+            "language": "en",
+            "source_score": 85,
+            "polling_interval_seconds": 600,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "crawler"
+
+
+@pytest.mark.asyncio
 async def test_source_update_rejects_unsupported_source_type(client: AsyncClient) -> None:
     created = await client.post(
         "/sources",

@@ -4,19 +4,21 @@
 #
 # - name: Human-readable unique source name. `market-watch migrate` uses this
 #   name to update existing starter sources.
-# - url: Feed URL. The current parser expects a real RSS/XML feed, not a
-#   landing page that lists feeds.
+# - url: Feed URL for `type: rss`, or a section/front page for `type: crawler`.
 # - region: One of:
 #   global, asia, us, vietnam, china, crypto, other
 # - category: One of:
 #   global_macro, us_equity, vietnam_equity, crypto, commodity, fx, rates,
 #   geopolitics, company_disclosure, exchange_announcement
-# - type: Technical ingestion mechanism. Currently supported value:
+# - type: Technical ingestion mechanism. Currently supported values:
 #   rss
 #   Official RSS feeds still use `type: rss`; represent official/trusted
 #   provenance with a high score, suitable category, and clear source name.
-#   api, crawler, newsletter, and social are not implemented news
-#   source types unless dedicated fetchers/parsers are added.
+#   crawler
+#   Polls section pages, discovers same-site article links, and fetches public
+#   article metadata/text. Paywalled pages may only provide title/snippet/time.
+#   api, newsletter, and social are not implemented news source types unless
+#   dedicated fetchers/parsers are added.
 # - language: One of:
 #   en, vi, zh, ja, multi
 # - score: Source quality score from 0 to 100. Suggested values:
@@ -31,6 +33,8 @@
 #   600  = regular financial RSS
 #   900  = Vietnam market RSS or medium-priority feeds
 #   1800 = broad aggregators or lower-priority feeds
+# - enabled: Optional boolean. Defaults to true. Use false for known blocked
+#   or licensed sources retained as examples but not active starter feeds.
 #
 # Common examples:
 # - Vietnam stocks: region=vietnam, category=vietnam_equity, language=vi
@@ -38,6 +42,7 @@
 # - Global macro: region=global or us, category=global_macro, language=en
 # - Crypto: region=crypto, category=crypto, language=en
 # - Central bank/regulator RSS: type=rss, score=90-100
+# - Public news section crawler: type=crawler, score=75-90
 
 sources:
 - name: Federal Reserve Press Releases
@@ -48,14 +53,6 @@ sources:
   language: en
   score: 100
   interval: 900
-- name: MarketWatch Top Stories
-  url: https://feeds.marketwatch.com/marketwatch/topstories/
-  region: global
-  category: global_macro
-  type: rss
-  language: en
-  score: 70
-  interval: 600
 - name: Vietstock - Chung Khoan
   url: http://vietstock.vn/144/chung-khoan.rss
   region: vietnam
@@ -72,3 +69,63 @@ sources:
   language: en
   score: 75
   interval: 600
+- name: CNBC Markets
+  url: https://www.cnbc.com/markets/
+  region: global
+  category: global_macro
+  type: crawler
+  language: en
+  score: 80
+  interval: 900
+- name: Reuters Business
+  url: https://www.reuters.com/business/
+  region: global
+  category: global_macro
+  type: crawler
+  language: en
+  score: 85
+  interval: 900
+  enabled: false
+  note: Section crawler access returns 401/403 without an approved/licensed access path.
+- name: Financial Times Markets
+  url: https://www.ft.com/markets
+  region: global
+  category: global_macro
+  type: crawler
+  language: en
+  score: 85
+  interval: 900
+  enabled: false
+  note: Section crawler access returns 403 without an approved/licensed access path.
+- name: The Guardian Business
+  url: https://www.theguardian.com/uk/business
+  region: global
+  category: global_macro
+  type: crawler
+  language: en
+  score: 75
+  interval: 900
+- name: Al Jazeera Economy
+  url: https://www.aljazeera.com/economy/
+  region: global
+  category: global_macro
+  type: crawler
+  language: en
+  score: 75
+  interval: 900
+- name: AP Business
+  url: https://apnews.com/hub/business
+  region: global
+  category: global_macro
+  type: crawler
+  language: en
+  score: 80
+  interval: 900
+- name: ABC News Business
+  url: https://abcnews.com/Business
+  region: us
+  category: us_equity
+  type: crawler
+  language: en
+  score: 70
+  interval: 900

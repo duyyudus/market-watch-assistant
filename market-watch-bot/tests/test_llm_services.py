@@ -121,8 +121,10 @@ class FakeEntityExtractionSession:
         self,
         items: list[NormalizedNewsItem],
         existing_entities: list[NewsEntity] | dict[str, list[NewsEntity]] | None = None,
+        existing_runs: list[LLMAnalysisRun] | None = None,
     ) -> None:
         self.items = items
+        self.existing_runs = existing_runs or []
         if isinstance(existing_entities, dict):
             self.existing_entities_by_item = existing_entities
             self.existing_entities = []
@@ -149,6 +151,8 @@ class FakeEntityExtractionSession:
 
     async def scalar(self, _stmt):
         self.scalar_calls += 1
+        if self.existing_runs:
+            return self.existing_runs.pop(0)
         return None
 
     def add(self, value: object) -> None:
@@ -707,6 +711,117 @@ async def test_extract_entities_with_llm_persists_news_entities_without_watchlis
     assert bitcoin.confidence == 86
     assert btc.entity_type == "ticker"
     assert btc.ticker == "BTC"
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_does_not_persist_long_ticker_phrases(
+    monkeypatch,
+) -> None:
+    item = news_item("news_1", "OpenAI and Anthropic compete before IPO")
+    session = FakeEntityExtractionSession([item])
+
+    long_phrase = "OpenAI and Anthropic (competition for IPO)"
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="ipo_competition",
+                    region="us",
+                    asset_classes=["equity"],
+                    entities=[],
+                    tickers=[long_phrase],
+                    duplicate_hint="possible",
+                    confidence=83,
+                    rationale="The phrase is an entity, not a ticker.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    assert count == 1
+    assert len(entities) == 1
+    assert entities[0].entity_type == "market_entity"
+    assert entities[0].normalized_name == long_phrase
+    assert entities[0].ticker is None
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_caps_overlong_entity_strings(monkeypatch) -> None:
+    item = news_item("news_1", "Long entity")
+    session = FakeEntityExtractionSession([item])
+    overlong_entity = "A" * 300
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="market_update",
+                    region="global",
+                    asset_classes=["equity"],
+                    entities=[overlong_entity],
+                    tickers=[],
+                    duplicate_hint="possible",
+                    confidence=80,
+                    rationale="The item mentions a long entity name.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    assert len(entities) == 1
+    assert len(entities[0].raw_text) == 255
+    assert len(entities[0].normalized_name) == 255
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_with_llm_sanitizes_completed_cached_runs() -> None:
+    item = news_item("news_1", "Cached classification")
+    cached_run = LLMAnalysisRun(
+        target_type="news_item",
+        target_id=item.id,
+        provider="openrouter",
+        model="openai/gpt-4.1-mini",
+        prompt_version="classify-v1",
+        prompt_hash="hash",
+        status="succeeded",
+        result={
+            "entities": ["A" * 300],
+            "tickers": ["OpenAI and Anthropic (competition for IPO)"],
+            "confidence": 82,
+        },
+    )
+    session = FakeEntityExtractionSession([item], existing_runs=[cached_run])
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    assert count == 1
+    assert len(entities) == 2
+    assert all(entity.ticker is None for entity in entities)
+    assert all(len(entity.raw_text) <= 255 for entity in entities)
+    assert all(len(entity.normalized_name) <= 255 for entity in entities)
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,7 @@ async def normalize_pending_raw_items(
         ):
             continue
         snippet = normalize_text(raw.raw_description)
+        raw_content = normalize_text(raw.raw_content)
         canonical_url = canonicalize_url(
             raw.raw_url,
             tracking_params=set(tracking_params) if tracking_params is not None else None,
@@ -83,6 +84,7 @@ async def normalize_pending_raw_items(
             raw_item_id=raw.id,
             title=title,
             snippet=snippet or None,
+            raw_content=raw_content or None,
             url=raw.raw_url,
             canonical_url=canonical_url,
             source_name=source.name,
@@ -95,7 +97,7 @@ async def normalize_pending_raw_items(
             asset_classes=source.asset_classes,
             title_hash=title_hash(title),
             canonical_url_hash=content_hash(canonical_url),
-            normalized_text_hash=content_hash(f"{title} {snippet}"),
+            normalized_text_hash=content_hash(f"{title} {snippet} {raw_content}"),
             processing_status="normalized",
         )
         session.add(item)

@@ -182,6 +182,7 @@ def source_import(path: Path) -> None:
                 language=str(source.get("language", "en")),
                 score=int(source.get("score", 60)),
                 interval=int(source.get("interval", 300)),
+                enabled=bool(source.get("enabled", True)),
             )
             count += 1
         typer.echo(f"Imported {count} sources (skipped {skipped} duplicates)")
@@ -203,6 +204,7 @@ def source_export(out: Annotated[Path, typer.Option("--out")] = Path("sources.ya
                     "language": source.language,
                     "score": source.source_score,
                     "interval": source.polling_interval_seconds,
+                    "enabled": source.enabled,
                 }
                 for source in rows
             ]

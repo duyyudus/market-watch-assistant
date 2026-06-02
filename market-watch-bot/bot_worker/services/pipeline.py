@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -54,6 +55,19 @@ CORE_JOBS = [
     "retention_cleanup",
     "source_health_check",
 ]
+
+
+async def _run_stage_savepoint[T](
+    session: AsyncSession,
+    operation: Callable[[], Awaitable[T]],
+) -> T:
+    begin_nested = getattr(session, "begin_nested", None)
+    if begin_nested is None:
+        return await operation()
+    async with begin_nested():
+        return await operation()
+
+
 async def run_pipeline(
     session: AsyncSession,
     *,
@@ -109,7 +123,8 @@ async def run_pipeline(
             reason = str(result.get("reason", "skipped"))
             if reason == "failure_cooldown":
                 poll_source_cooldown_skips += 1
-                rate_limit_skips["rss"] = rate_limit_skips.get("rss", 0) + 1
+                provider = source.source_type if source.source_type in {"rss", "crawler"} else "rss"
+                rate_limit_skips[provider] = rate_limit_skips.get(provider, 0) + 1
             logger.info("  ⚠ Skipped source %s: %s", source.name, reason)
         elif result.get("status") == "not_modified":
             logger.info("  ✓ Source %s not modified (304)", source.name)
@@ -160,7 +175,10 @@ async def run_pipeline(
     stage_status = "success"
     if llm_config is not None and llm_config.enabled:
         try:
-            entities_extracted = await extract_entities_with_llm(session, config=llm_config)
+            entities_extracted = await _run_stage_savepoint(
+                session,
+                lambda: extract_entities_with_llm(session, config=llm_config),
+            )
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("extract_entities")
             stage_status = "degraded"
@@ -182,7 +200,10 @@ async def run_pipeline(
     stage_status = "success"
     if embedding_config is not None:
         try:
-            news_embeddings = await embed_pending_news_items(session, config=embedding_config)
+            news_embeddings = await _run_stage_savepoint(
+                session,
+                lambda: embed_pending_news_items(session, config=embedding_config),
+            )
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("generate_embeddings")
             stage_status = "degraded"
@@ -203,10 +224,13 @@ async def run_pipeline(
     logger.info("─── [Stage 6/11] Building Event Clusters ───")
     stage_status = "success"
     try:
-        cluster_stats: ClusterBuildStats = await build_event_clusters(
+        cluster_stats: ClusterBuildStats = await _run_stage_savepoint(
             session,
-            embedding_config=embedding_config,
-            llm_config=llm_config,
+            lambda: build_event_clusters(
+                session,
+                embedding_config=embedding_config,
+                llm_config=llm_config,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         failed_stages.append("cluster_events")
@@ -234,7 +258,10 @@ async def run_pipeline(
     stage_status = "success"
     if embedding_config is not None:
         try:
-            event_embeddings = await embed_pending_event_clusters(session, config=embedding_config)
+            event_embeddings = await _run_stage_savepoint(
+                session,
+                lambda: embed_pending_event_clusters(session, config=embedding_config),
+            )
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("generate_event_embeddings")
             stage_status = "degraded"
@@ -259,7 +286,10 @@ async def run_pipeline(
     stage_status = "success"
     if llm_config is not None and llm_config.enabled:
         try:
-            llm_enriched = await enrich_event_clusters_with_llm(session, config=llm_config)
+            llm_enriched = await _run_stage_savepoint(
+                session,
+                lambda: enrich_event_clusters_with_llm(session, config=llm_config),
+            )
         except Exception as exc:  # noqa: BLE001
             degraded_stages.append("enrich_events_with_llm")
             stage_status = "degraded"
@@ -310,7 +340,10 @@ async def run_pipeline(
             if market_result.failed_providers:
                 degraded_stages.append("fetch_market_moves")
                 stage_status = "degraded"
-            market_moves_fetched = await store_market_moves(session, market_result.moves)
+            market_moves_fetched = await _run_stage_savepoint(
+                session,
+                lambda: store_market_moves(session, market_result.moves),
+            )
             logger.info("  ✓ Successfully fetched and stored %d market moves", market_moves_fetched)
         else:
             stage_status = "skipped"
@@ -336,7 +369,10 @@ async def run_pipeline(
     stage_start = datetime.now(UTC)
     stage_status = "success"
     try:
-        full_text_stats = await extract_full_text_for_priority_events(session)
+        full_text_stats = await _run_stage_savepoint(
+            session,
+            lambda: extract_full_text_for_priority_events(session),
+        )
         full_text_attempted = getattr(full_text_stats, "attempted", 0)
         full_text_extracted = full_text_stats.extracted
         full_text_fallback_used = getattr(full_text_stats, "fallback_used", 0)
@@ -366,25 +402,34 @@ async def run_pipeline(
     failed_investigations = 0
     if investigation_config is not None and investigation_config.enabled:
         try:
-            event_investigations = await queue_event_investigation_runs(
+            event_investigations = await _run_stage_savepoint(
                 session,
-                config=investigation_config,
+                lambda: queue_event_investigation_runs(
+                    session,
+                    config=investigation_config,
+                ),
             )
             queued_investigations += len(event_investigations)
             if llm_config is not None and event_investigations:
-                res = await run_investigations_concurrently(
+                res = await _run_stage_savepoint(
                     session,
-                    event_investigations,
-                    config=investigation_config,
-                    llm_config=llm_config,
+                    lambda: run_investigations_concurrently(
+                        session,
+                        event_investigations,
+                        config=investigation_config,
+                        llm_config=llm_config,
+                    ),
                 )
                 completed_investigations = res.get("completed", 0)
                 failed_investigations = res.get("failed", 0)
             elif event_investigations:
                 failed_investigations = len(event_investigations)
-            queued_investigations += await queue_investigations_for_missed_catalysts(
+            queued_investigations += await _run_stage_savepoint(
                 session,
-                config=investigation_config,
+                lambda: queue_investigations_for_missed_catalysts(
+                    session,
+                    config=investigation_config,
+                ),
             )
             logger.info(
                 "  ✓ Queued %d agent investigations; completed %d, failed %d",
@@ -427,7 +472,10 @@ async def run_pipeline(
     logger.info("─── [Stage 11/11] Missed Catalyst Review ───")
     stage_status = "success"
     try:
-        missed_catalysts_created = await run_missed_catalyst_review(session, window="1d")
+        missed_catalysts_created = await _run_stage_savepoint(
+            session,
+            lambda: run_missed_catalyst_review(session, window="1d"),
+        )
         logger.info(
             "  ✓ Completed review; created %d missed catalyst tasks",
             missed_catalysts_created,

@@ -7,6 +7,8 @@ import httpx
 import pytest
 
 from bot_worker.db.models import DigestRecord, EventCluster, NewsSource, NormalizedNewsItem
+from bot_worker.embeddings import EmbeddingConfig
+from bot_worker.llm import LLMConfig
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.digests import format_digest_message
 from bot_worker.services.events import validate_pgvector
@@ -54,6 +56,28 @@ class EmptyScalarResult:
 class EmptyPipelineSession:
     async def scalars(self, _stmt):
         return EmptyScalarResult()
+
+
+class NestedPipelineSession(EmptyPipelineSession):
+    def __init__(self) -> None:
+        self.in_nested_transaction = False
+        self.transaction_poisoned = False
+        self.nested_transactions = 0
+
+    def begin_nested(self):
+        session = self
+
+        class NestedTransaction:
+            async def __aenter__(self):
+                session.nested_transactions += 1
+                session.in_nested_transaction = True
+                return self
+
+            async def __aexit__(self, *_args):
+                session.in_nested_transaction = False
+                return False
+
+        return NestedTransaction()
 
 
 class ListPipelineSession:
@@ -772,6 +796,66 @@ async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> Non
         "run_missed_catalyst_review",
     ]
     assert all("duration_ms" in stage for stage in metrics["stages"])
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_isolates_entity_extraction_failure_from_later_stages(
+    monkeypatch,
+) -> None:
+    session = NestedPipelineSession()
+
+    async def fail_entity_extraction(active_session, *_args, **_kwargs):
+        if not active_session.in_nested_transaction:
+            active_session.transaction_poisoned = True
+        raise ValueError("entity ticker too long")
+
+    async def embed_news(active_session, *_args, **_kwargs):
+        if active_session.transaction_poisoned:
+            raise AssertionError("later stage saw poisoned transaction")
+        return 3
+
+    async def return_zero(*_args, **_kwargs):
+        return 0
+
+    async def return_empty_list(*_args, **_kwargs):
+        return []
+
+    async def return_cluster_stats(*_args, **_kwargs):
+        from bot_worker.services.events import ClusterBuildStats
+
+        return ClusterBuildStats()
+
+    async def return_full_text_stats(*_args, **_kwargs):
+        return type("FullTextStats", (), {"extracted": 0, "failed": 0})()
+
+    monkeypatch.setattr("bot_worker.services.pipeline.normalize_pending_raw_items", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.mark_exact_duplicates", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.extract_entities_with_llm",
+        fail_entity_extraction,
+    )
+    monkeypatch.setattr("bot_worker.services.pipeline.embed_pending_news_items", embed_news)
+    monkeypatch.setattr("bot_worker.services.pipeline.build_event_clusters", return_cluster_stats)
+    monkeypatch.setattr("bot_worker.services.pipeline.embed_pending_event_clusters", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.enrich_event_clusters_with_llm", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.extract_full_text_for_priority_events",
+        return_full_text_stats,
+    )
+    monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.watchlist_entries", return_empty_list)
+
+    result = await run_pipeline(
+        session,
+        embedding_config=EmbeddingConfig(provider="local"),
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert result["news_embeddings"] == 3
+    assert result["degraded_stages"] == ["extract_entities"]
+    assert "generate_embeddings" not in result["degraded_stages"]
+    assert session.nested_transactions > 0
 
 
 @pytest.mark.asyncio
