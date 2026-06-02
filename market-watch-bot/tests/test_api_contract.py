@@ -176,15 +176,7 @@ async def client():
             key="configuration_presets",
             value={
                 "sources": {
-                    "source_types": [
-                        "rss",
-                        "api",
-                        "crawler",
-                        "official",
-                        "newsletter",
-                        "social",
-                        "market_data",
-                    ],
+                    "source_types": ["rss"],
                     "regions": ["global", "asia", "us", "vietnam", "china", "crypto", "other"],
                     "categories": [
                         "global_macro",
@@ -736,34 +728,75 @@ async def test_configuration_presets_are_served_by_api(client: AsyncClient) -> N
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["sources"]["source_types"] == [
-        "rss",
-        "api",
-        "crawler",
-        "official",
-        "newsletter",
-        "social",
-        "market_data",
-    ]
+    assert payload["sources"]["source_types"] == ["rss"]
     assert "vietnam" in payload["sources"]["regions"]
     assert "crypto" in payload["sources"]["categories"]
     assert payload["sources"]["languages"] == ["en", "vi", "zh", "ja", "multi"]
     assert payload["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
     assert "etf" in payload["watchlist"]["entity_types"]
     assert "equity" in payload["watchlist"]["asset_classes"]
-    
+
     # Assert dynamic alert presets
     assert "alerts" in payload
     assert len(payload["alerts"]["channels"]) > 0
     assert len(payload["alerts"]["rules"]) > 0
-    
+
     webhook_preset = next(c for c in payload["alerts"]["channels"] if c["type"] == "webhook")
     assert webhook_preset["placeholder"] == "e.g. Discord Webhook Alerts"
     assert "url" in webhook_preset["template"]
-    
+
     cooldown_preset = next(r for r in payload["alerts"]["rules"] if r["type"] == "cooldown")
     assert cooldown_preset["placeholder"] == "e.g. 6-Hour Cooldown"
     assert cooldown_preset["template"]["hours"] == 6
+
+
+@pytest.mark.asyncio
+async def test_source_create_rejects_unsupported_source_type(client: AsyncClient) -> None:
+    response = await client.post(
+        "/sources",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "Unsupported API Source",
+            "url": "https://example.com/source-api",
+            "region": "global",
+            "category": "global_macro",
+            "source_type": "api",
+            "language": "en",
+            "source_score": 60,
+            "polling_interval_seconds": 600,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "unsupported source_type" in response.json()["detail"][0]["msg"].lower()
+
+
+@pytest.mark.asyncio
+async def test_source_update_rejects_unsupported_source_type(client: AsyncClient) -> None:
+    created = await client.post(
+        "/sources",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "RSS Source",
+            "url": "https://example.com/rss-source",
+            "region": "global",
+            "category": "global_macro",
+            "source_type": "rss",
+            "language": "en",
+            "source_score": 60,
+            "polling_interval_seconds": 600,
+        },
+    )
+    assert created.status_code == 201
+
+    response = await client.patch(
+        f"/sources/{created.json()['id']}",
+        headers=AUTH_HEADERS,
+        json={"source_type": "official"},
+    )
+
+    assert response.status_code == 422
+    assert "unsupported source_type" in response.json()["detail"][0]["msg"].lower()
 
 
 @pytest.mark.asyncio

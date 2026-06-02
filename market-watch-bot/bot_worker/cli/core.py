@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from bot_worker.cli.apps import app
 from bot_worker.cli.common import _db_error, _run, _settings, _with_session
-from bot_worker.config import starter_sources_yaml, write_default_files
+from bot_worker.config import write_default_files
 from bot_worker.db.session import make_engine
 from bot_worker.services import (
     seed_configuration_presets,
@@ -28,9 +28,6 @@ def init(
 ) -> None:
     """Create default .env, .env.example, settings.yml, and starter source YAML."""
     write_default_files(project_dir)
-    sources_file = project_dir / "starter-sources.yml"
-    if not sources_file.exists():
-        sources_file.write_text(starter_sources_yaml(), encoding="utf-8")
     typer.echo(f"Initialized market-watch-bot files in {project_dir}")
 @app.command()
 def migrate() -> None:

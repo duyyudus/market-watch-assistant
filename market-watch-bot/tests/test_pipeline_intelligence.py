@@ -305,6 +305,43 @@ async def test_compute_source_quality_uses_30_day_operational_signals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_source_skips_unsupported_existing_source_type(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_unsupported",
+        name="Unsupported",
+        source_type="api",
+        category="global_macro",
+        region="global",
+        asset_classes=["global_macro"],
+        url="https://example.com/api",
+        consecutive_failure_count=0,
+    )
+
+    async def fail_fetch_source_content(_source):
+        raise AssertionError("unsupported source types should not be fetched")
+
+    class FetchSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+    monkeypatch.setattr(
+        "bot_worker.services.sources.fetch_source_content",
+        fail_fetch_source_content,
+    )
+    session = FetchSession()
+
+    result = await fetch_source(session, source)
+
+    assert result == {"status": "skipped", "reason": "unsupported_source_type"}
+    assert source.consecutive_failure_count == 0
+    assert session.added[0].status == "skipped"
+    assert "Unsupported source_type: api" in session.added[0].error_message
+
+
+@pytest.mark.asyncio
 async def test_fetch_source_uses_conditional_headers_and_handles_not_modified(monkeypatch) -> None:
     source = NewsSource(
         id="src_1",

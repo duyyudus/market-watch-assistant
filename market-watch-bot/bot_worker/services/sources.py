@@ -11,7 +11,7 @@ from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot_worker.config import STARTER_SOURCES, Settings, StarterSource
+from bot_worker.config import Settings, validate_source_type
 from bot_worker.db.models import (
     AlertDecisionRecord,
     AppSetting,
@@ -37,23 +37,35 @@ from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, requ
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 
 
-def _source_from_starter(source: StarterSource) -> NewsSource:
-    return NewsSource(
-        name=source.name,
-        source_type=source.source_type,
-        category=source.category,
-        region=source.region,
-        asset_classes=[source.category],
-        url=source.url,
-        language=source.language,
-        source_score=source.source_score,
-        polling_interval_seconds=source.polling_interval_seconds,
-        parser_type="rss",
-    )
 async def seed_starter_sources(session: AsyncSession) -> int:
+    paths_to_try = [
+        Path("starter-sources.yml"),
+        Path(__file__).resolve().parent.parent.parent / "starter-sources.yml",
+    ]
+    sources_path = None
+    for p in paths_to_try:
+        if p.exists():
+            sources_path = p
+            break
+
+    if sources_path is None:
+        raise FileNotFoundError(
+            "starter-sources.yml is required to seed starter sources, but was not found."
+        )
+
+    sources = import_sources_yaml(sources_path)
     changed = 0
-    for source in STARTER_SOURCES:
-        existing = await session.scalar(select(NewsSource).where(NewsSource.name == source.name))
+    for source in sources:
+        name = str(source["name"]).strip()
+        url = str(source["url"]).strip()
+        region = str(source.get("region", "global"))
+        category = str(source.get("category", "global_macro"))
+        source_type = str(source.get("type", "rss"))
+        language = str(source.get("language", "en"))
+        source_score = int(source.get("score", 60))
+        polling_interval_seconds = int(source.get("interval", 300))
+
+        existing = await session.scalar(select(NewsSource).where(NewsSource.name == name))
         if existing is not None:
             before = (
                 existing.url,
@@ -64,15 +76,15 @@ async def seed_starter_sources(session: AsyncSession) -> int:
                 existing.source_score,
                 existing.polling_interval_seconds,
             )
-            existing.url = source.url
-            existing.region = source.region
-            existing.category = source.category
-            existing.source_type = source.source_type
-            existing.language = source.language
-            existing.source_score = source.source_score
-            existing.polling_interval_seconds = source.polling_interval_seconds
+            existing.url = url
+            existing.region = region
+            existing.category = category
+            existing.source_type = source_type
+            existing.language = language
+            existing.source_score = source_score
+            existing.polling_interval_seconds = polling_interval_seconds
             existing.parser_type = "rss"
-            existing.asset_classes = [source.category]
+            existing.asset_classes = [category]
             after = (
                 existing.url,
                 existing.region,
@@ -87,15 +99,15 @@ async def seed_starter_sources(session: AsyncSession) -> int:
         stmt = (
             insert(NewsSource)
             .values(
-                name=source.name,
-                source_type=source.source_type,
-                category=source.category,
-                region=source.region,
-                asset_classes=[source.category],
-                url=source.url,
-                language=source.language,
-                source_score=source.source_score,
-                polling_interval_seconds=source.polling_interval_seconds,
+                name=name,
+                source_type=source_type,
+                category=category,
+                region=region,
+                asset_classes=[category],
+                url=url,
+                language=language,
+                source_score=source_score,
+                polling_interval_seconds=polling_interval_seconds,
                 parser_type="rss",
             )
             .on_conflict_do_nothing(index_elements=["url"])
@@ -484,6 +496,18 @@ async def fetch_source_content(source: NewsSource) -> tuple[int, str, dict[str, 
 async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, int | str]:
     started = perf_counter()
     try:
+        try:
+            validate_source_type(source.source_type)
+        except ValueError as exc:
+            session.add(
+                SourceFetchLog(
+                    source_id=source.id,
+                    status="skipped",
+                    error_message=str(exc),
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+            )
+            return {"status": "skipped", "reason": "unsupported_source_type"}
         decision = should_poll_source(source)
         if not decision.should_poll:
             return {"status": "skipped", "reason": decision.reason}

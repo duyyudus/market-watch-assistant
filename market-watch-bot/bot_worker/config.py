@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from common.config import (
     DEFAULT_DATABASE_URL,
-    STARTER_SOURCES,
+    SUPPORTED_SOURCE_TYPES,
     AlertConfig,
     AppConfig,
     BotConfig,
@@ -16,16 +16,15 @@ from common.config import (
     RetentionConfig,
     Settings,
     SourcePresetConfig,
-    StarterSource,
     WatchlistPresetConfig,
     load_settings,
-    starter_sources_yaml,
+    validate_source_type,
     write_default_files,
 )
 
 __all__ = [
     "DEFAULT_DATABASE_URL",
-    "STARTER_SOURCES",
+    "SUPPORTED_SOURCE_TYPES",
     "AlertConfig",
     "AppConfig",
     "BotConfig",
@@ -39,9 +38,8 @@ __all__ = [
     "RetentionConfig",
     "Settings",
     "SourcePresetConfig",
-    "StarterSource",
     "WatchlistPresetConfig",
     "load_settings",
-    "starter_sources_yaml",
+    "validate_source_type",
     "write_default_files",
 ]

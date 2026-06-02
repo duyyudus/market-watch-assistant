@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +10,15 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 
 DEFAULT_DATABASE_URL = ""
+SUPPORTED_SOURCE_TYPES = ("rss",)
+
+
+def validate_source_type(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in SUPPORTED_SOURCE_TYPES:
+        supported = ", ".join(SUPPORTED_SOURCE_TYPES)
+        raise ValueError(f"Unsupported source_type: {value}. Supported source types: {supported}")
+    return normalized
 
 
 class AppConfig(BaseModel):
@@ -145,15 +153,7 @@ class MarketDataConfig(BaseModel):
 
 class SourcePresetConfig(BaseModel):
     source_types: list[str] = Field(
-        default_factory=lambda: [
-            "rss",
-            "api",
-            "crawler",
-            "official",
-            "newsletter",
-            "social",
-            "market_data",
-        ]
+        default_factory=lambda: list(SUPPORTED_SOURCE_TYPES)
     )
     regions: list[str] = Field(
         default_factory=lambda: ["global", "asia", "us", "vietnam", "china", "crypto", "other"]
@@ -254,60 +254,7 @@ class Settings(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
-@dataclass(frozen=True)
-class StarterSource:
-    name: str
-    url: str
-    region: str
-    category: str
-    source_type: str
-    language: str
-    source_score: int
-    polling_interval_seconds: int
 
-
-STARTER_SOURCES = [
-    StarterSource(
-        name="Federal Reserve Press Releases",
-        url="https://www.federalreserve.gov/feeds/press_all.xml",
-        region="us",
-        category="global_macro",
-        source_type="official",
-        language="en",
-        source_score=100,
-        polling_interval_seconds=900,
-    ),
-    StarterSource(
-        name="MarketWatch Top Stories",
-        url="https://feeds.marketwatch.com/marketwatch/topstories/",
-        region="global",
-        category="global_macro",
-        source_type="rss",
-        language="en",
-        source_score=70,
-        polling_interval_seconds=600,
-    ),
-    StarterSource(
-        name="Vietstock",
-        url="https://vietstock.vn/830/chung-khoan/co-phieu.rss",
-        region="vietnam",
-        category="vietnam_equity",
-        source_type="rss",
-        language="vi",
-        source_score=70,
-        polling_interval_seconds=900,
-    ),
-    StarterSource(
-        name="CoinDesk",
-        url="https://www.coindesk.com/arc/outboundfeeds/rss/",
-        region="crypto",
-        category="crypto",
-        source_type="rss",
-        language="en",
-        source_score=75,
-        polling_interval_seconds=600,
-    ),
-]
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -372,27 +319,10 @@ def load_settings(
 def write_default_files(project_dir: Path) -> None:
     project_dir.mkdir(parents=True, exist_ok=True)
     template_dir = Path(__file__).resolve().parent.parent
-    for filename in (".env.example", "settings.yml"):
+    for filename in (".env.example", "settings.yml", "starter-sources.yml"):
         target = project_dir / filename
         if not target.exists():
             shutil.copyfile(template_dir / filename, target)
     env_file = project_dir / ".env"
     if not env_file.exists():
         shutil.copyfile(project_dir / ".env.example", env_file)
-
-
-def starter_sources_yaml() -> str:
-    data = [
-        {
-            "name": source.name,
-            "url": source.url,
-            "region": source.region,
-            "category": source.category,
-            "type": source.source_type,
-            "language": source.language,
-            "score": source.source_score,
-            "interval": source.polling_interval_seconds,
-        }
-        for source in STARTER_SOURCES
-    ]
-    return yaml.safe_dump({"sources": data}, sort_keys=False)

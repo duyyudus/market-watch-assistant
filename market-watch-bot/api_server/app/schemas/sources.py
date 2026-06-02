@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+
+from common.config import validate_source_type
 
 
 class SourceBase(BaseModel):
@@ -15,6 +17,11 @@ class SourceBase(BaseModel):
     source_score: int = Field(default=60, ge=0, le=100)
     polling_interval_seconds: int = Field(default=300, ge=60, le=86400)
     enabled: bool = True
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_supported_source_type(cls, value: str) -> str:
+        return validate_source_type(value)
 
 
 class SourceCreate(SourceBase):
@@ -31,6 +38,13 @@ class SourceUpdate(BaseModel):
     source_score: int | None = Field(default=None, ge=0, le=100)
     polling_interval_seconds: int | None = Field(default=None, ge=60, le=86400)
     enabled: bool | None = None
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_supported_source_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_source_type(value)
 
 
 class SourceRead(BaseModel):

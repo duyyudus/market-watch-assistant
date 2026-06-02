@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bot_worker.config import STARTER_SOURCES, Settings, load_settings
+from bot_worker.config import Settings, load_settings
 from bot_worker.db.models import AppSetting
 from bot_worker.services.sources import seed_configuration_presets
 
@@ -88,8 +88,7 @@ def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_p
     assert "reuters.com" in settings.investigation.high_quality_domains
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
-    assert settings.configuration_presets.sources.source_types[0] == "rss"
-    assert "official" in settings.configuration_presets.sources.source_types
+    assert settings.configuration_presets.sources.source_types == ["rss"]
     assert settings.configuration_presets.watchlist.tiers == ["S", "A", "B", "C", "D"]
 
 
@@ -113,7 +112,7 @@ async def test_seed_configuration_presets_writes_bot_settings_to_shared_app_sett
 
     assert changed is True
     assert session.added[0].key == "configuration_presets"
-    assert session.added[0].value["sources"]["source_types"][0] == "rss"
+    assert session.added[0].value["sources"]["source_types"] == ["rss"]
     assert session.added[0].value["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
 
 
@@ -128,14 +127,30 @@ async def test_seed_configuration_presets_updates_existing_shared_app_setting() 
 
 
 def test_vietnam_starter_source_points_to_real_rss_feed() -> None:
-    vietstock = next(source for source in STARTER_SOURCES if source.name == "Vietstock")
+    import yaml
+    paths_to_try = [
+        Path("starter-sources.yml"),
+        Path(__file__).resolve().parent.parent / "starter-sources.yml",
+    ]
+    sources_path = next(p for p in paths_to_try if p.exists())
+    data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
+    vietstock = next(
+        source for source in data["sources"] if source["name"] == "Vietstock - Chung Khoan"
+    )
 
-    assert vietstock.url == "https://vietstock.vn/830/chung-khoan/co-phieu.rss"
+    assert vietstock["url"] == "http://vietstock.vn/144/chung-khoan.rss"
 
 
 def test_market_starter_source_uses_reachable_rss_feed() -> None:
+    import yaml
+    paths_to_try = [
+        Path("starter-sources.yml"),
+        Path(__file__).resolve().parent.parent / "starter-sources.yml",
+    ]
+    sources_path = next(p for p in paths_to_try if p.exists())
+    data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
     marketwatch = next(
-        source for source in STARTER_SOURCES if source.name == "MarketWatch Top Stories"
+        source for source in data["sources"] if source["name"] == "MarketWatch Top Stories"
     )
 
-    assert marketwatch.url == "https://feeds.marketwatch.com/marketwatch/topstories/"
+    assert marketwatch["url"] == "https://feeds.marketwatch.com/marketwatch/topstories/"

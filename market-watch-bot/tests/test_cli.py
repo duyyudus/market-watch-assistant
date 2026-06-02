@@ -65,6 +65,29 @@ def test_cli_health_pipeline_does_not_require_database() -> None:
     assert "retention cutoffs:" in result.output
 
 
+def test_cli_source_add_rejects_unsupported_source_type(monkeypatch) -> None:
+    async def fail_with_session(_fn):
+        raise AssertionError("source add should reject unsupported types before opening a session")
+
+    monkeypatch.setattr(source_cli, "_with_session", fail_with_session)
+
+    result = runner.invoke(
+        app,
+        [
+            "source",
+            "add",
+            "api",
+            "--name",
+            "API Source",
+            "--url",
+            "https://example.com/api",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unsupported source_type" in result.output
+
+
 def test_cli_alert_list_reports_empty_decisions(monkeypatch) -> None:
     class EmptyResult:
         def all(self) -> list:
@@ -1476,6 +1499,34 @@ sources:
     assert result.exit_code == 0
     assert "Imported 0 sources (skipped 1 duplicates)" in result.output
     assert added == []
+
+
+def test_cli_source_import_rejects_unsupported_source_type(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "sources.yml"
+    path.write_text(
+        """
+sources:
+  - name: Unsupported API Source
+    url: https://example.com/source-api
+    region: global
+    category: global_macro
+    type: api
+    language: en
+    score: 60
+    interval: 600
+""",
+        encoding="utf-8",
+    )
+
+    async def fail_with_session(_fn):
+        raise AssertionError("source import should reject unsupported types before DB writes")
+
+    monkeypatch.setattr(source_cli, "_with_session", fail_with_session)
+
+    result = runner.invoke(app, ["source", "import", str(path)])
+
+    assert result.exit_code != 0
+    assert "Unsupported source_type" in result.output
 
 
 def test_cli_watchlist_import_skips_existing_symbol_after_normalization(

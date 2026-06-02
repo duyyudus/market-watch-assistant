@@ -17,6 +17,15 @@ from bot_worker.services import (
     refresh_source_quality_scores,
     set_source_enabled,
 )
+from common.config import validate_source_type
+
+
+def _validated_source_type(value: object) -> str:
+    try:
+        return validate_source_type(str(value))
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
 
 
 @source_app.command("add")
@@ -31,6 +40,8 @@ def source_add(
     interval: Annotated[int, typer.Option("--interval")] = 300,
 ) -> None:
     """Add a new data source (e.g., RSS feed) to the database."""
+    source_type = _validated_source_type(kind)
+
     async def action(session):
         source = await add_source(
             session,
@@ -38,7 +49,7 @@ def source_add(
             url=url,
             region=region,
             category=category,
-            source_type=kind,
+            source_type=source_type,
             language=language,
             score=score,
             interval=interval,
@@ -146,6 +157,8 @@ def source_purge(
 def source_import(path: Path) -> None:
     """Import multiple data sources from a YAML configuration file."""
     sources = import_sources_yaml(path)
+    for source in sources:
+        source["type"] = _validated_source_type(source.get("type", "rss"))
 
     async def action(session):
         from sqlalchemy import select
