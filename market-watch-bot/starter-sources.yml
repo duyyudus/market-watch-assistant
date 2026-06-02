@@ -54,8 +54,8 @@ sources:
   language: en
   score: 70
   interval: 600
-- name: Vietstock
-  url: https://vietstock.vn/830/chung-khoan/co-phieu.rss
+- name: Vietstock - Chung Khoan
+  url: http://vietstock.vn/144/chung-khoan.rss
   region: vietnam
   category: vietnam_equity
   type: rss

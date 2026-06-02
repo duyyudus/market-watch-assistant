@@ -782,6 +782,96 @@ def test_cli_retention_reset_baseline_yes_reports_deleted_counts(monkeypatch) ->
     assert '"news_item_embeddings": 3' in result.output
 
 
+def test_cli_retention_reset_all_requires_explicit_confirmation(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    monkeypatch.setattr(retention_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["retention", "reset-all"])
+
+    assert result.exit_code == 1
+    assert "Refusing to reset all without --yes." in result.output
+
+
+def test_cli_retention_reset_all_yes_runs_downgrade_upgrade_and_seeds(monkeypatch) -> None:
+    subprocess_calls = []
+
+    class MockCompletedProcess:
+        def __init__(self, returncode=0):
+            self.returncode = returncode
+
+    def fake_subprocess_run(args, **kwargs):
+        subprocess_calls.append(args)
+        return MockCompletedProcess(0)
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    seeded = []
+
+    async def fake_seed_starter_sources(_session):
+        seeded.append("starter_sources")
+        return 3
+
+    async def fake_seed_configuration_presets(_session, _settings):
+        seeded.append("presets")
+        return True
+
+    monkeypatch.setattr(retention_cli.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(retention_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(
+        retention_cli, "seed_starter_sources", fake_seed_starter_sources
+    )
+    monkeypatch.setattr(
+        retention_cli, "seed_configuration_presets", fake_seed_configuration_presets
+    )
+
+    result = runner.invoke(app, ["retention", "reset-all", "--yes"])
+
+    assert result.exit_code == 0
+    assert "Downgrading database schema to base..." in result.output
+    assert "Upgrading database schema to head..." in result.output
+    assert "Seeded 3 starter sources" in result.output
+    assert "Seeded configuration presets" in result.output
+    assert "Database reset completed successfully" in result.output
+
+    assert subprocess_calls == [
+        ["uv", "run", "alembic", "downgrade", "base"],
+        ["uv", "run", "alembic", "upgrade", "head"],
+    ]
+    assert seeded == ["starter_sources", "presets"]
+
+
+def test_cli_retention_reset_all_yes_handles_downgrade_failure(monkeypatch) -> None:
+    class MockCompletedProcess:
+        def __init__(self, returncode=1):
+            self.returncode = returncode
+
+    def fake_subprocess_run(args, **kwargs):
+        return MockCompletedProcess(1)
+
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    monkeypatch.setattr(retention_cli.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(retention_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["retention", "reset-all", "--yes"])
+
+    assert result.exit_code == 1
+    assert "Database downgrade failed" in result.output
+
+
 def test_cli_llm_test_show_prompt_does_not_require_network(monkeypatch) -> None:
     event = EventCluster(
         id="evt_1",
