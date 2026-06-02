@@ -1569,6 +1569,46 @@ sources:
     assert added[0].source_type == "crawler"
 
 
+def test_cli_source_import_accepts_google_rss_source_type(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "sources.yml"
+    path.write_text(
+        """
+sources:
+  - name: FT Google RSS
+    url: https://news.google.com/rss/search?q=site:ft.com+markets
+    region: global
+    category: global_macro
+    type: google-rss
+    language: en
+    score: 60
+    interval: 1800
+""",
+        encoding="utf-8",
+    )
+    added = []
+
+    class SourceSession:
+        async def scalar(self, _stmt):
+            return None
+
+        def add(self, obj):
+            added.append(obj)
+
+        async def flush(self):
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(SourceSession())
+
+    monkeypatch.setattr(source_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["source", "import", str(path)])
+
+    assert result.exit_code == 0
+    assert "Imported 1 sources" in result.output
+    assert added[0].source_type == "google-rss"
+
+
 def test_cli_watchlist_import_skips_existing_symbol_after_normalization(
     monkeypatch, tmp_path
 ) -> None:

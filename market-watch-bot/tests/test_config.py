@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bot_worker.config import Settings, load_settings
+from bot_worker.config import Settings, load_settings, validate_source_type
 from bot_worker.db.models import AppSetting, NewsSource
 from bot_worker.services.sources import seed_configuration_presets, seed_starter_sources
 
@@ -88,8 +88,12 @@ def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_p
     assert "reuters.com" in settings.investigation.high_quality_domains
     assert settings.market_data.global_provider == "yahoo"
     assert settings.market_data.symbol_map["SPY"] == "SPY"
-    assert settings.configuration_presets.sources.source_types == ["rss", "crawler"]
+    assert settings.configuration_presets.sources.source_types == ["rss", "google-rss", "crawler"]
     assert settings.configuration_presets.watchlist.tiers == ["S", "A", "B", "C", "D"]
+
+
+def test_validate_source_type_accepts_google_rss() -> None:
+    assert validate_source_type("google-rss") == "google-rss"
 
 
 class PresetSeedSession:
@@ -112,7 +116,7 @@ async def test_seed_configuration_presets_writes_bot_settings_to_shared_app_sett
 
     assert changed is True
     assert session.added[0].key == "configuration_presets"
-    assert session.added[0].value["sources"]["source_types"] == ["rss", "crawler"]
+    assert session.added[0].value["sources"]["source_types"] == ["rss", "google-rss", "crawler"]
     assert session.added[0].value["watchlist"]["tiers"] == ["S", "A", "B", "C", "D"]
 
 
@@ -156,7 +160,7 @@ def test_coindesk_starter_source_uses_reachable_rss_feed() -> None:
     assert coindesk["url"] == "https://www.coindesk.com/arc/outboundfeeds/rss/"
 
 
-def test_starter_crawler_sources_keep_known_access_denied_sections_disabled() -> None:
+def test_starter_sources_use_google_rss_instead_of_blocked_ft_reuters_crawlers() -> None:
     import yaml
     paths_to_try = [
         Path("starter-sources.yml"),
@@ -165,15 +169,46 @@ def test_starter_crawler_sources_keep_known_access_denied_sections_disabled() ->
     sources_path = next(p for p in paths_to_try if p.exists())
     data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
     crawler_sources = [source for source in data["sources"] if source["type"] == "crawler"]
-    blocked_sources = [
+    blocked_crawler_sources = [
         source
         for source in crawler_sources
         if "reuters.com" in source["url"] or "ft.com" in source["url"]
     ]
+    google_source_names = {
+        source["name"]
+        for source in data["sources"]
+        if source["type"] == "google-rss"
+    }
 
     assert crawler_sources
-    assert blocked_sources
-    assert all(source["enabled"] is False for source in blocked_sources)
+    assert blocked_crawler_sources == []
+    assert google_source_names >= {
+        "Financial Times Google News Markets",
+        "Reuters Google News Markets",
+    }
+
+
+def test_starter_sources_include_enabled_google_rss_fallbacks() -> None:
+    import yaml
+    paths_to_try = [
+        Path("starter-sources.yml"),
+        Path(__file__).resolve().parent.parent / "starter-sources.yml",
+    ]
+    sources_path = next(p for p in paths_to_try if p.exists())
+    data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
+    google_sources = {
+        source["name"]: source
+        for source in data["sources"]
+        if source["type"] == "google-rss"
+    }
+
+    ft_source = google_sources["Financial Times Google News Markets"]
+    reuters_source = google_sources["Reuters Google News Markets"]
+
+    assert "site:ft.com" in ft_source["url"]
+    assert "site:reuters.com" in reuters_source["url"]
+    assert ft_source["enabled"] is True
+    assert reuters_source["enabled"] is True
 
 
 async def test_seed_starter_sources_preserves_disabled_source_flag(monkeypatch, tmp_path) -> None:

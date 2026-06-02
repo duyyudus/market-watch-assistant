@@ -29,6 +29,7 @@ from bot_worker.services.sources import (
     compute_source_quality,
     effective_source_score,
     fetch_source,
+    fetch_source_content,
     mark_source_fetch_result,
     should_poll_source,
 )
@@ -409,6 +410,164 @@ async def test_fetch_source_uses_conditional_headers_and_handles_not_modified(mo
     assert source.last_fetched_at is not None
     assert session.added[0].status == "success"
     assert session.added[0].http_status == 304
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_resolves_google_rss_item_url_before_insert(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_google_rss",
+        name="FT Google RSS",
+        source_type="google-rss",
+        category="global_macro",
+        region="global",
+        asset_classes=["global_macro"],
+        url="https://news.google.com/rss/search?q=site:ft.com+markets",
+    )
+    google_url = "https://news.google.com/rss/articles/encoded?oc=5"
+    publisher_url = "https://www.ft.com/content/article-1"
+    rss_body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Markets rally</title>
+      <link>{google_url}</link>
+      <description>Stocks rise.</description>
+      <guid>item-1</guid>
+    </item>
+  </channel>
+</rss>
+"""
+
+    async def fake_fetch_source_content(_source):
+        return 200, rss_body, {}
+
+    class FetchSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.insert_values: list[dict[str, object]] = []
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+        async def execute(self, stmt):
+            self.insert_values.append(dict(stmt.compile().params))
+
+            class Result:
+                rowcount = 1
+
+            return Result()
+
+    monkeypatch.setattr(
+        "bot_worker.services.sources.fetch_source_content",
+        fake_fetch_source_content,
+    )
+    monkeypatch.setattr(
+        "bot_worker.services.sources.gnewsdecoder",
+        lambda url: {"status": True, "decoded_url": publisher_url, "input": url},
+    )
+    session = FetchSession()
+
+    result = await fetch_source(session, source)
+
+    assert result == {"status": "success", "items": 1, "inserted": 1}
+    assert session.insert_values[0]["raw_url"] == publisher_url
+    assert session.insert_values[0]["raw_payload"]["google_news_url"] == google_url
+    assert session.insert_values[0]["raw_payload"]["google_news_decoded_url"] == publisher_url
+    assert session.insert_values[0]["raw_payload"]["google_news_decode_status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_keeps_google_rss_item_url_when_decode_fails(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_google_rss",
+        name="Reuters Google RSS",
+        source_type="google-rss",
+        category="global_macro",
+        region="global",
+        asset_classes=["global_macro"],
+        url="https://news.google.com/rss/search?q=site:reuters.com+markets",
+    )
+    google_url = "https://news.google.com/rss/articles/encoded?oc=5"
+    rss_body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Oil slips</title>
+      <link>{google_url}</link>
+      <description>Crude prices fall.</description>
+      <guid>item-1</guid>
+    </item>
+  </channel>
+</rss>
+"""
+
+    async def fake_fetch_source_content(_source):
+        return 200, rss_body, {}
+
+    class FetchSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.insert_values: list[dict[str, object]] = []
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+        async def execute(self, stmt):
+            self.insert_values.append(dict(stmt.compile().params))
+
+            class Result:
+                rowcount = 1
+
+            return Result()
+
+    monkeypatch.setattr(
+        "bot_worker.services.sources.fetch_source_content",
+        fake_fetch_source_content,
+    )
+    monkeypatch.setattr(
+        "bot_worker.services.sources.gnewsdecoder",
+        lambda _url: {"status": False, "message": "decode failed"},
+    )
+    session = FetchSession()
+
+    result = await fetch_source(session, source)
+
+    assert result == {"status": "success", "items": 1, "inserted": 1}
+    assert session.insert_values[0]["raw_url"] == google_url
+    assert session.insert_values[0]["raw_payload"]["google_news_url"] == google_url
+    assert session.insert_values[0]["raw_payload"]["google_news_decode_status"] == "failed"
+    assert session.insert_values[0]["raw_payload"]["google_news_decode_message"] == "decode failed"
+
+
+@pytest.mark.asyncio
+async def test_fetch_google_rss_content_uses_rss_retry_provider(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_google_rss",
+        name="FT Google RSS",
+        source_type="google-rss",
+        category="global_macro",
+        region="global",
+        asset_classes=["global_macro"],
+        url="https://news.google.com/rss/search?q=site:ft.com+markets",
+    )
+    providers: list[str] = []
+
+    async def fake_request_with_retry(**kwargs):
+        providers.append(kwargs["provider"])
+        response = httpx.Response(200, text="<rss></rss>")
+        response.request = httpx.Request("GET", source.url)
+        return response
+
+    monkeypatch.setattr(
+        "bot_worker.services.sources.request_with_retry",
+        fake_request_with_retry,
+    )
+
+    status_code, body, _headers = await fetch_source_content(source)
+
+    assert status_code == 200
+    assert body == "<rss></rss>"
+    assert providers == ["rss"]
 
 
 def test_format_digest_message_groups_events_and_persists_digest_shape() -> None:

@@ -793,6 +793,27 @@ async def test_source_create_accepts_crawler_source_type(client: AsyncClient) ->
 
 
 @pytest.mark.asyncio
+async def test_source_create_accepts_google_rss_source_type(client: AsyncClient) -> None:
+    response = await client.post(
+        "/sources",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "FT Google RSS",
+            "url": "https://news.google.com/rss/search?q=site:ft.com+markets",
+            "region": "global",
+            "category": "global_macro",
+            "source_type": "google-rss",
+            "language": "en",
+            "source_score": 60,
+            "polling_interval_seconds": 1800,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "google-rss"
+
+
+@pytest.mark.asyncio
 async def test_source_update_rejects_unsupported_source_type(client: AsyncClient) -> None:
     created = await client.post(
         "/sources",
@@ -818,6 +839,34 @@ async def test_source_update_rejects_unsupported_source_type(client: AsyncClient
 
     assert response.status_code == 422
     assert "unsupported source_type" in response.json()["detail"][0]["msg"].lower()
+
+
+@pytest.mark.asyncio
+async def test_source_update_accepts_google_rss_source_type(client: AsyncClient) -> None:
+    created = await client.post(
+        "/sources",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "RSS Source For Google Update",
+            "url": "https://example.com/rss-source-update",
+            "region": "global",
+            "category": "global_macro",
+            "source_type": "rss",
+            "language": "en",
+            "source_score": 60,
+            "polling_interval_seconds": 600,
+        },
+    )
+    assert created.status_code == 201
+
+    response = await client.patch(
+        f"/sources/{created.json()['id']}",
+        headers=AUTH_HEADERS,
+        json={"source_type": "google-rss"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source_type"] == "google-rss"
 
 
 @pytest.mark.asyncio

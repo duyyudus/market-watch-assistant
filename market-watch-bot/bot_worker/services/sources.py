@@ -7,6 +7,7 @@ from time import perf_counter
 
 import httpx
 import yaml
+from googlenewsdecoder import gnewsdecoder
 from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +32,7 @@ from bot_worker.db.models import (
 from bot_worker.normalize import (
     content_hash,
 )
-from bot_worker.rss import parse_rss_items
+from bot_worker.rss import ParsedFeedItem, parse_rss_items
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
 from bot_worker.services.common import _json_safe, _published_to_string, _result_rowcount
 from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, request_with_retry
@@ -527,8 +528,11 @@ async def _fetch_crawler_article_html(url: str) -> str:
 
 
 async def _parsed_source_items(source: NewsSource, body: str):
-    if source.source_type == "rss":
-        return parse_rss_items(body)
+    if source.source_type in {"rss", "google-rss"}:
+        items = parse_rss_items(body)
+        if source.source_type == "google-rss":
+            return [_resolve_google_rss_item_url(item) for item in items]
+        return items
     if source.source_type == "crawler":
         return await crawl_section_articles(
             section_url=source.url,
@@ -536,6 +540,52 @@ async def _parsed_source_items(source: NewsSource, body: str):
             fetch_html=_fetch_crawler_article_html,
         )
     return []
+
+
+def _resolve_google_rss_item_url(item: ParsedFeedItem) -> ParsedFeedItem:
+    raw_payload = dict(item.raw_payload)
+    raw_payload["google_news_url"] = item.url
+    try:
+        decoded = gnewsdecoder(item.url)
+    except Exception as exc:  # noqa: BLE001 - one undecodable Google item should not fail a feed
+        raw_payload["google_news_decode_status"] = "failed"
+        raw_payload["google_news_decode_message"] = str(exc)
+        return ParsedFeedItem(
+            title=item.title,
+            url=item.url,
+            description=item.description,
+            published=item.published,
+            guid=item.guid,
+            raw_payload=raw_payload,
+        )
+
+    if isinstance(decoded, dict) and decoded.get("status") and decoded.get("decoded_url"):
+        decoded_url = str(decoded["decoded_url"])
+        raw_payload["google_news_decoded_url"] = decoded_url
+        raw_payload["google_news_decode_status"] = "success"
+        return ParsedFeedItem(
+            title=item.title,
+            url=decoded_url,
+            description=item.description,
+            published=item.published,
+            guid=item.guid,
+            raw_payload=raw_payload,
+        )
+
+    message = ""
+    if isinstance(decoded, dict):
+        message = str(decoded.get("message") or "")
+    raw_payload["google_news_decode_status"] = "failed"
+    if message:
+        raw_payload["google_news_decode_message"] = message
+    return ParsedFeedItem(
+        title=item.title,
+        url=item.url,
+        description=item.description,
+        published=item.published,
+        guid=item.guid,
+        raw_payload=raw_payload,
+    )
 
 
 def _raw_item_values(source: NewsSource, item) -> dict[str, object]:

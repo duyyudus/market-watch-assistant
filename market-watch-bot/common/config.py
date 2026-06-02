@@ -10,7 +10,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 
 DEFAULT_DATABASE_URL = ""
-SUPPORTED_SOURCE_TYPES = ("rss", "crawler")
+SUPPORTED_SOURCE_TYPES = ("rss", "google-rss", "crawler")
 
 
 def validate_source_type(value: str) -> str:

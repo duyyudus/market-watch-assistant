@@ -109,7 +109,7 @@ market_data:
 
 configuration_presets:
   sources:
-    source_types: [rss]
+    source_types: [rss, google-rss, crawler]
     regions: [global, asia, us, vietnam, china, crypto, other]
     categories:
       - global_macro
