@@ -28,6 +28,7 @@ from bot_worker.llm import (
     prompt_hash,
 )
 from bot_worker.normalize import normalize_text
+from bot_worker.services.common import _json_safe
 from bot_worker.services.llm import llm_provider
 
 LOCAL_EVIDENCE_STOPWORDS = {
@@ -46,19 +47,6 @@ LOCAL_EVIDENCE_STOPWORDS = {
     "the",
     "with",
 }
-
-
-def _json_safe(value: object) -> object:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, tuple):
-        return [_json_safe(item) for item in value]
-    return value
-
 
 def _event_snapshot(event: EventCluster) -> dict[str, object]:
     return _json_safe({
@@ -471,8 +459,8 @@ async def _execute_investigation_run(
         max(config.min_modifier, int(result_data["suggested_score_modifier"])),
     )
     run.status = "succeeded"
-    run.result = result_data
-    run.usage = usage
+    run.result = _json_safe(result_data)
+    run.usage = _json_safe(usage)
     run.updated_at = utcnow()
     return run
 
@@ -775,8 +763,8 @@ async def run_investigations_concurrently(
             max(config.min_modifier, int(result_data["suggested_score_modifier"])),
         )
         run.status = "succeeded"
-        run.result = result_data
-        run.usage = usage
+        run.result = _json_safe(result_data)
+        run.usage = _json_safe(usage)
         run.updated_at = utcnow()
         counts["completed"] += 1
 

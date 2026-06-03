@@ -237,6 +237,47 @@ async def test_run_event_investigation_stores_json_serializable_snapshot(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_run_event_investigation_strips_null_bytes_from_result(monkeypatch) -> None:
+    target = event()
+    session = FakeInvestigationSession(target)
+
+    class FakeProvider:
+        async def investigate_event(self, _prompt: str):
+            return (
+                LLMInvestigationResult(
+                    summary="Checked\x00 result.",
+                    confidence=70,
+                    official_confirmation="unconfirmed",
+                    risk_flags=["single\x00_source"],
+                    suggested_score_modifier=0,
+                    suggested_alert_level="daily\x00_digest",
+                    caveats=["Caveat has \x00 a null byte."],
+                ),
+                {"provider_note": "usage\x00value"},
+            )
+
+    class FakeSearch:
+        async def search(self, _query: str, *, count: int):
+            return []
+
+    monkeypatch.setattr(investigation_services, "llm_provider", lambda _config: FakeProvider())
+
+    run = await investigation_services.run_event_investigation(
+        session,
+        event_id="evt_1",
+        config=InvestigationConfig(enabled=True, brave_search_api_key="brave-key"),
+        llm_config=LLMConfig(enabled=True, api_key="llm-key"),
+        search_client=FakeSearch(),
+    )
+
+    assert run.result["summary"] == "Checked result."
+    assert run.result["risk_flags"] == ["single_source"]
+    assert run.result["suggested_alert_level"] == "daily_digest"
+    assert run.result["caveats"] == ["Caveat has  a null byte."]
+    assert run.usage == {"provider_note": "usagevalue"}
+
+
+@pytest.mark.asyncio
 async def test_brave_search_client_normalizes_web_results() -> None:
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -882,4 +923,54 @@ async def test_run_investigations_concurrently_executes_multiple_runs(monkeypatc
     assert rows[1].status == "succeeded"
     assert rows[0].result["suggested_score_modifier"] == 2
 
+
+@pytest.mark.asyncio
+async def test_run_investigations_concurrently_strips_null_bytes(monkeypatch) -> None:
+    rows = [
+        AgentInvestigation(
+            id="inv_1",
+            target_type="event_cluster",
+            target_id="evt_1",
+            trigger_reason="auto_event_uncertain",
+            status="pending",
+            input_snapshot={"headline": "Oil jumps"},
+            evidence=[],
+        )
+    ]
+    session = PendingSession(rows)
+
+    class FakeProvider:
+        async def investigate_event(self, _prompt: str):
+            return (
+                LLMInvestigationResult(
+                    summary="Checked\x00.",
+                    confidence=70,
+                    official_confirmation="un\x00confirmed",
+                    risk_flags=["single\x00_source"],
+                    suggested_score_modifier=2,
+                    suggested_alert_level="daily_digest",
+                    caveats=["Caveat\x00."],
+                ),
+                {"total_tokens": 15, "provider_note": "usage\x00value"},
+            )
+
+    async def fake_gather(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(investigation_services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(investigation_services, "gather_investigation_evidence", fake_gather)
+
+    result = await investigation_services.run_investigations_concurrently(
+        session,
+        rows,
+        config=InvestigationConfig(enabled=True),
+        llm_config=LLMConfig(enabled=True, api_key="llm-key"),
+    )
+
+    assert result == {"completed": 1, "failed": 0}
+    assert rows[0].result["summary"] == "Checked."
+    assert rows[0].result["official_confirmation"] == "unconfirmed"
+    assert rows[0].result["risk_flags"] == ["single_source"]
+    assert rows[0].result["caveats"] == ["Caveat."]
+    assert rows[0].usage == {"total_tokens": 15, "provider_note": "usagevalue"}
 

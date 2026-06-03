@@ -186,9 +186,13 @@ async def crawl_section_articles(
     section_html: str,
     fetch_html,
     limit: int = 20,
+    ignored_urls: set[str] | None = None,
 ) -> list[ParsedCrawlerArticle]:
     articles: list[ParsedCrawlerArticle] = []
-    for url in discover_article_urls(section_html, section_url=section_url, limit=limit):
+    discovered = discover_article_urls(section_html, section_url=section_url, limit=limit)
+    if ignored_urls:
+        discovered = [url for url in discovered if url not in ignored_urls]
+    for url in discovered:
         try:
             article_html = await fetch_html(url)
         except Exception:  # noqa: BLE001 - one article fetch should not fail the source

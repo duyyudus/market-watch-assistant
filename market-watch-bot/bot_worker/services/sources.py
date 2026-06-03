@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.config import Settings, validate_source_type
-from bot_worker.crawler import ParsedCrawlerArticle, crawl_section_articles
+from bot_worker.crawler import ParsedCrawlerArticle, crawl_section_articles, discover_article_urls
 from bot_worker.db.models import (
     AlertDecisionRecord,
     AppSetting,
@@ -527,17 +527,59 @@ async def _fetch_crawler_article_html(url: str) -> str:
         return response.text
 
 
-async def _parsed_source_items(source: NewsSource, body: str):
-    if source.source_type in {"rss", "google-rss"}:
+async def _parsed_source_items(session: AsyncSession, source: NewsSource, body: str):
+    if source.source_type == "rss":
+        return parse_rss_items(body)
+    if source.source_type == "google-rss":
         items = parse_rss_items(body)
-        if source.source_type == "google-rss":
-            return [_resolve_google_rss_item_url(item) for item in items]
-        return items
+        if not items:
+            return []
+        raw_urls = [item.url for item in items if item.url]
+        existing_raw_urls = set()
+        if raw_urls:
+            existing_res = await session.scalars(
+                select(RawNewsItem.raw_payload["google_news_url"].as_string())
+                .where(RawNewsItem.source_id == source.id)
+                .where(RawNewsItem.raw_payload["google_news_url"].as_string().in_(raw_urls))
+            )
+            existing_raw_urls.update(existing_res.all())
+
+        resolved_items = []
+        for item in items:
+            if item.url in existing_raw_urls:
+                continue
+            resolved_items.append(_resolve_google_rss_item_url(item))
+        return resolved_items
     if source.source_type == "crawler":
+        discovered_urls = discover_article_urls(body, section_url=source.url)
+        ignored_urls = set()
+        if discovered_urls:
+            raw_exists = await session.scalars(
+                select(RawNewsItem.raw_url)
+                .where(RawNewsItem.source_id == source.id)
+                .where(RawNewsItem.raw_url.in_(discovered_urls))
+            )
+            ignored_urls.update(raw_exists.all())
+
+            norm_exists = await session.scalars(
+                select(NormalizedNewsItem.url)
+                .where(NormalizedNewsItem.source_id == source.id)
+                .where(NormalizedNewsItem.url.in_(discovered_urls))
+            )
+            ignored_urls.update(norm_exists.all())
+
+            norm_canon_exists = await session.scalars(
+                select(NormalizedNewsItem.canonical_url)
+                .where(NormalizedNewsItem.source_id == source.id)
+                .where(NormalizedNewsItem.canonical_url.in_(discovered_urls))
+            )
+            ignored_urls.update(r for r in norm_canon_exists.all() if r)
+
         return await crawl_section_articles(
             section_url=source.url,
             section_html=body,
             fetch_html=_fetch_crawler_article_html,
+            ignored_urls=ignored_urls,
         )
     return []
 
@@ -647,7 +689,7 @@ async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, i
             source.etag = headers["etag"]
         if headers.get("last-modified"):
             source.last_modified = headers["last-modified"]
-        items = await _parsed_source_items(source, body)
+        items = await _parsed_source_items(session, source, body)
         inserted = 0
         for item in items:
             stmt = (

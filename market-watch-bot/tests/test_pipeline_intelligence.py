@@ -457,6 +457,12 @@ async def test_fetch_source_resolves_google_rss_item_url_before_insert(monkeypat
 
             return Result()
 
+        async def scalars(self, stmt):
+            class FakeResult:
+                def all(self):
+                    return []
+            return FakeResult()
+
     monkeypatch.setattr(
         "bot_worker.services.sources.fetch_source_content",
         fake_fetch_source_content,
@@ -519,6 +525,12 @@ async def test_fetch_source_keeps_google_rss_item_url_when_decode_fails(monkeypa
                 rowcount = 1
 
             return Result()
+
+        async def scalars(self, stmt):
+            class FakeResult:
+                def all(self):
+                    return []
+            return FakeResult()
 
     monkeypatch.setattr(
         "bot_worker.services.sources.fetch_source_content",

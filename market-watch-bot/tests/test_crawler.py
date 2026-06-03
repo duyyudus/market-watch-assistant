@@ -127,13 +127,19 @@ async def test_fetch_source_routes_crawler_items_into_raw_news(monkeypatch) -> N
             executed_values.append(stmt.compile().params)
             return SimpleNamespace(rowcount=1)
 
+        async def scalars(self, stmt):
+            class FakeResult:
+                def all(self):
+                    return []
+            return FakeResult()
+
     async def fake_fetch_source_content(_source):
         return 200, SECTION_HTML, {
             "etag": "etag-1",
             "last-modified": "Tue, 02 Jun 2026 00:00:00 GMT",
         }
 
-    async def fake_crawl_section_articles(*, section_url, section_html, fetch_html):
+    async def fake_crawl_section_articles(*, section_url, section_html, fetch_html, ignored_urls=None):
         assert section_url == "https://www.reuters.com/business/"
         assert section_html == SECTION_HTML
         assert fetch_html is not None
@@ -246,3 +252,167 @@ async def test_fetch_source_skips_crawler_access_denied_without_failure(monkeypa
         and obj.error_message == "crawler access denied"
         for obj in added
     )
+
+
+@pytest.mark.asyncio
+async def test_crawl_section_articles_skips_ignored_urls() -> None:
+    fetched = []
+
+    async def fake_fetch_html(url):
+        fetched.append(url)
+        return ARTICLE_HTML
+
+    ignored = {"https://www.reuters.com/business/energy/oil-rises-2026-06-02/"}
+    from bot_worker.crawler import crawl_section_articles
+    articles = await crawl_section_articles(
+        section_url="https://www.reuters.com/business/",
+        section_html=SECTION_HTML,
+        fetch_html=fake_fetch_html,
+        ignored_urls=ignored,
+    )
+
+    assert fetched == ["https://www.reuters.com/markets/us/stocks-advance-2026-06-02/"]
+    assert len(articles) == 1
+    assert articles[0].title == "Oil rises on supply concerns"
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_queries_db_and_ignores_existing_urls(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_1",
+        name="Reuters Business",
+        url="https://www.reuters.com/business/",
+        source_type="crawler",
+        region="global",
+        category="global_macro",
+        language="en",
+        source_score=85,
+        polling_interval_seconds=600,
+        asset_classes=["global_macro"],
+    )
+
+    added = []
+    executed_values = []
+    queried_urls = []
+
+    class FetchSession:
+        def add(self, obj):
+            added.append(obj)
+
+        async def execute(self, stmt):
+            executed_values.append(stmt.compile().params)
+            return SimpleNamespace(rowcount=1)
+
+        async def scalars(self, stmt):
+            params = stmt.compile().params
+            for v in params.values():
+                if isinstance(v, (list, tuple)):
+                    queried_urls.extend(v)
+            class FakeResult:
+                def all(self):
+                    return ["https://www.reuters.com/business/energy/oil-rises-2026-06-02/"]
+            return FakeResult()
+
+    async def fake_fetch_source_content(_source):
+        return 200, SECTION_HTML, {}
+
+    fetched_articles = []
+    async def fake_fetch_html(url):
+        fetched_articles.append(url)
+        return ARTICLE_HTML
+
+    monkeypatch.setattr(source_services, "fetch_source_content", fake_fetch_source_content)
+    monkeypatch.setattr(source_services, "_fetch_crawler_article_html", fake_fetch_html)
+
+    result = await source_services.fetch_source(FetchSession(), source)
+
+    assert result["status"] == "success"
+    assert "https://www.reuters.com/business/energy/oil-rises-2026-06-02/" in queried_urls
+    assert "https://www.reuters.com/markets/us/stocks-advance-2026-06-02/" in queried_urls
+    assert fetched_articles == ["https://www.reuters.com/markets/us/stocks-advance-2026-06-02/"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_google_rss_skips_resolving_existing_urls(monkeypatch) -> None:
+    from bot_worker.rss import ParsedFeedItem
+
+    source = NewsSource(
+        id="src_google_rss",
+        name="Reuters Google News",
+        url="https://news.google.com/rss/search?q=reuters",
+        source_type="google-rss",
+        region="global",
+        category="global_macro",
+        language="en",
+        source_score=80,
+        polling_interval_seconds=600,
+        asset_classes=["global_macro"],
+    )
+
+    added = []
+    executed_values = []
+    queried_raw_payload_urls = []
+
+    class FetchSession:
+        def add(self, obj):
+            added.append(obj)
+
+        async def execute(self, stmt):
+            executed_values.append(stmt.compile().params)
+            return SimpleNamespace(rowcount=1)
+
+        async def scalars(self, stmt):
+            params = stmt.compile().params
+            for v in params.values():
+                if isinstance(v, (list, tuple)):
+                    queried_raw_payload_urls.extend(v)
+            class FakeResult:
+                def all(self):
+                    return ["https://news.google.com/rss/articles/existing_url"]
+            return FakeResult()
+
+    GOOGLE_RSS_XML = """
+    <rss version="2.0">
+        <channel>
+            <item>
+                <title>New Article</title>
+                <link>https://news.google.com/rss/articles/new_url</link>
+                <pubDate>Tue, 02 Jun 2026 09:00:00 GMT</pubDate>
+                <guid>guid1</guid>
+            </item>
+            <item>
+                <title>Existing Article</title>
+                <link>https://news.google.com/rss/articles/existing_url</link>
+                <pubDate>Tue, 02 Jun 2026 09:05:00 GMT</pubDate>
+                <guid>guid2</guid>
+            </item>
+        </channel>
+    </rss>
+    """
+
+    async def fake_fetch_source_content(_source):
+        return 200, GOOGLE_RSS_XML, {}
+
+    resolved_urls = []
+    def fake_resolve_google_rss_item_url(item):
+        resolved_urls.append(item.url)
+        return ParsedFeedItem(
+            title=item.title,
+            url="https://resolved.example.com/some-path",
+            description=item.description,
+            published=item.published,
+            guid=item.guid,
+            raw_payload={"google_news_url": item.url},
+        )
+
+    monkeypatch.setattr(source_services, "fetch_source_content", fake_fetch_source_content)
+    monkeypatch.setattr(source_services, "_resolve_google_rss_item_url", fake_resolve_google_rss_item_url)
+
+    result = await source_services.fetch_source(FetchSession(), source)
+
+    assert result["status"] == "success"
+    assert "https://news.google.com/rss/articles/new_url" in queried_raw_payload_urls
+    assert "https://news.google.com/rss/articles/existing_url" in queried_raw_payload_urls
+    assert resolved_urls == ["https://news.google.com/rss/articles/new_url"]
+    assert result["items"] == 1
+    assert result["inserted"] == 1
