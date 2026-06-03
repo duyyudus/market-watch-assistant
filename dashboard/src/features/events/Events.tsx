@@ -61,6 +61,7 @@ export function Events(props: {
               </p>
             </div>
             <div className="grid gap-2 text-sm">
+              <Detail label="Event ID" value={props.selectedEvent.id} />
               <Detail label="Status" value={props.selectedEvent.status} />
               <Detail label="Regions" value={props.selectedEvent.regions.join(", ") || "-"} />
               <Detail label="Assets" value={props.selectedEvent.asset_classes.join(", ") || "-"} />
