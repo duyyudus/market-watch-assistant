@@ -58,6 +58,7 @@ async def get_news_detail(session: AsyncSession, item: NormalizedNewsItem) -> di
                 "event_cluster_id": row.event_cluster_id,
                 "relation_type": row.relation_type,
                 "similarity_score": row.similarity_score,
+                "decision_metadata": row.decision_metadata,
                 "added_at": row.added_at,
             }
             for row in clusters

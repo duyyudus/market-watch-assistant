@@ -558,6 +558,108 @@ async def test_build_event_clusters_does_not_attach_gray_zone_match_when_llm_rej
 
 
 @pytest.mark.asyncio
+async def test_build_event_clusters_attaches_ambiguous_batch_candidate_when_llm_confirms(
+    monkeypatch,
+) -> None:
+    item_1 = NormalizedNewsItem(
+        id="news_1",
+        title="Fed holds rates steady after June meeting",
+        source_score=75,
+        region="us",
+        asset_classes=["rates"],
+        processing_status="normalized",
+    )
+    item_2 = NormalizedNewsItem(
+        id="news_2",
+        title="Fed governor says rate stance remains restrictive",
+        source_score=75,
+        region="us",
+        asset_classes=["rates"],
+        processing_status="normalized",
+    )
+    session = FakeSession(scalars=[[item_1, item_2], []])
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["Federal Reserve"]
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fake_resolve_llm_cluster_decision(**kwargs):
+        assert kwargs["item"].id == "news_2"
+        assert kwargs["cluster"].canonical_headline == item_1.title
+        return True, True
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "resolve_llm_cluster_decision",
+        fake_resolve_llm_cluster_decision,
+    )
+
+    stats = await services.build_event_clusters(
+        session,
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert stats.created_clusters == 1
+    assert stats.llm_cluster_decisions == 1
+    assert stats.llm_cluster_attaches == 1
+    cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
+    assert [item.news_item_id for item in cluster_items] == ["news_1", "news_2"]
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_splits_ambiguous_batch_candidate_when_llm_unavailable(
+    monkeypatch,
+) -> None:
+    item_1 = NormalizedNewsItem(
+        id="news_1",
+        title="Fed holds rates steady after June meeting",
+        source_score=75,
+        region="us",
+        asset_classes=["rates"],
+        processing_status="normalized",
+    )
+    item_2 = NormalizedNewsItem(
+        id="news_2",
+        title="Fed governor says rate stance remains restrictive",
+        source_score=75,
+        region="us",
+        asset_classes=["rates"],
+        processing_status="normalized",
+    )
+    session = FakeSession(scalars=[[item_1, item_2], []])
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["Federal Reserve"]
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fail_resolve_llm_cluster_decision(**_kwargs):
+        raise AssertionError("LLM should not be called when disabled")
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "resolve_llm_cluster_decision",
+        fail_resolve_llm_cluster_decision,
+    )
+
+    stats = await services.build_event_clusters(
+        session,
+        llm_config=LLMConfig(enabled=False, api_key=None),
+    )
+
+    assert stats.created_clusters == 2
+    assert stats.llm_cluster_decisions == 0
+    assert stats.llm_cluster_attaches == 0
+
+
+@pytest.mark.asyncio
 async def test_build_event_clusters_skips_llm_for_below_gray_zone_similarity(
     monkeypatch,
 ) -> None:

@@ -238,6 +238,7 @@ class EventClusterItem(Base):
     )
     relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="related")
     similarity_score: Mapped[int | None] = mapped_column(Integer)
+    decision_metadata: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

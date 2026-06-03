@@ -137,6 +137,7 @@ async def get_event_detail(session: AsyncSession, event: EventCluster) -> dict[s
                 "added_at": item.added_at,
                 "relation_type": item.relation_type,
                 "similarity_score": item.similarity_score,
+                "decision_metadata": item.decision_metadata,
             }
             for item, news in timeline_rows
         ],

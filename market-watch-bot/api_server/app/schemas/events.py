@@ -41,6 +41,7 @@ class EventTimelineItem(BaseModel):
     added_at: datetime | None = None
     relation_type: str
     similarity_score: int | None = None
+    decision_metadata: dict[str, Any] | None = None
 
 
 class EventMarketMoveRead(BaseModel):

@@ -23,12 +23,14 @@ from bot_worker.embeddings import (
 from bot_worker.events import (
     EventCandidate,
     EventClusterDraft,
+    SameEventDecisionKind,
     VectorClusterCandidate,
-    cluster_candidates,
+    classify_same_event,
     is_vector_cluster_attachable,
     vector_similarity_score,
 )
 from bot_worker.llm import LLMConfig
+from bot_worker.normalize import content_hash
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
 from bot_worker.services.llm import resolve_llm_cluster_decision
 from bot_worker.services.watchlists import (
@@ -214,12 +216,19 @@ async def _attach_news_item_to_cluster(
     tickers: list[str],
     similarity: float,
     watch_entries: list[WatchlistEntry],
+    decision_metadata: dict[str, object] | None = None,
 ) -> None:
     session.add(
         EventClusterItem(
             event_cluster_id=cluster.id,
             news_item_id=item.id,
             similarity_score=vector_similarity_score(similarity),
+            decision_metadata=decision_metadata
+            or {
+                "decision_source": "vector",
+                "decision": "strong_same_event",
+                "similarity": round(similarity, 4),
+            },
         )
     )
     cluster.last_updated_at = utcnow()
@@ -257,7 +266,143 @@ async def _candidate_from_item(
         asset_classes=item.asset_classes,
         published_at=item.published_at,
         watchlist_tier=tier_for_entities(entities=entities, tickers=tickers, entries=watch_entries),
+        source_name=item.source_name,
+        source_type=item.source_type,
+        snippet=item.snippet,
     )
+
+
+def _draft_candidate(draft: EventClusterDraft) -> EventCandidate:
+    return EventCandidate(
+        news_id="draft",
+        title=draft.canonical_headline,
+        source_score=draft.top_source_score,
+        entities=list(draft.entities),
+        tickers=list(draft.tickers),
+        region=next(iter(draft.regions), "global"),
+        asset_classes=list(draft.asset_classes),
+        published_at=None,
+        watchlist_tier=draft.watchlist_tier,
+    )
+
+
+def _draft_cluster(draft: EventClusterDraft) -> EventCluster:
+    stable_id = f"draft_{content_hash('|'.join(draft.news_ids))[:16]}"
+    return EventCluster(
+        id=stable_id,
+        canonical_headline=draft.canonical_headline,
+        regions=sorted(draft.regions),
+        asset_classes=sorted(draft.asset_classes),
+        affected_entities=sorted(draft.entities),
+        affected_tickers=sorted(draft.tickers),
+        source_count=draft.source_count,
+        high_quality_source_count=draft.high_quality_source_count,
+        top_source_score=draft.top_source_score,
+    )
+
+
+def _add_candidate_to_draft(draft: EventClusterDraft, candidate: EventCandidate) -> None:
+    _add_candidate_to_draft_with_metadata(
+        draft,
+        candidate,
+        metadata={"decision_source": "seed", "decision": "seed"},
+    )
+
+
+def _add_candidate_to_draft_with_metadata(
+    draft: EventClusterDraft,
+    candidate: EventCandidate,
+    *,
+    metadata: dict[str, object],
+) -> None:
+    draft.news_ids.append(candidate.news_id)
+    draft.item_decision_metadata[candidate.news_id] = metadata
+    draft.entities.update(candidate.entities)
+    draft.tickers.update(candidate.tickers)
+    draft.regions.add(candidate.region)
+    draft.asset_classes.update(candidate.asset_classes)
+    draft.source_count += 1
+    if candidate.source_score >= 75:
+        draft.high_quality_source_count += 1
+    draft.top_source_score = max(draft.top_source_score, candidate.source_score)
+    if candidate.watchlist_tier is not None:
+        ranks = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1}
+        current = draft.watchlist_tier or "D"
+        if ranks.get(candidate.watchlist_tier, 0) > ranks.get(current, 0):
+            draft.watchlist_tier = candidate.watchlist_tier
+
+
+async def _cluster_candidates_with_llm_arbitration(
+    session: AsyncSession,
+    candidates: list[EventCandidate],
+    *,
+    llm_config: LLMConfig | None,
+) -> tuple[list[EventClusterDraft], int, int]:
+    drafts: list[EventClusterDraft] = []
+    llm_decisions = 0
+    llm_attaches = 0
+    for candidate in candidates:
+        target: EventClusterDraft | None = None
+        metadata: dict[str, object] | None = None
+        for draft in drafts:
+            decision = classify_same_event(candidate, _draft_candidate(draft))
+            if decision.kind is SameEventDecisionKind.STRONG_SAME_EVENT:
+                target = draft
+                metadata = {
+                    "decision_source": "deterministic",
+                    "decision": decision.kind.value,
+                    "reason": decision.reason,
+                    "title_similarity": round(decision.title_similarity, 4),
+                    "entity_overlap": decision.entity_overlap,
+                    "ticker_overlap": decision.ticker_overlap,
+                }
+                break
+            if decision.kind is not SameEventDecisionKind.AMBIGUOUS:
+                continue
+            if llm_config is None or not llm_config.enabled or not llm_config.api_key:
+                continue
+            attempted, should_attach = await resolve_llm_cluster_decision(
+                session=session,
+                item=NormalizedNewsItem(
+                    id=candidate.news_id,
+                    title=candidate.title,
+                    snippet=candidate.snippet,
+                    source_name=candidate.source_name,
+                    source_type=candidate.source_type,
+                    source_score=candidate.source_score,
+                    region=candidate.region,
+                    asset_classes=candidate.asset_classes,
+                ),
+                cluster=_draft_cluster(draft),
+                similarity=decision.title_similarity,
+                config=llm_config,
+                entities=candidate.entities,
+                tickers=candidate.tickers,
+            )
+            if attempted:
+                llm_decisions += 1
+            if should_attach:
+                llm_attaches += 1
+                target = draft
+                metadata = {
+                    "decision_source": "llm",
+                    "decision": "same_event",
+                    "reason": decision.reason,
+                    "title_similarity": round(decision.title_similarity, 4),
+                    "entity_overlap": decision.entity_overlap,
+                    "ticker_overlap": decision.ticker_overlap,
+                    "llm_attempted": attempted,
+                }
+                break
+        if target is None:
+            target = EventClusterDraft(canonical_headline=candidate.title)
+            drafts.append(target)
+        _add_candidate_to_draft_with_metadata(
+            target,
+            candidate,
+            metadata=metadata or {"decision_source": "seed", "decision": "seed"},
+        )
+    return drafts, llm_decisions, llm_attaches
 
 
 def _update_cluster_from_draft(
@@ -379,7 +524,11 @@ async def recluster_recent_event_clusters(
         await _candidate_from_item(session, item, watch_entries)
         for item in items
     ]
-    drafts = cluster_candidates(candidates)
+    drafts, _, _ = await _cluster_candidates_with_llm_arbitration(
+        session,
+        candidates,
+        llm_config=None,
+    )
     stale_clusters = max(0, len(clusters) - len(drafts))
     if dry_run:
         return {
@@ -407,7 +556,13 @@ async def recluster_recent_event_clusters(
     for cluster, draft in zip(clusters, drafts, strict=False):
         _update_cluster_from_draft(cluster, draft, watch_entries)
         for news_id in draft.news_ids:
-            session.add(EventClusterItem(event_cluster_id=cluster.id, news_item_id=news_id))
+            session.add(
+                EventClusterItem(
+                    event_cluster_id=cluster.id,
+                    news_item_id=news_id,
+                    decision_metadata=draft.item_decision_metadata.get(news_id),
+                )
+            )
     for cluster in clusters[len(drafts) :]:
         _mark_cluster_stale(cluster)
 
@@ -477,6 +632,11 @@ async def build_event_clusters(
                     tickers=tickers,
                     similarity=vector_candidate.similarity,
                     watch_entries=watch_entries,
+                    decision_metadata={
+                        "decision_source": "vector",
+                        "decision": "strong_same_event",
+                        "similarity": round(vector_candidate.similarity, 4),
+                    },
                 )
                 attached_existing += 1
                 attached = True
@@ -518,6 +678,12 @@ async def build_event_clusters(
                     tickers=tickers,
                     similarity=vector_candidate.similarity,
                     watch_entries=watch_entries,
+                    decision_metadata={
+                        "decision_source": "llm",
+                        "decision": "same_event",
+                        "similarity": round(vector_candidate.similarity, 4),
+                        "llm_attempted": attempted,
+                    },
                 )
                 attached_existing += 1
                 llm_cluster_attaches += 1
@@ -528,7 +694,16 @@ async def build_event_clusters(
         candidates.append(
             candidate
         )
-    drafts = cluster_candidates(candidates)
+    batch_drafts, batch_llm_decisions, batch_llm_attaches = (
+        await _cluster_candidates_with_llm_arbitration(
+            session,
+            candidates,
+            llm_config=llm_config,
+        )
+    )
+    drafts = batch_drafts
+    llm_cluster_decisions += batch_llm_decisions
+    llm_cluster_attaches += batch_llm_attaches
     for draft in drafts:
         first_seen = utcnow()
         cluster = EventCluster(
@@ -568,7 +743,13 @@ async def build_event_clusters(
         session.add(cluster)
         await session.flush()
         for news_id in draft.news_ids:
-            session.add(EventClusterItem(event_cluster_id=cluster.id, news_item_id=news_id))
+            session.add(
+                EventClusterItem(
+                    event_cluster_id=cluster.id,
+                    news_item_id=news_id,
+                    decision_metadata=draft.item_decision_metadata.get(news_id),
+                )
+            )
     return ClusterBuildStats(
         created_clusters=len(drafts),
         attached_existing=attached_existing,

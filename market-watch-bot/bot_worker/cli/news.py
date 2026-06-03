@@ -45,6 +45,7 @@ def _cluster_item_payload(item: EventClusterItem) -> dict[str, object]:
         "news_item_id": item.news_item_id,
         "relation_type": item.relation_type,
         "similarity_score": item.similarity_score,
+        "decision_metadata": item.decision_metadata,
         "added_at": item.added_at,
     }
 

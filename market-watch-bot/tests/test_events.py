@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 from bot_worker.db.models import EventCluster, EventClusterItem, NormalizedNewsItem
 from bot_worker.events import (
     EventCandidate,
+    SameEventDecisionKind,
     VectorClusterCandidate,
+    classify_same_event,
     cluster_candidates,
     is_vector_cluster_attachable,
     vector_similarity_score,
@@ -71,6 +73,137 @@ def test_cluster_candidates_groups_similar_bitcoin_options_titles_without_filler
     assert len(clusters) == 1
     assert clusters[0].entities == {"Bitcoin"}
     assert not ({"are", "above", "trades", "options"} & clusters[0].entities)
+
+
+def test_cluster_candidates_rejects_reuters_global_macro_contamination() -> None:
+    candidates = [
+        EventCandidate(
+            news_id="news_iran",
+            title="Hostilities flare in Iran war, oil jumps with talks at a stalemate - Reuters",
+            source_score=60,
+            entities=["Iran", "Reuters"],
+            region="global",
+            asset_classes=["global_macro"],
+            published_at=datetime(2026, 6, 2, 23, 24, tzinfo=UTC),
+        ),
+        EventCandidate(
+            news_id="news_spacex",
+            title=(
+                "Exclusive: SpaceX plans to set IPO price at $135 per share, "
+                "targeting $75 billion raise, source says - Reuters"
+            ),
+            source_score=60,
+            entities=["SpaceX", "Reuters"],
+            region="global",
+            asset_classes=["global_macro"],
+            published_at=datetime(2026, 6, 3, 0, 26, tzinfo=UTC),
+        ),
+        EventCandidate(
+            news_id="news_dg",
+            title="Dollar General flags strain on core shoppers, lifts profit forecast - Reuters",
+            source_score=60,
+            entities=["Dollar General", "Reuters", "DG"],
+            region="global",
+            asset_classes=["global_macro"],
+            published_at=datetime(2026, 6, 2, 16, 59, tzinfo=UTC),
+            tickers=["DG"],
+        ),
+        EventCandidate(
+            news_id="news_oil",
+            title="Oil prices rise as new Middle East hostilities flare and talks stall - Reuters",
+            source_score=60,
+            entities=["Middle East hostilities", "oil prices", "Reuters"],
+            region="global",
+            asset_classes=["global_macro"],
+            published_at=datetime(2026, 6, 3, 0, 36, tzinfo=UTC),
+        ),
+    ]
+
+    clusters = cluster_candidates(candidates)
+
+    assert [cluster.news_ids for cluster in clusters] == [
+        ["news_iran", "news_oil"],
+        ["news_spacex"],
+        ["news_dg"],
+    ]
+
+
+def test_same_event_decision_rejects_publisher_overlap_only() -> None:
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Dollar General flags strain on core shoppers, lifts profit forecast - Reuters",
+        source_score=60,
+        entities=["Dollar General", "Reuters"],
+        region="global",
+        asset_classes=["global_macro"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="Hostilities flare in Iran war, oil jumps with talks at a stalemate - Reuters",
+        source_score=60,
+        entities=["Iran", "Reuters"],
+        region="global",
+        asset_classes=["global_macro"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is SameEventDecisionKind.REJECT
+    assert decision.entity_overlap == []
+
+
+def test_same_event_decision_marks_same_broad_entity_different_action_ambiguous() -> None:
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Fed governor speaks on bank capital rules",
+        source_score=75,
+        entities=["Federal Reserve"],
+        region="us",
+        asset_classes=["rates"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="Fed holds rates steady after June meeting",
+        source_score=75,
+        entities=["Federal Reserve"],
+        region="us",
+        asset_classes=["rates"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is SameEventDecisionKind.AMBIGUOUS
+    assert decision.entity_overlap == ["federal reserve"]
+
+
+def test_same_event_decision_uses_vietnamese_title_tokens() -> None:
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Đại hội cổ đông thường niên Vingroup thông qua kế hoạch lợi nhuận",
+        source_score=75,
+        entities=[],
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="Vingroup tổ chức đại hội cổ đông thường niên",
+        source_score=75,
+        entities=[],
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is SameEventDecisionKind.STRONG_SAME_EVENT
+    assert decision.reason == "strong_title_topic_overlap"
 
 
 def test_vector_cluster_attach_policy_accepts_strict_compatible_match() -> None:
@@ -146,10 +279,10 @@ def test_vector_cluster_attach_policy_rejects_entity_mismatch_when_both_have_ent
     )
 
 
-def test_vector_cluster_attach_policy_allows_missing_entities_with_strict_gates() -> None:
+def test_vector_cluster_attach_policy_allows_missing_entities_only_at_high_similarity() -> None:
     candidate = VectorClusterCandidate(
         cluster_id="evt_1",
-        similarity=0.93,
+        similarity=0.95,
         regions=["global"],
         asset_classes=["commodity"],
         affected_entities=[],
