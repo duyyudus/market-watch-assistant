@@ -296,7 +296,10 @@ async def dispatch_pending_alerts(
     stmt = (
         select(AlertDecisionRecord, EventCluster)
         .join(EventCluster, EventCluster.id == AlertDecisionRecord.event_cluster_id)
-        .where(AlertDecisionRecord.sent_at.is_(None))
+        .where(
+            AlertDecisionRecord.sent_at.is_(None),
+            AlertDecisionRecord.decision == "immediate_alert",
+        )
         .order_by(AlertDecisionRecord.created_at.asc())
         .limit(limit)
     )
