@@ -10,6 +10,7 @@ const apiMock = vi.hoisted(() => ({
   event: vi.fn(),
   news: vi.fn(),
   alerts: vi.fn(),
+  alert: vi.fn(),
   sourceHealth: vi.fn(),
   alertChannels: vi.fn(),
   alertSuppressionRules: vi.fn(),
@@ -128,90 +129,134 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       },
     ]),
   );
-  apiMock.event.mockResolvedValue({
-    id: "evt_1",
-    canonical_headline: "Fed signals a slower rate path",
-    summary: "Policy makers leaned less hawkish.",
-    status: "reported",
-    regions: ["us"],
-    asset_classes: ["global_macro"],
-    affected_entities: ["Federal Reserve"],
-    affected_tickers: ["SPY"],
-    source_count: 2,
-    top_source_score: 100,
-    confirmation_score: 88,
-    novelty_score: 85,
-    urgency_score: 80,
-    market_impact_score: 72,
-    relevance_score: 100,
-    final_score: 84,
-    alert_level: "immediate_alert",
-    first_seen_at: "2026-05-29T13:00:00Z",
-    last_updated_at: "2026-05-29T13:10:00Z",
-    latest_alert: null,
-    latest_investigation: {
-      id: "inv_1",
-      status: "succeeded",
-      result: { suggested_action: "monitor duration exposure" },
-    },
-    score_history: [
-      {
-        id: "score_1",
-        event_cluster_id: "evt_1",
-        final_score: 84,
-        score_breakdown: {
-          source_score: 100,
-          impact_score: 75,
-          relevance_score: 100,
-          novelty_score: 85,
-          urgency_score: 80,
-          market_move_score: 72,
-          confidence_score: 88,
-          duplicate_penalty: 0,
-          noise_penalty: 0,
-          stale_penalty: 0,
-          final_score: 84,
-        },
-        created_at: "2026-05-29T13:04:00Z",
-      },
-    ],
-    timeline: [
-      {
-        news_item_id: "news_1",
-        title: "Fed signals a slower rate path",
-        source_name: "Federal Reserve",
-        source_score: 100,
-        url: "https://example.com/news",
-        published_at: "2026-05-29T13:00:00Z",
-        fetched_at: "2026-05-29T13:00:00Z",
-        added_at: "2026-05-29T13:01:00Z",
-        relation_type: "seed",
-        similarity_score: 91,
-      },
-    ],
-    llm_runs: [
-      {
-        id: "llm_1",
-        provider: "openai",
-        model: "gpt-4o",
-        prompt_version: "1",
-        result: { summary: "Less hawkish Fed path." },
+  apiMock.event.mockImplementation(async (id: string) => {
+    if (id === "evt_2") {
+      return {
+        id: "evt_2",
+        canonical_headline: "Treasury yields fall after jobs report",
+        summary: "Labor data eased rates pressure.",
+        status: "reported",
+        regions: ["us"],
+        asset_classes: ["rates"],
+        affected_entities: ["Treasury"],
+        affected_tickers: ["TLT"],
+        source_count: 1,
+        top_source_score: 75,
+        confirmation_score: 60,
+        novelty_score: 62,
+        urgency_score: 55,
+        market_impact_score: 66,
+        relevance_score: 70,
+        final_score: 61,
+        alert_level: "digest_only",
+        first_seen_at: "2026-05-29T14:00:00Z",
+        last_updated_at: "2026-05-29T14:10:00Z",
+        latest_alert: null,
+        latest_investigation: null,
+        score_history: [],
+        timeline: [
+          {
+            news_item_id: "news_2",
+            title: "Treasury yields fall after jobs report",
+            source_name: "BLS",
+            source_score: 75,
+            url: "https://example.com/jobs",
+            published_at: "2026-05-29T14:00:00Z",
+            fetched_at: "2026-05-29T14:00:00Z",
+            added_at: "2026-05-29T14:01:00Z",
+            relation_type: "seed",
+            similarity_score: 88,
+          },
+        ],
+        llm_runs: [],
+        market_moves: [],
+      };
+    }
+    return {
+      id: "evt_1",
+      canonical_headline: "Fed signals a slower rate path",
+      summary: "Policy makers leaned less hawkish.",
+      status: "reported",
+      regions: ["us"],
+      asset_classes: ["global_macro"],
+      affected_entities: ["Federal Reserve"],
+      affected_tickers: ["SPY"],
+      source_count: 2,
+      top_source_score: 100,
+      confirmation_score: 88,
+      novelty_score: 85,
+      urgency_score: 80,
+      market_impact_score: 72,
+      relevance_score: 100,
+      final_score: 84,
+      alert_level: "immediate_alert",
+      first_seen_at: "2026-05-29T13:00:00Z",
+      last_updated_at: "2026-05-29T13:10:00Z",
+      latest_alert: null,
+      latest_investigation: {
+        id: "inv_1",
         status: "succeeded",
-        created_at: "2026-05-29T13:02:00Z",
+        result: { suggested_action: "monitor duration exposure" },
       },
-    ],
-    market_moves: [
-      {
-        id: "move_1",
-        asset_symbol: "SPY",
-        asset_class: "equity",
-        exchange: "NYSE",
-        timestamp: "2026-05-29T13:10:00Z",
-        window: "1h",
-        price_change_pct: 1.7,
-        volume_change_pct: 22.5,
-      },
-    ],
+      score_history: [
+        {
+          id: "score_1",
+          event_cluster_id: "evt_1",
+          final_score: 84,
+          score_breakdown: {
+            source_score: 100,
+            impact_score: 75,
+            relevance_score: 100,
+            novelty_score: 85,
+            urgency_score: 80,
+            market_move_score: 72,
+            confidence_score: 88,
+            duplicate_penalty: 0,
+            noise_penalty: 0,
+            stale_penalty: 0,
+            final_score: 84,
+          },
+          created_at: "2026-05-29T13:04:00Z",
+        },
+      ],
+      timeline: [
+        {
+          news_item_id: "news_1",
+          title: "Fed signals a slower rate path",
+          source_name: "Federal Reserve",
+          source_score: 100,
+          url: "https://example.com/news",
+          published_at: "2026-05-29T13:00:00Z",
+          fetched_at: "2026-05-29T13:00:00Z",
+          added_at: "2026-05-29T13:01:00Z",
+          relation_type: "seed",
+          similarity_score: 91,
+        },
+      ],
+      llm_runs: [
+        {
+          id: "llm_1",
+          provider: "openai",
+          model: "gpt-4o",
+          prompt_version: "1",
+          result: { summary: "Less hawkish Fed path." },
+          status: "succeeded",
+          created_at: "2026-05-29T13:02:00Z",
+        },
+      ],
+      market_moves: [
+        {
+          id: "move_1",
+          asset_symbol: "SPY",
+          asset_class: "equity",
+          exchange: "NYSE",
+          timestamp: "2026-05-29T13:10:00Z",
+          window: "1h",
+          price_change_pct: 1.7,
+          volume_change_pct: 22.5,
+        },
+      ],
+    };
   });
   apiMock.news.mockResolvedValue(
     envelope([
@@ -232,10 +277,25 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
   apiMock.alerts.mockResolvedValue(
     envelope([
       {
+        id: "alert_2",
+        event_cluster_id: "evt_2",
+        decision: "digest_only",
+        reason: "score_above_digest_threshold",
+        score_breakdown: { final_score: 61, relevance_score: 70 },
+        channel: "log",
+        sent_at: null,
+        created_at: "2026-05-29T14:05:00Z",
+        event: { id: "evt_2", headline: "Treasury yields fall after jobs report", final_score: 61 },
+        latest_delivery_status: "queued",
+        latest_delivery_error: "waiting for digest window",
+        acknowledged_at: null,
+      },
+      {
         id: "alert_1",
         event_cluster_id: "evt_1",
         decision: "immediate_alert",
         reason: "score_above_immediate_threshold",
+        score_breakdown: { final_score: 84, relevance_score: 100 },
         channel: "telegram",
         sent_at: "2026-05-29T13:05:00Z",
         created_at: "2026-05-29T13:05:00Z",
@@ -245,6 +305,48 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       },
     ]),
   );
+  apiMock.alert.mockImplementation(async (id: string) => {
+    if (id === "alert_2") {
+      return {
+        id: "alert_2",
+        event_cluster_id: "evt_2",
+        decision: "digest_only",
+        reason: "score_above_digest_threshold",
+        score_breakdown: { final_score: 61, relevance_score: 70 },
+        channel: "log",
+        sent_at: null,
+        created_at: "2026-05-29T14:05:00Z",
+        event: {
+          id: "evt_2",
+          headline: "Treasury yields fall after jobs report",
+          final_score: 61,
+          status: "reported",
+        },
+        latest_delivery_status: "queued",
+        latest_delivery_error: "waiting for digest window",
+        acknowledged_at: null,
+      };
+    }
+    return {
+      id: "alert_1",
+      event_cluster_id: "evt_1",
+      decision: "immediate_alert",
+      reason: "score_above_immediate_threshold",
+      score_breakdown: { final_score: 84, relevance_score: 100 },
+      channel: "telegram",
+      sent_at: "2026-05-29T13:05:00Z",
+      created_at: "2026-05-29T13:05:00Z",
+      event: {
+        id: "evt_1",
+        headline: "Fed signals a slower rate path",
+        final_score: 84,
+        status: "reported",
+      },
+      latest_delivery_status: "sent",
+      latest_delivery_error: null,
+      acknowledged_at: null,
+    };
+  });
   apiMock.sourceHealth.mockResolvedValue(
     envelope([
       {
@@ -775,7 +877,11 @@ describe("App data states", () => {
     switchTo("alerts");
 
     expect(await screen.findByText("1 unacknowledged")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /acknowledge/i }));
+    fireEvent.click(
+      within(screen.getByTestId("alert-row-alert_1")).getByRole("button", {
+        name: /acknowledge/i,
+      }),
+    );
 
     await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
 
@@ -821,11 +927,40 @@ describe("App data states", () => {
     );
   });
 
+  it("shows alert detail metadata and related event news for the selected alert", async () => {
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    const detailPanel = (await screen.findByRole("heading", { name: "Alert detail" })).closest(
+      "section",
+    )!;
+    expect(
+      within(detailPanel).getAllByText("Treasury yields fall after jobs report").length,
+    ).toBeGreaterThan(0);
+    expect(within(detailPanel).getByText("score_above_digest_threshold")).toBeInTheDocument();
+    expect(within(detailPanel).getByText("waiting for digest window")).toBeInTheDocument();
+    expect(within(detailPanel).getByText("Related news")).toBeInTheDocument();
+    expect(within(detailPanel).getByText("BLS · seed · 88")).toBeInTheDocument();
+    expect(within(detailPanel).getByText("final score")).toBeInTheDocument();
+    expect(within(detailPanel).getAllByText("61").length).toBeGreaterThan(0);
+    expect(apiMock.alert).toHaveBeenCalledWith("alert_2");
+    expect(apiMock.event).toHaveBeenCalledWith("evt_2");
+
+    fireEvent.click(screen.getByTestId("alert-row-alert_1"));
+
+    expect(
+      await within(detailPanel).findByText("score_above_immediate_threshold"),
+    ).toBeInTheDocument();
+    expect(within(detailPanel).getByText("Federal Reserve · seed · 91")).toBeInTheDocument();
+    expect(apiMock.alert).toHaveBeenCalledWith("alert_1");
+    expect(apiMock.event).toHaveBeenCalledWith("evt_1");
+  });
+
   it("dismisses alerts and updates state", async () => {
     await renderLoadedApp();
     switchTo("alerts");
 
-    expect(await screen.findByText("unacknowledged")).toBeInTheDocument();
+    expect((await screen.findAllByText("unacknowledged")).length).toBeGreaterThan(0);
 
     // Setup mock for subsequent reload
     apiMock.alerts.mockResolvedValue(
@@ -846,7 +981,9 @@ describe("App data states", () => {
       ]),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    fireEvent.click(
+      within(screen.getByTestId("alert-row-alert_1")).getByRole("button", { name: /dismiss/i }),
+    );
 
     await waitFor(() => expect(apiMock.dismissAlert).toHaveBeenCalledWith("alert_1"));
     expect(await screen.findByText("dismissed")).toBeInTheDocument();
@@ -858,7 +995,7 @@ describe("App data states", () => {
     await renderLoadedApp();
     switchTo("alerts");
 
-    expect(await screen.findByText("unacknowledged")).toBeInTheDocument();
+    expect((await screen.findAllByText("unacknowledged")).length).toBeGreaterThan(0);
 
     // Setup mock for subsequent reload
     apiMock.alerts.mockResolvedValue(
@@ -879,7 +1016,11 @@ describe("App data states", () => {
       ]),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /acknowledge/i }));
+    fireEvent.click(
+      within(screen.getByTestId("alert-row-alert_1")).getByRole("button", {
+        name: /acknowledge/i,
+      }),
+    );
 
     await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
     expect(await screen.findByText("acknowledged")).toBeInTheDocument();

@@ -20,6 +20,7 @@ import type {
 import { api, eventStreamUrl, normalizeListResponse } from "../api";
 import { Badge } from "../components/Badge";
 import { Panel } from "../components/Panel";
+import { AlertDetailPanel } from "../features/alerts/AlertDetailPanel";
 import { AlertsTable } from "../features/alerts/AlertsTable";
 import { AlertControls } from "../features/alerts/AlertControls";
 import { CommandsTable } from "../features/commands/CommandsTable";
@@ -44,6 +45,8 @@ const AUTO_REFRESH_OPTIONS = [
   { label: "5m", value: 300_000 },
 ];
 
+type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail">;
+
 export function App() {
   const [view, setView] = useState<View>("overview");
   const [state, setState] = useState<DashboardState>(emptyState);
@@ -51,6 +54,7 @@ export function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<string>(
     () => localStorage.getItem("mw-theme-mode") ?? "dark",
   );
@@ -133,7 +137,7 @@ export function App() {
     });
   }, []);
 
-  const loaders: Record<Exclude<ResourceKey, "eventDetail">, () => Promise<unknown>> = {
+  const loaders: Record<ListResourceKey, () => Promise<unknown>> = {
     status: api.botStatus,
     sources: api.sources,
     sourceHealth: api.sourceHealth,
@@ -150,7 +154,10 @@ export function App() {
   };
 
   const loadResources = useCallback(
-    async (keys: Array<Exclude<ResourceKey, "eventDetail">>, invalidate = false) => {
+    async (
+      keys: ListResourceKey[],
+      invalidate = false,
+    ) => {
       setLoading(true);
       keys.forEach((key) => {
         loadingKeys.current.add(key);
@@ -191,8 +198,27 @@ export function App() {
     });
   }, []);
 
+  const loadAlertDetail = useCallback(async (id: string, invalidate = false) => {
+    const key = `alert:${id}`;
+    if (invalidate) resourceCache.invalidate(key);
+    const result = await settle("alertDetail", resourceCache.get(key, () => api.alert(id)));
+    if ("error" in result) {
+      setResourceErrors((current) => ({ ...current, alertDetail: result.error }));
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      alertDetails: { ...current.alertDetails, [id]: result.value as AlertDecision },
+    }));
+    setResourceErrors((current) => {
+      const next = { ...current };
+      delete next.alertDetail;
+      return next;
+    });
+  }, []);
+
   async function load(invalidate = false) {
-    const keysByView: Record<View, Array<Exclude<ResourceKey, "eventDetail">>> = {
+    const keysByView: Record<View, ListResourceKey[]> = {
       overview: ["status", "events", "alerts"],
       events: ["status", "events"],
       news: ["status", "news"],
@@ -247,6 +273,40 @@ export function App() {
     }
   }, [loadEventDetail, selectedEvent?.id, view]);
 
+  const selectedAlert = useMemo(
+    () => state.alerts.find((alert) => alert.id === selectedAlertId) ?? state.alerts[0],
+    [selectedAlertId, state.alerts],
+  );
+  const selectedAlertDetail = selectedAlert ? state.alertDetails[selectedAlert.id] ?? selectedAlert : undefined;
+  const selectedAlertEventDetail = selectedAlert
+    ? state.eventDetails[selectedAlert.event_cluster_id]
+    : undefined;
+
+  useEffect(() => {
+    if (view !== "alerts" || alertSubTab !== "decisions") return;
+    if (!state.alerts.length) {
+      if (selectedAlertId !== null) setSelectedAlertId(null);
+      return;
+    }
+    if (!selectedAlertId || !state.alerts.some((alert) => alert.id === selectedAlertId)) {
+      setSelectedAlertId(state.alerts[0].id);
+    }
+  }, [alertSubTab, selectedAlertId, state.alerts, view]);
+
+  useEffect(() => {
+    if (view === "alerts" && alertSubTab === "decisions" && selectedAlert?.id) {
+      void loadAlertDetail(selectedAlert.id);
+      void loadEventDetail(selectedAlert.event_cluster_id);
+    }
+  }, [
+    alertSubTab,
+    loadAlertDetail,
+    loadEventDetail,
+    selectedAlert?.event_cluster_id,
+    selectedAlert?.id,
+    view,
+  ]);
+
   const activeNavItem = nav.find((item) => item.id === view);
   const HeaderIcon = activeNavItem?.icon ?? Bot;
 
@@ -269,12 +329,22 @@ export function App() {
   }
 
   async function acknowledgeAlert(id: string) {
-    await api.acknowledgeAlert(id);
+    const alert = await api.acknowledgeAlert(id);
+    resourceCache.invalidate(`alert:${id}`);
+    setState((current) => ({
+      ...current,
+      alertDetails: { ...current.alertDetails, [id]: alert },
+    }));
     await loadResources(["alerts"], true);
   }
 
   async function dismissAlert(id: string) {
-    await api.dismissAlert(id);
+    const alert = await api.dismissAlert(id);
+    resourceCache.invalidate(`alert:${id}`);
+    setState((current) => ({
+      ...current,
+      alertDetails: { ...current.alertDetails, [id]: alert },
+    }));
     await loadResources(["alerts"], true);
   }
 
@@ -496,15 +566,33 @@ export function App() {
               </div>
 
               {alertSubTab === "decisions" ? (
-                <Panel title="Alert decisions">
-                  <AlertsTable
-                    rows={state.alerts}
-                    error={resourceErrors.alerts}
-                    retry={() => load(true)}
-                    acknowledge={acknowledgeAlert}
-                    dismiss={dismissAlert}
-                  />
-                </Panel>
+                <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+                  <Panel title="Alert decisions">
+                    <AlertsTable
+                      rows={state.alerts}
+                      error={resourceErrors.alerts}
+                      retry={() => load(true)}
+                      acknowledge={acknowledgeAlert}
+                      dismiss={dismissAlert}
+                      selectedAlertId={selectedAlert?.id}
+                      onSelectAlert={(id) => setSelectedAlertId(id)}
+                    />
+                  </Panel>
+                  <Panel title="Alert detail">
+                    <AlertDetailPanel
+                      alert={selectedAlertDetail}
+                      eventDetail={selectedAlertEventDetail}
+                      alertError={resourceErrors.alertDetail}
+                      eventError={resourceErrors.eventDetail}
+                      retry={async () => {
+                        if (selectedAlert?.id) {
+                          await loadAlertDetail(selectedAlert.id, true);
+                          await loadEventDetail(selectedAlert.event_cluster_id, true);
+                        }
+                      }}
+                    />
+                  </Panel>
+                </div>
               ) : (
                 <AlertControls
                   channels={state.alertChannels}

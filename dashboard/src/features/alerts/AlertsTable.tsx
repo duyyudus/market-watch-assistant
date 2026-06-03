@@ -15,6 +15,8 @@ export function AlertsTable({
   retry,
   acknowledge,
   dismiss,
+  selectedAlertId,
+  onSelectAlert,
 }: {
   rows: AlertDecision[];
   compact?: boolean;
@@ -22,6 +24,8 @@ export function AlertsTable({
   retry: () => Promise<void>;
   acknowledge?: (id: string) => Promise<void>;
   dismiss?: (id: string) => Promise<void>;
+  selectedAlertId?: string | null;
+  onSelectAlert?: (id: string) => void;
 }) {
   const { items: sortedRows, requestSort, sortConfig } = useSortableData(rows, {
     key: "sent",
@@ -53,9 +57,25 @@ export function AlertsTable({
       <div className="grid gap-3 lg:hidden">
         {sortedRows.map((row) => (
           <div
-            className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3"
+            className={classNames(
+              "rounded-md border bg-zinc-950/30 p-3 transition-colors",
+              onSelectAlert && "cursor-pointer hover:border-primary/40",
+              selectedAlertId === row.id
+                ? "border-primary/60 bg-primary/5"
+                : "border-zinc-800",
+            )}
             data-testid={`alert-card-${row.id}`}
             key={row.id}
+            onClick={() => onSelectAlert?.(row.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onSelectAlert?.(row.id);
+              }
+            }}
+            aria-label={onSelectAlert ? `Select alert ${row.id}` : undefined}
+            role={onSelectAlert ? "button" : undefined}
+            tabIndex={onSelectAlert ? 0 : undefined}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span
@@ -127,7 +147,23 @@ export function AlertsTable({
         </thead>
         <tbody className="divide-y divide-zinc-800/40">
           {sortedRows.map((row) => (
-            <tr key={row.id} className="border-b border-zinc-800/30">
+            <tr
+              key={row.id}
+              className={classNames(
+                "border-b border-zinc-800/30 transition-colors",
+                onSelectAlert && "cursor-pointer hover:bg-zinc-800/20",
+                selectedAlertId === row.id && "bg-primary/5 outline outline-1 outline-primary/30",
+              )}
+              data-testid={`alert-row-${row.id}`}
+              onClick={() => onSelectAlert?.(row.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectAlert?.(row.id);
+                }
+              }}
+              tabIndex={onSelectAlert ? 0 : undefined}
+            >
               <td className="py-3 px-4">
                 <span
                   className={classNames(
@@ -164,7 +200,10 @@ export function AlertsTable({
                     {!row.acknowledged_at && row.suppression_reason !== "dismissed" && acknowledge ? (
                       <button
                         className="btn btn-xs btn-outline btn-primary"
-                        onClick={() => void acknowledge(row.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void acknowledge(row.id);
+                        }}
                         type="button"
                       >
                         Acknowledge
@@ -173,7 +212,10 @@ export function AlertsTable({
                     {!row.acknowledged_at && row.suppression_reason !== "dismissed" && dismiss ? (
                       <button
                         className="btn btn-xs btn-outline btn-primary"
-                        onClick={() => void dismiss(row.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void dismiss(row.id);
+                        }}
                         type="button"
                       >
                         Dismiss

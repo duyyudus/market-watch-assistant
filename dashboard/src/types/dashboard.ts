@@ -35,6 +35,7 @@ export type DashboardState = {
   eventDetails: Record<string, EventDetail>;
   news: NewsItem[];
   alerts: AlertDecision[];
+  alertDetails: Record<string, AlertDecision>;
   alertChannels: AlertChannel[];
   alertSuppressionRules: AlertSuppressionRule[];
   jobs: JobRun[];
@@ -52,6 +53,7 @@ export type ResourceKey =
   | "eventDetail"
   | "news"
   | "alerts"
+  | "alertDetail"
   | "alertChannels"
   | "alertSuppressionRules"
   | "jobs"

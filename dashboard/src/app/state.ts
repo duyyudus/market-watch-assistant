@@ -8,6 +8,7 @@ export const emptyState: DashboardState = {
   eventDetails: {},
   news: [],
   alerts: [],
+  alertDetails: {},
   alertChannels: [],
   alertSuppressionRules: [],
   jobs: [],

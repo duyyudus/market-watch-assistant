@@ -160,6 +160,7 @@ export type AlertDecision = {
   event_cluster_id: string;
   decision: string;
   reason: string;
+  score_breakdown: Record<string, any>;
   channel?: string | null;
   sent_at?: string | null;
   acknowledged_at?: string | null;
@@ -167,6 +168,7 @@ export type AlertDecision = {
   created_at?: string | null;
   event?: { id: string; headline: string; final_score?: number; status?: string } | null;
   latest_delivery_status?: string | null;
+  latest_delivery_error?: string | null;
 };
 
 export type AlertChannel = {
@@ -476,6 +478,7 @@ export const api = {
   event: (id: string) => request<EventDetail>(`/events/${id}`),
   news: () => request<ListEnvelope<NewsItem>>("/news?limit=100"),
   alerts: () => request<ListEnvelope<AlertDecision>>("/alerts?limit=100"),
+  alert: (id: string) => request<AlertDecision>(`/alerts/${id}`),
   alertChannels: () => request<ListEnvelope<AlertChannel>>("/alert-channels"),
   alertSuppressionRules: () =>
     request<ListEnvelope<AlertSuppressionRule>>("/alert-suppression-rules"),
