@@ -29,6 +29,7 @@ const apiMock = vi.hoisted(() => ({
   createCommand: vi.fn(),
   cancelCommand: vi.fn(),
   setSourceEnabled: vi.fn(),
+  setAllSourcesEnabled: vi.fn(),
   createSource: vi.fn(),
   updateSource: vi.fn(),
   createWatchlistEntry: vi.fn(),
@@ -679,6 +680,33 @@ describe("App data states", () => {
     );
   });
 
+  it("renders disabled source health as neutral disabled state", async () => {
+    apiMock.sourceHealth.mockResolvedValue(
+      envelope([
+        {
+          source_id: "src_1",
+          name: "Federal Reserve",
+          enabled: false,
+          category: "global_macro",
+          region: "us",
+          health_status: "disabled",
+          latest_status: "success",
+          last_fetched_at: "2026-05-29T12:55:00Z",
+          consecutive_failure_count: 0,
+          average_latency_ms: 120,
+          daily_item_counts: [{ date: "2026-05-29", count: 5 }],
+        },
+      ]),
+    );
+    await renderLoadedApp();
+    switchTo("sources");
+
+    fireEvent.click(await screen.findByRole("button", { name: /health/i }));
+
+    expect(await screen.findAllByText("disabled")).not.toHaveLength(0);
+    expect(screen.queryByText("degraded")).not.toBeInTheDocument();
+  });
+
   it("persists auto refresh preference and reloads on interval", async () => {
     await renderLoadedApp();
     vi.useFakeTimers();
@@ -789,6 +817,56 @@ describe("App data states", () => {
         expect.objectContaining({ name: "Federal Reserve Watch" }),
       ),
     );
+  });
+
+  it("disables all sources from the aggregate source toggle", async () => {
+    await renderLoadedApp();
+    switchTo("sources");
+    await screen.findByTestId("source-card-src_1");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "All sources" }));
+
+    await waitFor(() => expect(apiMock.setAllSourcesEnabled).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(apiMock.sources).toHaveBeenCalledTimes(2));
+  });
+
+  it("enables all sources from the aggregate source toggle when some are disabled", async () => {
+    apiMock.sources.mockResolvedValue(
+      envelope([
+        {
+          id: "src_1",
+          name: "Federal Reserve",
+          source_type: "official",
+          category: "global_macro",
+          region: "us",
+          url: "https://example.com/rss",
+          language: "en",
+          enabled: true,
+          polling_interval_seconds: 900,
+          source_score: 100,
+        },
+        {
+          id: "src_2",
+          name: "CoinDesk",
+          source_type: "rss",
+          category: "crypto",
+          region: "crypto",
+          url: "https://example.com/coindesk",
+          language: "en",
+          enabled: false,
+          polling_interval_seconds: 600,
+          source_score: 75,
+        },
+      ]),
+    );
+
+    await renderLoadedApp();
+    switchTo("sources");
+    await screen.findByTestId("source-card-src_1");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "All sources" }));
+
+    await waitFor(() => expect(apiMock.setAllSourcesEnabled).toHaveBeenCalledWith(true));
   });
 
   it("creates edits and deletes watchlist entries from the dashboard", async () => {

@@ -38,11 +38,30 @@ export function SourcesTable({
   const [form, setForm] = useState<SourcePayload>(emptySourcePayload());
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"configured" | "health">("configured");
+  const allSourcesEnabled = rows.length > 0 && rows.every((row) => row.enabled);
 
   async function toggle(row: Source) {
     await api.setSourceEnabled(row.id, !row.enabled);
     await reload();
+  }
+
+  async function toggleAll() {
+    if (!rows.length) {
+      return;
+    }
+    setBulkSaving(true);
+    setBulkError(null);
+    try {
+      await api.setAllSourcesEnabled(!allSourcesEnabled);
+      await reload();
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : "Unable to update sources");
+    } finally {
+      setBulkSaving(false);
+    }
   }
 
   function startCreate() {
@@ -104,11 +123,27 @@ export function SourcesTable({
             Health
           </button>
         </div>
-        <button className="btn btn-sm btn-primary" onClick={startCreate} type="button">
-          <Plus className="h-4 w-4" />
-          Add source
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          {rows.length ? (
+            <label className="label cursor-pointer gap-2 rounded-md border border-zinc-800/60 bg-zinc-950/40 px-3 py-1.5">
+              <span className="label-text text-xs font-semibold text-zinc-300">All sources</span>
+              <input
+                aria-label="All sources"
+                checked={allSourcesEnabled}
+                className="toggle toggle-sm"
+                disabled={bulkSaving}
+                onChange={() => void toggleAll()}
+                type="checkbox"
+              />
+            </label>
+          ) : null}
+          <button className="btn btn-sm btn-primary" onClick={startCreate} type="button">
+            <Plus className="h-4 w-4" />
+            Add source
+          </button>
+        </div>
       </div>
+      {bulkError ? <div className="alert alert-error mb-4 text-sm">{bulkError}</div> : null}
       {editing ? (
         <SourceForm
           form={form}
@@ -305,13 +340,9 @@ function SourceHealthPanel({
                 </div>
               </div>
               <span
-                className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
-                  row.health_status === "healthy"
-                    ? "bg-emerald-500/10 text-emerald-400"
-                    : row.health_status === "degraded"
-                      ? "bg-amber-500/10 text-amber-400"
-                      : "bg-red-500/10 text-red-400"
-                }`}
+                className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${healthStatusClass(
+                  row.health_status,
+                )}`}
               >
                 {row.health_status}
               </span>
@@ -528,4 +559,17 @@ function SourceForm({
 
 function optionsFor(options: string[], value: string): string[] {
   return value && !options.includes(value) ? [value, ...options] : options;
+}
+
+function healthStatusClass(status: SourceHealth["health_status"]): string {
+  if (status === "healthy") {
+    return "bg-emerald-500/10 text-emerald-400";
+  }
+  if (status === "degraded") {
+    return "bg-amber-500/10 text-amber-400";
+  }
+  if (status === "disabled") {
+    return "bg-zinc-700/30 text-zinc-400";
+  }
+  return "bg-red-500/10 text-red-400";
 }

@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from api_server.app.api.dependencies import SessionDep
 from api_server.app.schemas import (
     ListEnvelope,
+    SourceBulkEnabledUpdate,
     SourceCreate,
     SourceHealthRead,
     SourceRead,
@@ -51,6 +52,15 @@ async def update_source(
         raise HTTPException(status_code=404, detail="Source not found")
     source = await source_service.update_source(session, source, payload)
     return SourceRead.model_validate(source)
+
+
+@router.post("/sources/bulk-enabled", response_model=ListEnvelope[SourceRead])
+async def set_all_sources_enabled(
+    payload: SourceBulkEnabledUpdate,
+    session: SessionDep,
+) -> ListEnvelope[SourceRead]:
+    rows = await source_service.set_all_sources_enabled(session, enabled=payload.enabled)
+    return ListEnvelope(items=[SourceRead.model_validate(row) for row in rows], total=len(rows))
 
 
 @router.post("/sources/{source_id}/enable", response_model=SourceRead)

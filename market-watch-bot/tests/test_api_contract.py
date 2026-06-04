@@ -431,6 +431,21 @@ async def test_source_health_endpoint_reports_status_latency_and_daily_counts(
 
 
 @pytest.mark.asyncio
+async def test_source_health_endpoint_reports_disabled_sources_as_disabled(
+    client: AsyncClient,
+) -> None:
+    response = await client.post("/sources/src_1/disable", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+
+    health = await client.get("/sources/health")
+
+    assert health.status_code == 200
+    source = health.json()["items"][0]
+    assert source["enabled"] is False
+    assert source["health_status"] == "disabled"
+
+
+@pytest.mark.asyncio
 async def test_maintenance_observability_endpoints_return_costs_and_pipeline_metrics(
     client: AsyncClient,
 ) -> None:
@@ -598,6 +613,27 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
     disabled = await client.post(f"/sources/{source_id}/disable", headers=AUTH_HEADERS)
     assert disabled.status_code == 200
     assert disabled.json()["enabled"] is False
+
+    unauthenticated_bulk = await client.post("/sources/bulk-enabled", json={"enabled": False})
+    assert unauthenticated_bulk.status_code == 401
+
+    bulk_disabled = await client.post(
+        "/sources/bulk-enabled",
+        headers=AUTH_HEADERS,
+        json={"enabled": False},
+    )
+    assert bulk_disabled.status_code == 200
+    assert bulk_disabled.json()["total"] == 2
+    assert all(row["enabled"] is False for row in bulk_disabled.json()["items"])
+
+    bulk_enabled = await client.post(
+        "/sources/bulk-enabled",
+        headers=AUTH_HEADERS,
+        json={"enabled": True},
+    )
+    assert bulk_enabled.status_code == 200
+    assert bulk_enabled.json()["total"] == 2
+    assert all(row["enabled"] is True for row in bulk_enabled.json()["items"])
 
     watchlist = await client.get("/watchlist")
     assert watchlist.status_code == 200

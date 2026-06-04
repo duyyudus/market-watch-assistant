@@ -47,6 +47,10 @@ class SourceUpdate(BaseModel):
         return validate_source_type(value)
 
 
+class SourceBulkEnabledUpdate(BaseModel):
+    enabled: bool
+
+
 class SourceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -29,7 +29,13 @@ from api_server.app.schemas.maintenance import (
 )
 from api_server.app.schemas.news import EntityRead, NewsRead
 from api_server.app.schemas.settings import AlertPolicy, ConfigurationPresets
-from api_server.app.schemas.sources import SourceCreate, SourceHealthRead, SourceRead, SourceUpdate
+from api_server.app.schemas.sources import (
+    SourceBulkEnabledUpdate,
+    SourceCreate,
+    SourceHealthRead,
+    SourceRead,
+    SourceUpdate,
+)
 from api_server.app.schemas.watchlist import WatchlistCreate, WatchlistRead, WatchlistUpdate
 
 __all__ = [
@@ -60,6 +66,7 @@ __all__ = [
     "PipelineMetricsRead",
     "RetentionJobRead",
     "ScoreHistoryRead",
+    "SourceBulkEnabledUpdate",
     "SourceCreate",
     "SourceHealthRead",
     "SourceRead",

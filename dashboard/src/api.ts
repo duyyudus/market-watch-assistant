@@ -35,7 +35,7 @@ export type SourceHealth = {
   enabled: boolean;
   category: string;
   region: string;
-  health_status: "healthy" | "degraded" | "failing";
+  health_status: "healthy" | "degraded" | "failing" | "disabled";
   latest_status?: string | null;
   last_fetched_at?: string | null;
   consecutive_failure_count: number;
@@ -544,6 +544,11 @@ export const api = {
     }),
   setSourceEnabled: (id: string, enabled: boolean) =>
     request<Source>(`/sources/${id}/${enabled ? "enable" : "disable"}`, { method: "POST" }),
+  setAllSourcesEnabled: (enabled: boolean) =>
+    request<ListEnvelope<Source>>("/sources/bulk-enabled", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
   cancelCommand: (id: string) =>
     request<BotCommand>(`/bot/commands/${id}/cancel`, { method: "POST" }),
   maintenanceFetchLogs: (limit?: number, offset?: number) =>

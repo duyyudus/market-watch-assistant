@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.app.schemas import SourceCreate, SourceHealthRead, SourceUpdate
@@ -62,6 +62,12 @@ async def set_source_enabled(
     return source
 
 
+async def set_all_sources_enabled(session: AsyncSession, *, enabled: bool) -> list[NewsSource]:
+    await session.execute(update(NewsSource).values(enabled=enabled))
+    await session.flush()
+    return await list_sources(session, enabled=None)
+
+
 async def list_source_fetch_logs(
     session: AsyncSession, *, limit: int
 ) -> tuple[list[SourceFetchLog], int]:
@@ -101,7 +107,7 @@ async def list_source_health(session: AsyncSession) -> list[SourceHealthRead]:
             day = log.fetched_at.astimezone(UTC).date().isoformat()
             daily_counts[day] += int(log.item_count or 0)
         if not source.enabled:
-            health_status = "degraded"
+            health_status = "disabled"
         elif source.consecutive_failure_count >= 3 or latest and latest.status == "error":
             health_status = "failing"
         elif source.consecutive_failure_count > 0:
