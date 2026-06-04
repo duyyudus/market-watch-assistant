@@ -65,7 +65,7 @@ async def seed_starter_sources(session: AsyncSession) -> int:
         source_type = str(source.get("type", "rss"))
         language = str(source.get("language", "en"))
         source_score = int(source.get("score", 60))
-        polling_interval_seconds = int(source.get("interval", 300))
+        polling_interval_seconds = int(source.get("interval", 900))
         enabled = bool(source.get("enabled", True))
 
         existing = await session.scalar(select(NewsSource).where(NewsSource.name == name))

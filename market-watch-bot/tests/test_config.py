@@ -207,8 +207,8 @@ def test_starter_sources_include_enabled_google_rss_fallbacks() -> None:
 
     assert "site:ft.com" in ft_source["url"]
     assert "site:reuters.com" in reuters_source["url"]
-    assert ft_source["enabled"] is True
-    assert reuters_source["enabled"] is True
+    assert ft_source.get("enabled", True) is True
+    assert reuters_source.get("enabled", True) is True
 
 
 async def test_seed_starter_sources_preserves_disabled_source_flag(monkeypatch, tmp_path) -> None:
@@ -249,3 +249,42 @@ sources:
     assert changed == 1
     assert added[0].source_type == "crawler"
     assert added[0].enabled is False
+
+
+async def test_seed_starter_sources_defaults_missing_optional_fields(
+    monkeypatch, tmp_path
+) -> None:
+    starter = tmp_path / "starter-sources.yml"
+    starter.write_text(
+        """
+sources:
+  - name: Regular Starter Feed
+    url: https://example.com/feed.xml
+    region: global
+    category: global_macro
+    type: rss
+    score: 75
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    added: list[NewsSource] = []
+
+    class SeedSession:
+        async def scalar(self, _stmt):
+            return None
+
+        async def execute(self, stmt):
+            source = NewsSource(**stmt.compile().params)
+            added.append(source)
+
+            class Result:
+                rowcount = 1
+
+            return Result()
+
+    changed = await seed_starter_sources(SeedSession())
+
+    assert changed == 1
+    assert added[0].language == "en"
+    assert added[0].polling_interval_seconds == 900
