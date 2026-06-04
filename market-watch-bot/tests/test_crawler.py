@@ -139,7 +139,9 @@ async def test_fetch_source_routes_crawler_items_into_raw_news(monkeypatch) -> N
             "last-modified": "Tue, 02 Jun 2026 00:00:00 GMT",
         }
 
-    async def fake_crawl_section_articles(*, section_url, section_html, fetch_html, ignored_urls=None):
+    async def fake_crawl_section_articles(
+        *, section_url, section_html, fetch_html, ignored_urls=None
+    ):
         assert section_url == "https://www.reuters.com/business/"
         assert section_html == SECTION_HTML
         assert fetch_html is not None
@@ -406,7 +408,9 @@ async def test_fetch_source_google_rss_skips_resolving_existing_urls(monkeypatch
         )
 
     monkeypatch.setattr(source_services, "fetch_source_content", fake_fetch_source_content)
-    monkeypatch.setattr(source_services, "_resolve_google_rss_item_url", fake_resolve_google_rss_item_url)
+    monkeypatch.setattr(
+        source_services, "_resolve_google_rss_item_url", fake_resolve_google_rss_item_url
+    )
 
     result = await source_services.fetch_source(FetchSession(), source)
 

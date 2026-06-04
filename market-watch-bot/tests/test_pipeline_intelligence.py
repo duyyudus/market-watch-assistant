@@ -224,6 +224,89 @@ async def test_provider_retry_returns_304_without_raising_status_error() -> None
     assert client.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_fetch_source_content_uses_apex_tls_for_investing_www_feeds(monkeypatch) -> None:
+    requests: list[tuple[str, str, dict[str, object]]] = []
+
+    class InvestingClient:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            requests.append((method, url, kwargs))
+            response = httpx.Response(200, text="<rss></rss>")
+            response.request = httpx.Request(method, url)
+            return response
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setattr("bot_worker.services.sources.httpx.AsyncClient", InvestingClient)
+    source = NewsSource(
+        id="src_investing",
+        name="Investing - Stock News",
+        source_type="rss",
+        category="us_equity",
+        region="us",
+        asset_classes=["us_equity"],
+        url="https://www.investing.com/rss/news_25.rss",
+    )
+
+    status_code, body, _headers = await fetch_source_content(source)
+
+    assert status_code == 200
+    assert body == "<rss></rss>"
+    assert requests == [
+        (
+            "GET",
+            "https://investing.com/rss/news_25.rss",
+            {"headers": {"Host": "www.investing.com"}},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_formats_transport_error_with_exception_type(monkeypatch) -> None:
+    source = NewsSource(
+        id="src_transport_error",
+        name="Blocked Feed",
+        source_type="rss",
+        category="global_macro",
+        region="global",
+        asset_classes=["global_macro"],
+        url="https://example.com/rss",
+        consecutive_failure_count=0,
+    )
+
+    async def fail_fetch_source_content(_source):
+        raise httpx.ConnectError("[Errno 104] Connection reset by peer")
+
+    class FetchSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        def add(self, value: object) -> None:
+            self.added.append(value)
+
+    monkeypatch.setattr(
+        "bot_worker.services.sources.fetch_source_content",
+        fail_fetch_source_content,
+    )
+    session = FetchSession()
+
+    result = await fetch_source(session, source)
+
+    assert result == {
+        "status": "failed",
+        "error": "ConnectError: [Errno 104] Connection reset by peer",
+    }
+    assert session.added[0].error_message == "ConnectError: [Errno 104] Connection reset by peer"
+
+
 def test_score_event_uses_actual_watchlist_tier_and_high_quality_confirmation() -> None:
     d_tier = score_event(
         ScoreInput(

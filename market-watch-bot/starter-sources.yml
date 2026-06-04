@@ -23,7 +23,7 @@
 #   article metadata/text. Paywalled pages may only provide title/snippet/time.
 #   api, newsletter, and social are not implemented news source types unless
 #   dedicated fetchers/parsers are added.
-# - language: One of:
+# - language: Optional source language. Defaults to en when omitted. Values:
 #   en, vi, zh, ja, multi
 # - score: Source quality score from 0 to 100. Suggested values:
 #   100 = official regulator / central bank / exchange / company filing
@@ -32,7 +32,8 @@
 #   60  = aggregator or broad free media feed
 #   40  = blog/social/community feed
 #   20  = unverified source
-# - interval: Polling interval in seconds. Suggested values:
+# - interval: Optional polling interval in seconds. Defaults to 900 when omitted.
+#   Suggested values:
 #   300  = high-priority official/crypto feeds
 #   600  = regular financial RSS
 #   900  = Vietnam market RSS or medium-priority feeds
@@ -55,31 +56,73 @@ sources:
   region: us
   category: global_macro
   type: rss
-  language: en
   score: 100
-  interval: 900
-- name: Vietstock - Chung Khoan
-  url: http://vietstock.vn/144/chung-khoan.rss
-  region: vietnam
-  category: vietnam_equity
-  type: rss
-  language: vi
-  score: 70
-  interval: 900
-- name: CoinDesk
-  url: https://www.coindesk.com/arc/outboundfeeds/rss/
-  region: crypto
-  category: crypto
-  type: rss
-  language: en
+- name: CNBC Markets
+  url: https://www.cnbc.com/markets/
+  region: global
+  category: global_macro
+  type: crawler
+  score: 80
+- name: CNBC Investing
+  url: https://www.cnbc.com/investing/
+  region: global
+  category: global_macro
+  type: crawler
+  score: 80
+- name: The Guardian Business
+  url: https://www.theguardian.com/uk/business
+  region: global
+  category: global_macro
+  type: crawler
   score: 75
-  interval: 600
+- name: Al Jazeera Economy
+  url: https://www.aljazeera.com/economy/
+  region: global
+  category: global_macro
+  type: crawler
+  score: 75
+- name: AP Economy
+  url: https://apnews.com/hub/economy
+  region: global
+  category: global_macro
+  type: crawler
+  score: 80
+- name: AP Financial Markets
+  url: https://apnews.com/hub/financial-markets
+  region: global
+  category: global_macro
+  type: crawler
+  score: 80
+- name: ABC News Business
+  url: https://abcnews.com/Business
+  region: us
+  category: us_equity
+  type: crawler
+  score: 70
+- name: Investing - Stock News
+  url: https://www.investing.com/rss/news_25.rss
+  region: us
+  category: us_equity
+  type: rss
+  score: 75
+- name: Investing - Commodity News
+  url: https://www.investing.com/rss/news_11.rss
+  region: global
+  category: commodity
+  type: rss
+  score: 75
+- name: Investing - Economy News
+  url: https://www.investing.com/rss/news_14.rss
+  region: global
+  category: global_macro
+  type: rss
+  score: 75
+
 - name: Financial Times Google News Markets
   url: "https://news.google.com/rss/search?q=site:ft.com+(markets+OR+stocks+OR+bonds+OR+oil+OR+gold+OR+dollar+OR+Fed)&hl=en-US&gl=US&ceid=US:en"
   region: global
   category: global_macro
   type: google-rss
-  language: en
   score: 60
   interval: 1800
 - name: Reuters Google News Markets
@@ -87,46 +130,26 @@ sources:
   region: global
   category: global_macro
   type: google-rss
-  language: en
   score: 60
   interval: 1800
-- name: CNBC Markets
-  url: https://www.cnbc.com/markets/
-  region: global
-  category: global_macro
-  type: crawler
-  language: en
-  score: 80
-  interval: 900
-- name: The Guardian Business
-  url: https://www.theguardian.com/uk/business
-  region: global
-  category: global_macro
-  type: crawler
-  language: en
+
+- name: CoinDesk
+  url: https://www.coindesk.com/arc/outboundfeeds/rss/
+  region: crypto
+  category: crypto
+  type: rss
   score: 75
-  interval: 900
-- name: Al Jazeera Economy
-  url: https://www.aljazeera.com/economy/
-  region: global
-  category: global_macro
-  type: crawler
-  language: en
+- name: Investing - Crypto News
+  url: https://www.investing.com/rss/news_301.rss
+  region: crypto
+  category: crypto
+  type: rss
   score: 75
-  interval: 900
-- name: AP Business
-  url: https://apnews.com/hub/business
-  region: global
-  category: global_macro
-  type: crawler
-  language: en
-  score: 80
-  interval: 900
-- name: ABC News Business
-  url: https://abcnews.com/Business
-  region: us
-  category: us_equity
-  type: crawler
-  language: en
+
+- name: Vietstock - Chung Khoan
+  url: http://vietstock.vn/144/chung-khoan.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
   score: 70
-  interval: 900

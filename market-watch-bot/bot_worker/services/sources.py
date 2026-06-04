@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import yaml
@@ -37,6 +38,33 @@ from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_
 from bot_worker.services.common import _json_safe, _published_to_string, _result_rowcount
 from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, request_with_retry
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
+
+
+def _format_fetch_error(exc: Exception) -> str:
+    message = str(exc)
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
+
+
+def _source_fetch_request(
+    source: NewsSource, headers: dict[str, str]
+) -> tuple[str, dict[str, str]]:
+    url_parts = urlsplit(source.url)
+    if url_parts.hostname == "www.investing.com":
+        headers = dict(headers)
+        headers["Host"] = "www.investing.com"
+        fetch_url = urlunsplit(
+            (
+                url_parts.scheme,
+                "investing.com",
+                url_parts.path,
+                url_parts.query,
+                url_parts.fragment,
+            )
+        )
+        return fetch_url, headers
+    return source.url, headers
 
 
 async def seed_starter_sources(session: AsyncSession) -> int:
@@ -499,14 +527,15 @@ async def fetch_source_content(source: NewsSource) -> tuple[int, str, dict[str, 
             "User-Agent",
             "market-watch-assistant/0.1 (+https://github.com/market-watch-assistant)",
         )
+    fetch_url, request_headers = _source_fetch_request(source, headers)
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await request_with_retry(
             provider=provider,
             method="GET",
-            url=source.url,
+            url=fetch_url,
             retry_policy=PROVIDER_RETRY_POLICIES[provider],
             client=client,
-            headers=headers or None,
+            headers=request_headers or None,
         )
         return response.status_code, response.text, dict(response.headers)
 
@@ -728,28 +757,30 @@ async def fetch_source(session: AsyncSession, source: NewsSource) -> dict[str, i
                 "reason": "access_denied",
                 "http_status": exc.response.status_code,
             }
+        error_message = _format_fetch_error(exc)
         mark_source_fetch_result(source, status="failed", inserted=0)
         session.add(
             SourceFetchLog(
                 source_id=source.id,
                 status="failed",
                 http_status=exc.response.status_code,
-                error_message=str(exc),
+                error_message=error_message,
                 duration_ms=round((perf_counter() - started) * 1000),
             )
         )
-        return {"status": "failed", "error": str(exc)}
+        return {"status": "failed", "error": error_message}
     except Exception as exc:  # noqa: BLE001 - command should persist source diagnostics
+        error_message = _format_fetch_error(exc)
         mark_source_fetch_result(source, status="failed", inserted=0)
         session.add(
             SourceFetchLog(
                 source_id=source.id,
                 status="failed",
-                error_message=str(exc),
+                error_message=error_message,
                 duration_ms=round((perf_counter() - started) * 1000),
             )
         )
-        return {"status": "failed", "error": str(exc)}
+        return {"status": "failed", "error": error_message}
 def import_sources_yaml(path: Path) -> list[dict[str, object]]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     sources = data.get("sources", [])
