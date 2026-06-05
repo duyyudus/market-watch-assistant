@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,6 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import EventCluster, EventClusterItem, NewsSource, NormalizedNewsItem
+from common.article_text import extract_article_text
 
 
 @dataclass(frozen=True)
@@ -27,21 +27,6 @@ TERMINAL_HTTP_STATUSES = {401, 403, 404, 410}
 RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 SOURCE_EXTRACTION_LIMITED_MIN_FAILURES = 3
 SOURCE_EXTRACTION_LIMITED_COOLDOWN = timedelta(days=7)
-
-
-def extract_article_text(html: str) -> str | None:
-    try:
-        import trafilatura  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 - optional dependency fallback keeps tests lightweight
-        trafilatura = None
-    if trafilatura is not None:
-        text = trafilatura.extract(html)
-        if text:
-            return text.strip()
-    text = re.sub(r"<(script|style).*?</\1>", " ", html, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text or None
 
 
 async def extract_full_text_for_priority_events(

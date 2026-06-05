@@ -32,6 +32,8 @@ const apiMock = vi.hoisted(() => ({
   setAllSourcesEnabled: vi.fn(),
   createSource: vi.fn(),
   updateSource: vi.fn(),
+  previewSource: vi.fn(),
+  previewSourceArticle: vi.fn(),
   createWatchlistEntry: vi.fn(),
   updateWatchlistEntry: vi.fn(),
   deleteWatchlistEntry: vi.fn(),
@@ -817,6 +819,132 @@ describe("App data states", () => {
         expect.objectContaining({ name: "Federal Reserve Watch" }),
       ),
     );
+  });
+
+  it("previews a new source feed and article text from the create form", async () => {
+    apiMock.previewSource.mockResolvedValue({
+      status: "success",
+      url: "https://example.com/coindesk.xml",
+      source_type: "rss",
+      http_status: 200,
+      duration_ms: 24,
+      item_count: 1,
+      items: [
+        {
+          title: "Bitcoin ETF inflows rise",
+          url: "https://example.com/bitcoin-etf",
+          description: "Fresh inflows hit spot Bitcoin ETFs.",
+          published_at: "2026-05-29T13:00:00Z",
+          guid: "btc-1",
+        },
+      ],
+    });
+    apiMock.previewSourceArticle.mockResolvedValue({
+      status: "success",
+      url: "https://example.com/bitcoin-etf",
+      http_status: 200,
+      duration_ms: 31,
+      text: "Full article text was extracted from the publisher.",
+      text_length: 50,
+      truncated: false,
+    });
+
+    await renderLoadedApp();
+    switchTo("sources");
+    await screen.findByTestId("source-card-src_1");
+
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    const previewButton = screen.getByRole("button", { name: /poll preview/i });
+    expect(previewButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Source URL"), {
+      target: { value: "https://example.com/coindesk.xml" },
+    });
+    expect(previewButton).not.toBeDisabled();
+    fireEvent.click(previewButton);
+
+    await waitFor(() =>
+      expect(apiMock.previewSource).toHaveBeenCalledWith({
+        url: "https://example.com/coindesk.xml",
+        source_type: "rss",
+        limit: 10,
+      }),
+    );
+    expect(await screen.findByText("Bitcoin ETF inflows rise")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /preview article Bitcoin ETF inflows rise/i }));
+    await waitFor(() =>
+      expect(apiMock.previewSourceArticle).toHaveBeenCalledWith({
+        url: "https://example.com/bitcoin-etf",
+        fallback_snippet: "Fresh inflows hit spot Bitcoin ETFs.",
+        max_chars: 20000,
+      }),
+    );
+    expect(await screen.findByText("Snippet")).toBeInTheDocument();
+    expect(await screen.findByText(/Full article text was extracted/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Source URL"), {
+      target: { value: "https://example.com/changed.xml" },
+    });
+    expect(screen.queryByText("Bitcoin ETF inflows rise")).not.toBeInTheDocument();
+  });
+
+  it("previews an existing source feed and article text from the edit form", async () => {
+    apiMock.previewSource.mockResolvedValue({
+      status: "success",
+      url: "https://example.com/rss",
+      source_type: "rss",
+      http_status: 200,
+      duration_ms: 18,
+      item_count: 1,
+      items: [
+        {
+          title: "Fed minutes preview",
+          url: "https://example.com/fed-minutes",
+          description: "Policy makers discuss rates.",
+          published_at: "2026-05-29T13:00:00Z",
+          guid: "fed-1",
+        },
+      ],
+    });
+    apiMock.previewSourceArticle.mockResolvedValue({
+      status: "success",
+      url: "https://example.com/fed-minutes",
+      http_status: 200,
+      duration_ms: 22,
+      text: "Existing source article text was extracted.",
+      text_length: 43,
+      truncated: false,
+    });
+
+    await renderLoadedApp();
+    switchTo("sources");
+    await screen.findByTestId("source-card-src_1");
+
+    fireEvent.click(screen.getAllByRole("button", { name: /edit Federal Reserve/i })[0]);
+    fireEvent.change(screen.getByLabelText("Source type"), { target: { value: "rss" } });
+    const previewButton = screen.getByRole("button", { name: /poll preview/i });
+    expect(previewButton).not.toBeDisabled();
+    fireEvent.click(previewButton);
+
+    await waitFor(() =>
+      expect(apiMock.previewSource).toHaveBeenCalledWith({
+        url: "https://example.com/rss",
+        source_type: "rss",
+        limit: 10,
+      }),
+    );
+    expect(await screen.findByText("Fed minutes preview")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /preview article Fed minutes preview/i }));
+    await waitFor(() =>
+      expect(apiMock.previewSourceArticle).toHaveBeenCalledWith({
+        url: "https://example.com/fed-minutes",
+        fallback_snippet: "Policy makers discuss rates.",
+        max_chars: 20000,
+      }),
+    );
+    expect(await screen.findByText(/Existing source article text was extracted/i)).toBeInTheDocument();
   });
 
   it("disables all sources from the aggregate source toggle", async () => {

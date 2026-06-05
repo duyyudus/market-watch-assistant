@@ -8,6 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.app.schemas import SourceCreate, SourceHealthRead, SourceUpdate
 from common.db.models import NewsSource, SourceFetchLog, utcnow
+from common.source_preview import (
+    ArticlePreviewResult,
+    SourcePreviewResult,
+)
+from common.source_preview import (
+    preview_article_url as common_preview_article_url,
+)
+from common.source_preview import (
+    preview_source_url as common_preview_source_url,
+)
 
 
 async def list_sources(session: AsyncSession, *, enabled: bool | None) -> list[NewsSource]:
@@ -66,6 +76,28 @@ async def set_all_sources_enabled(session: AsyncSession, *, enabled: bool) -> li
     await session.execute(update(NewsSource).values(enabled=enabled))
     await session.flush()
     return await list_sources(session, enabled=None)
+
+
+async def preview_source_url(
+    *,
+    url: str,
+    source_type: str,
+    limit: int,
+) -> SourcePreviewResult:
+    return await common_preview_source_url(url=url, source_type=source_type, limit=limit)
+
+
+async def preview_article_url(
+    *,
+    url: str,
+    fallback_snippet: str | None,
+    max_chars: int,
+) -> ArticlePreviewResult:
+    return await common_preview_article_url(
+        url=url,
+        fallback_snippet=fallback_snippet,
+        max_chars=max_chars,
+    )
 
 
 async def list_source_fetch_logs(

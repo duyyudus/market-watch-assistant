@@ -5,9 +5,13 @@ from fastapi import APIRouter, HTTPException, Query, status
 from api_server.app.api.dependencies import SessionDep
 from api_server.app.schemas import (
     ListEnvelope,
+    SourceArticlePreviewRead,
+    SourceArticlePreviewRequest,
     SourceBulkEnabledUpdate,
     SourceCreate,
     SourceHealthRead,
+    SourcePreviewRead,
+    SourcePreviewRequest,
     SourceRead,
     SourceUpdate,
 )
@@ -39,6 +43,28 @@ async def create_source(
 ) -> SourceRead:
     source = await source_service.create_source(session, payload)
     return SourceRead.model_validate(source)
+
+
+@router.post("/sources/preview", response_model=SourcePreviewRead)
+async def preview_source(payload: SourcePreviewRequest) -> SourcePreviewRead:
+    result = await source_service.preview_source_url(
+        url=str(payload.url),
+        source_type=payload.source_type,
+        limit=payload.limit,
+    )
+    return SourcePreviewRead.model_validate(result, from_attributes=True)
+
+
+@router.post("/sources/preview/article", response_model=SourceArticlePreviewRead)
+async def preview_source_article(
+    payload: SourceArticlePreviewRequest,
+) -> SourceArticlePreviewRead:
+    result = await source_service.preview_article_url(
+        url=str(payload.url),
+        fallback_snippet=payload.fallback_snippet,
+        max_chars=payload.max_chars,
+    )
+    return SourceArticlePreviewRead.model_validate(result, from_attributes=True)
 
 
 @router.patch("/sources/{source_id}", response_model=SourceRead)
@@ -95,4 +121,20 @@ async def source_fetch_logs(
     limit: int = Query(50, ge=1, le=200),
 ) -> dict[str, object]:
     rows, total = await source_service.list_source_fetch_logs(session, limit=limit)
-    return {"items": [row.__dict__ for row in rows], "total": total}
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "source_id": row.source_id,
+                "fetched_at": row.fetched_at,
+                "status": row.status,
+                "http_status": row.http_status,
+                "error_message": row.error_message,
+                "item_count": row.item_count,
+                "duration_ms": row.duration_ms,
+                "content_hash": row.content_hash,
+            }
+            for row in rows
+        ],
+        "total": total,
+    }

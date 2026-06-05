@@ -34,6 +34,7 @@ from common.db.models import (
 from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
+from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
 
@@ -443,6 +444,144 @@ async def test_source_health_endpoint_reports_disabled_sources_as_disabled(
     source = health.json()["items"][0]
     assert source["enabled"] is False
     assert source["health_status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_source_preview_parses_rss_without_writing_fetch_logs(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from api_server.app.services import sources as source_service
+
+    async def fake_preview_source_url(
+        *, url: str, source_type: str, limit: int
+    ) -> SourcePreviewResult:
+        assert url == "https://example.com/feed.xml"
+        assert source_type == "rss"
+        assert limit == 10
+        return SourcePreviewResult.from_rss(
+            url=url,
+            source_type=source_type,
+            http_status=200,
+            duration_ms=12,
+            body="""<?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0"><channel><item>
+              <title>Oil jumps on shipping disruption</title>
+              <link>https://example.com/oil</link>
+              <description>Brent rises after a tanker incident.</description>
+              <pubDate>Mon, 25 May 2026 03:00:00 GMT</pubDate>
+              <guid>oil-1</guid>
+            </item></channel></rss>""",
+            limit=limit,
+        )
+
+    monkeypatch.setattr(source_service, "preview_source_url", fake_preview_source_url)
+
+    before_logs = await client.get("/source-fetch-logs")
+    response = await client.post(
+        "/sources/preview",
+        headers=AUTH_HEADERS,
+        json={"url": "https://example.com/feed.xml", "source_type": "rss", "limit": 10},
+    )
+    after_logs = await client.get("/source-fetch-logs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["http_status"] == 200
+    assert payload["item_count"] == 1
+    assert payload["items"][0]["title"] == "Oil jumps on shipping disruption"
+    assert payload["items"][0]["url"] == "https://example.com/oil"
+    assert payload["items"][0]["description"] == "Brent rises after a tanker incident."
+    assert before_logs.json()["total"] == after_logs.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_source_preview_reports_blocked_fetch_without_db_writes(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from api_server.app.services import sources as source_service
+
+    async def fake_preview_source_url(
+        *, url: str, source_type: str, limit: int
+    ) -> SourcePreviewResult:
+        return SourcePreviewResult(
+            status="error",
+            url=url,
+            source_type=source_type,
+            http_status=403,
+            duration_ms=8,
+            item_count=0,
+            items=[],
+            error_message="HTTPStatusError: forbidden",
+        )
+
+    monkeypatch.setattr(source_service, "preview_source_url", fake_preview_source_url)
+
+    before_logs = await client.get("/source-fetch-logs")
+    response = await client.post(
+        "/sources/preview",
+        headers=AUTH_HEADERS,
+        json={"url": "https://example.com/blocked.xml", "source_type": "rss"},
+    )
+    after_logs = await client.get("/source-fetch-logs")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+    assert response.json()["http_status"] == 403
+    assert "forbidden" in response.json()["error_message"]
+    assert before_logs.json()["total"] == after_logs.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_source_article_preview_extracts_and_caps_text(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from api_server.app.services import sources as source_service
+
+    async def fake_preview_article_url(
+        *, url: str, fallback_snippet: str | None, max_chars: int
+    ) -> ArticlePreviewResult:
+        assert url == "https://example.com/oil"
+        assert fallback_snippet == "RSS fallback"
+        assert max_chars == 20
+        return ArticlePreviewResult.from_text(
+            url=url,
+            http_status=200,
+            duration_ms=15,
+            text="Readable article text from the publisher",
+            max_chars=max_chars,
+        )
+
+    monkeypatch.setattr(source_service, "preview_article_url", fake_preview_article_url)
+
+    response = await client.post(
+        "/sources/preview/article",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "https://example.com/oil",
+            "fallback_snippet": "RSS fallback",
+            "max_chars": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["http_status"] == 200
+    assert payload["text"] == "Readable article tex"
+    assert payload["text_length"] == len("Readable article text from the publisher")
+    assert payload["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_source_preview_rejects_missing_or_invalid_url(client: AsyncClient) -> None:
+    response = await client.post(
+        "/sources/preview",
+        headers=AUTH_HEADERS,
+        json={"url": "", "source_type": "rss"},
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -55,6 +55,36 @@ export type SourcePayload = {
   enabled: boolean;
 };
 
+export type SourcePreviewItem = {
+  title: string;
+  url: string;
+  description: string;
+  published_at?: string | null;
+  guid?: string | null;
+};
+
+export type SourcePreviewResponse = {
+  status: string;
+  url: string;
+  source_type: string;
+  http_status?: number | null;
+  duration_ms: number;
+  item_count: number;
+  items: SourcePreviewItem[];
+  error_message?: string | null;
+};
+
+export type SourceArticlePreviewResponse = {
+  status: string;
+  url: string;
+  http_status?: number | null;
+  duration_ms: number;
+  text: string;
+  text_length: number;
+  truncated: boolean;
+  error_message?: string | null;
+};
+
 export type EventCluster = {
   id: string;
   canonical_headline: string;
@@ -491,6 +521,20 @@ export const api = {
     request<Source>("/sources", { method: "POST", body: JSON.stringify(payload) }),
   updateSource: (id: string, payload: SourcePayload) =>
     request<Source>(`/sources/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  previewSource: (payload: { url: string; source_type: string; limit: number }) =>
+    request<SourcePreviewResponse>("/sources/preview", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  previewSourceArticle: (payload: {
+    url: string;
+    fallback_snippet?: string | null;
+    max_chars: number;
+  }) =>
+    request<SourceArticlePreviewResponse>("/sources/preview/article", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   createWatchlistEntry: (payload: WatchlistPayload) =>
     request<WatchlistEntry>("/watchlist", { method: "POST", body: JSON.stringify(payload) }),
   updateWatchlistEntry: (id: string, payload: WatchlistPayload) =>

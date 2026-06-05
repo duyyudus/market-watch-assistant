@@ -1,12 +1,15 @@
-import { Pencil, Plus, Radio, RefreshCcw, X } from "lucide-react";
-import { useState } from "react";
+import { FileText, Pencil, Plus, Radio, RefreshCcw, X } from "lucide-react";
+import { useRef, useState } from "react";
 
 import {
   api,
   type ConfigurationPresets,
   type Source,
+  type SourceArticlePreviewResponse,
   type SourceHealth,
   type SourcePayload,
+  type SourcePreviewItem,
+  type SourcePreviewResponse,
 } from "../../api";
 import { EmptyState } from "../../components/EmptyState";
 import { Panel } from "../../components/Panel";
@@ -41,7 +44,28 @@ export function SourcesTable({
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [subTab, setSubTab] = useState<"configured" | "health">("configured");
+  const [preview, setPreview] = useState<SourcePreviewResponse | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [selectedPreviewItem, setSelectedPreviewItem] = useState<SourcePreviewItem | null>(null);
+  const [articlePreview, setArticlePreview] = useState<SourceArticlePreviewResponse | null>(null);
+  const [articleError, setArticleError] = useState<string | null>(null);
+  const [articleLoadingUrl, setArticleLoadingUrl] = useState<string | null>(null);
+  const previewRequestId = useRef(0);
+  const articleRequestId = useRef(0);
   const allSourcesEnabled = rows.length > 0 && rows.every((row) => row.enabled);
+
+  function resetPreview() {
+    previewRequestId.current += 1;
+    articleRequestId.current += 1;
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
+    setSelectedPreviewItem(null);
+    setArticlePreview(null);
+    setArticleError(null);
+    setArticleLoadingUrl(null);
+  }
 
   async function toggle(row: Source) {
     await api.setSourceEnabled(row.id, !row.enabled);
@@ -68,6 +92,7 @@ export function SourcesTable({
     setEditing("new");
     setForm(emptySourcePayload(presets));
     setFormError(null);
+    resetPreview();
   }
 
   function startEdit(row: Source) {
@@ -84,6 +109,7 @@ export function SourcesTable({
       enabled: row.enabled,
     });
     setFormError(null);
+    resetPreview();
   }
 
   async function saveSource() {
@@ -96,11 +122,82 @@ export function SourcesTable({
         await api.updateSource(editing.id, form);
       }
       setEditing(null);
+      resetPreview();
       await reload();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Unable to save source");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function pollPreview() {
+    const url = form.url.trim();
+    if (!url) {
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setSelectedPreviewItem(null);
+    setArticlePreview(null);
+    setArticleError(null);
+    const requestId = previewRequestId.current + 1;
+    previewRequestId.current = requestId;
+    try {
+      const result = await api.previewSource({
+        url,
+        source_type: form.source_type,
+        limit: 10,
+      });
+      if (requestId !== previewRequestId.current) {
+        return;
+      }
+      setPreview(result);
+      if (result.status === "error") {
+        setPreviewError(result.error_message ?? "Unable to preview source");
+      }
+    } catch (error) {
+      if (requestId !== previewRequestId.current) {
+        return;
+      }
+      setPreview(null);
+      setPreviewError(error instanceof Error ? error.message : "Unable to preview source");
+    } finally {
+      if (requestId === previewRequestId.current) {
+        setPreviewLoading(false);
+      }
+    }
+  }
+
+  async function previewArticle(item: SourcePreviewItem) {
+    setSelectedPreviewItem(item);
+    setArticleLoadingUrl(item.url);
+    setArticleError(null);
+    const requestId = articleRequestId.current + 1;
+    articleRequestId.current = requestId;
+    try {
+      const result = await api.previewSourceArticle({
+        url: item.url,
+        fallback_snippet: item.description || null,
+        max_chars: 20000,
+      });
+      if (requestId !== articleRequestId.current) {
+        return;
+      }
+      setArticlePreview(result);
+      if (result.status === "error") {
+        setArticleError(result.error_message ?? "Unable to preview article");
+      }
+    } catch (error) {
+      if (requestId !== articleRequestId.current) {
+        return;
+      }
+      setArticlePreview(null);
+      setArticleError(error instanceof Error ? error.message : "Unable to preview article");
+    } finally {
+      if (requestId === articleRequestId.current) {
+        setArticleLoadingUrl(null);
+      }
     }
   }
 
@@ -152,7 +249,20 @@ export function SourcesTable({
           presets={presets}
           saving={saving}
           setForm={setForm}
-          onCancel={() => setEditing(null)}
+          preview={preview}
+          previewError={previewError}
+          previewLoading={previewLoading}
+          selectedPreviewItem={selectedPreviewItem}
+          articlePreview={articlePreview}
+          articleError={articleError}
+          articleLoadingUrl={articleLoadingUrl}
+          onCancel={() => {
+            setEditing(null);
+            resetPreview();
+          }}
+          onFormChange={resetPreview}
+          onPollPreview={pollPreview}
+          onPreviewArticle={previewArticle}
           onSave={saveSource}
         />
       ) : null}
@@ -411,7 +521,17 @@ function SourceForm({
   presets,
   saving,
   setForm,
+  preview,
+  previewError,
+  previewLoading,
+  articlePreview,
+  articleError,
+  articleLoadingUrl,
+  selectedPreviewItem,
   onCancel,
+  onFormChange,
+  onPollPreview,
+  onPreviewArticle,
   onSave,
 }: {
   form: SourcePayload;
@@ -420,12 +540,27 @@ function SourceForm({
   presets: ConfigurationPresets["sources"] | null;
   saving: boolean;
   setForm: (value: SourcePayload) => void;
+  preview: SourcePreviewResponse | null;
+  previewError: string | null;
+  previewLoading: boolean;
+  articlePreview: SourceArticlePreviewResponse | null;
+  articleError: string | null;
+  articleLoadingUrl: string | null;
+  selectedPreviewItem: SourcePreviewItem | null;
   onCancel: () => void;
+  onFormChange: () => void;
+  onPollPreview: () => Promise<void>;
+  onPreviewArticle: (item: SourcePreviewItem) => Promise<void>;
   onSave: () => Promise<void>;
 }) {
   function update<K extends keyof SourcePayload>(key: K, value: SourcePayload[K]) {
+    if (key === "url" || key === "source_type") {
+      onFormChange();
+    }
     setForm({ ...form, [key]: value });
   }
+
+  const canPreview = form.url.trim().length > 0 && !previewLoading;
 
   return (
     <div className="mb-5 rounded-md border border-zinc-800 bg-zinc-950/40 p-4">
@@ -450,11 +585,22 @@ function SourceForm({
         </label>
         <label className="form-control md:col-span-2">
           <span className="label-text">Source URL</span>
-          <input
-            className="input input-bordered input-sm"
-            onChange={(event) => update("url", event.target.value)}
-            value={form.url}
-          />
+          <div className="flex gap-2">
+            <input
+              className="input input-bordered input-sm min-w-0 flex-1"
+              onChange={(event) => update("url", event.target.value)}
+              value={form.url}
+            />
+            <button
+              className="btn btn-sm btn-outline btn-primary shrink-0"
+              disabled={!canPreview}
+              onClick={() => void onPollPreview()}
+              type="button"
+            >
+              <RefreshCcw className={`h-4 w-4 ${previewLoading ? "animate-spin" : ""}`} />
+              Poll preview
+            </button>
+          </div>
         </label>
         <label className="form-control">
           <span className="label-text">Source type</span>
@@ -553,12 +699,185 @@ function SourceForm({
           Save source
         </button>
       </div>
+      <SourcePreviewPanel
+        articleError={articleError}
+        articleLoadingUrl={articleLoadingUrl}
+        articlePreview={articlePreview}
+        preview={preview}
+        previewError={previewError}
+        previewLoading={previewLoading}
+        selectedPreviewItem={selectedPreviewItem}
+        onPreviewArticle={onPreviewArticle}
+      />
+    </div>
+  );
+}
+
+function SourcePreviewPanel({
+  preview,
+  previewError,
+  previewLoading,
+  articlePreview,
+  articleError,
+  articleLoadingUrl,
+  selectedPreviewItem,
+  onPreviewArticle,
+}: {
+  preview: SourcePreviewResponse | null;
+  previewError: string | null;
+  previewLoading: boolean;
+  articlePreview: SourceArticlePreviewResponse | null;
+  articleError: string | null;
+  articleLoadingUrl: string | null;
+  selectedPreviewItem: SourcePreviewItem | null;
+  onPreviewArticle: (item: SourcePreviewItem) => Promise<void>;
+}) {
+  if (!preview && !previewError && !previewLoading && !articlePreview && !articleError) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 border-t border-zinc-800/70 pt-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-bold uppercase text-zinc-400">Preview</div>
+        {preview ? (
+          <div className="text-xs text-base-content/60">
+            {preview.status} · HTTP {preview.http_status ?? "-"} · {preview.duration_ms}ms ·{" "}
+            {preview.item_count} items
+          </div>
+        ) : null}
+      </div>
+      {previewLoading ? (
+        <div className="rounded-md border border-zinc-800 bg-zinc-950/50 p-3 text-sm text-zinc-300">
+          Polling source...
+        </div>
+      ) : null}
+      {previewError ? <div className="alert alert-error mb-3 text-sm">{previewError}</div> : null}
+      {preview && preview.items.length === 0 && !previewError ? (
+        <div className="rounded-md border border-zinc-800 bg-zinc-950/50 p-3 text-sm text-zinc-300">
+          No RSS items were found.
+        </div>
+      ) : null}
+      {preview && preview.items.length > 0 ? (
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
+          <div className="max-h-96 overflow-y-auto rounded-md border border-zinc-800">
+            {preview.items.map((item) => (
+              <button
+                aria-label={`Preview article ${item.title}`}
+                className="block w-full border-b border-zinc-800/60 bg-zinc-950/30 p-3 text-left last:border-b-0 hover:bg-zinc-900/70"
+                disabled={articleLoadingUrl === item.url}
+                key={`${item.guid ?? item.url}-${item.title}`}
+                onClick={() => void onPreviewArticle(item)}
+                type="button"
+              >
+                <div className="flex items-start gap-2">
+                  <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-zinc-100">
+                      {item.title}
+                    </div>
+                    <div className="mt-1 truncate text-xs text-base-content/60">
+                      {domainFor(item.url)}
+                      {item.published_at ? ` · ${formatPreviewDate(item.published_at)}` : ""}
+                    </div>
+                    {item.description ? (
+                      <div className="mt-2 line-clamp-2 text-xs text-zinc-400">
+                        {item.description}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+          <ArticlePreviewPanel
+            articleError={articleError}
+            articleLoading={articleLoadingUrl !== null}
+            articlePreview={articlePreview}
+            selectedPreviewItem={selectedPreviewItem}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ArticlePreviewPanel({
+  articlePreview,
+  articleError,
+  articleLoading,
+  selectedPreviewItem,
+}: {
+  articlePreview: SourceArticlePreviewResponse | null;
+  articleError: string | null;
+  articleLoading: boolean;
+  selectedPreviewItem: SourcePreviewItem | null;
+}) {
+  if (!articlePreview && !articleError && !articleLoading && !selectedPreviewItem) {
+    return (
+      <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-4 text-sm text-zinc-400">
+        Select an item to fetch article text.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60">
+        <span className="font-bold uppercase text-zinc-400">Article</span>
+        {articlePreview ? (
+          <span>
+            {articlePreview.status} · HTTP {articlePreview.http_status ?? "-"} ·{" "}
+            {articlePreview.duration_ms}ms · {articlePreview.text_length} chars
+          </span>
+        ) : null}
+      </div>
+      {articleLoading ? <div className="text-sm text-zinc-300">Fetching article...</div> : null}
+      {articleError ? <div className="alert alert-error mb-3 text-sm">{articleError}</div> : null}
+      {selectedPreviewItem?.description ? (
+        <div className="mb-3 rounded border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mb-1 text-xs font-bold uppercase text-zinc-400">Snippet</div>
+          <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
+            {selectedPreviewItem.description}
+          </div>
+        </div>
+      ) : null}
+      {articlePreview ? (
+        <>
+          {articlePreview.error_message ? (
+            <div className="alert alert-warning mb-3 text-sm">{articlePreview.error_message}</div>
+          ) : null}
+          {articlePreview.truncated ? (
+            <div className="mb-2 text-xs font-semibold text-amber-400">
+              Text truncated to preview limit.
+            </div>
+          ) : null}
+          <pre className="max-h-80 whitespace-pre-wrap break-words overflow-y-auto rounded bg-zinc-950/70 p-3 text-xs leading-relaxed text-zinc-200">
+            {articlePreview.text || "No article text available."}
+          </pre>
+        </>
+      ) : null}
     </div>
   );
 }
 
 function optionsFor(options: string[], value: string): string[] {
   return value && !options.includes(value) ? [value, ...options] : options;
+}
+
+function domainFor(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+function formatPreviewDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
 }
 
 function healthStatusClass(status: SourceHealth["health_status"]): string {
