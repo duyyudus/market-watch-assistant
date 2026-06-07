@@ -4,11 +4,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import yaml
-from googlenewsdecoder import gnewsdecoder
 from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +36,12 @@ from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_
 from bot_worker.services.common import _json_safe, _published_to_string, _result_rowcount
 from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, request_with_retry
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
+from common.source_parsing import google_rss_description
+from common.source_policies import (
+    article_fetch_headers,
+    crawler_fetch_headers,
+    source_fetch_request,
+)
 
 
 def _format_fetch_error(exc: Exception) -> str:
@@ -45,26 +49,6 @@ def _format_fetch_error(exc: Exception) -> str:
     if message:
         return f"{type(exc).__name__}: {message}"
     return type(exc).__name__
-
-
-def _source_fetch_request(
-    source: NewsSource, headers: dict[str, str]
-) -> tuple[str, dict[str, str]]:
-    url_parts = urlsplit(source.url)
-    if url_parts.hostname == "www.investing.com":
-        headers = dict(headers)
-        headers["Host"] = "www.investing.com"
-        fetch_url = urlunsplit(
-            (
-                url_parts.scheme,
-                "investing.com",
-                url_parts.path,
-                url_parts.query,
-                url_parts.fragment,
-            )
-        )
-        return fetch_url, headers
-    return source.url, headers
 
 
 async def seed_starter_sources(session: AsyncSession) -> int:
@@ -523,27 +507,23 @@ async def fetch_source_content(source: NewsSource) -> tuple[int, str, dict[str, 
         headers["If-Modified-Since"] = source.last_modified
     provider = source.source_type if source.source_type in {"rss", "crawler"} else "rss"
     if provider == "crawler":
-        headers.setdefault(
-            "User-Agent",
-            "market-watch-assistant/0.1 (+https://github.com/market-watch-assistant)",
-        )
-    fetch_url, request_headers = _source_fetch_request(source, headers)
+        headers.update(crawler_fetch_headers())
+    else:
+        headers.update(article_fetch_headers())
+    request = source_fetch_request(source.url, headers)
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await request_with_retry(
             provider=provider,
             method="GET",
-            url=fetch_url,
+            url=request.url,
             retry_policy=PROVIDER_RETRY_POLICIES[provider],
             client=client,
-            headers=request_headers or None,
+            headers=request.headers or None,
         )
         return response.status_code, response.text, dict(response.headers)
 
 
 async def _fetch_crawler_article_html(url: str) -> str:
-    headers = {
-        "User-Agent": "market-watch-assistant/0.1 (+https://github.com/market-watch-assistant)"
-    }
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await request_with_retry(
             provider="crawler",
@@ -551,7 +531,7 @@ async def _fetch_crawler_article_html(url: str) -> str:
             url=url,
             retry_policy=PROVIDER_RETRY_POLICIES["crawler"],
             client=client,
-            headers=headers,
+            headers=crawler_fetch_headers(),
         )
         return response.text
 
@@ -577,7 +557,18 @@ async def _parsed_source_items(session: AsyncSession, source: NewsSource, body: 
         for item in items:
             if item.url in existing_raw_urls:
                 continue
-            resolved_items.append(_resolve_google_rss_item_url(item))
+            raw_payload = dict(item.raw_payload)
+            raw_payload["google_news_url"] = item.url
+            resolved_items.append(
+                ParsedFeedItem(
+                    title=item.title,
+                    url=item.url,
+                    description=google_rss_description(item),
+                    published=item.published,
+                    guid=item.guid,
+                    raw_payload=raw_payload,
+                )
+            )
         return resolved_items
     if source.source_type == "crawler":
         discovered_urls = discover_article_urls(body, section_url=source.url)
@@ -611,52 +602,6 @@ async def _parsed_source_items(session: AsyncSession, source: NewsSource, body: 
             ignored_urls=ignored_urls,
         )
     return []
-
-
-def _resolve_google_rss_item_url(item: ParsedFeedItem) -> ParsedFeedItem:
-    raw_payload = dict(item.raw_payload)
-    raw_payload["google_news_url"] = item.url
-    try:
-        decoded = gnewsdecoder(item.url)
-    except Exception as exc:  # noqa: BLE001 - one undecodable Google item should not fail a feed
-        raw_payload["google_news_decode_status"] = "failed"
-        raw_payload["google_news_decode_message"] = str(exc)
-        return ParsedFeedItem(
-            title=item.title,
-            url=item.url,
-            description=item.description,
-            published=item.published,
-            guid=item.guid,
-            raw_payload=raw_payload,
-        )
-
-    if isinstance(decoded, dict) and decoded.get("status") and decoded.get("decoded_url"):
-        decoded_url = str(decoded["decoded_url"])
-        raw_payload["google_news_decoded_url"] = decoded_url
-        raw_payload["google_news_decode_status"] = "success"
-        return ParsedFeedItem(
-            title=item.title,
-            url=decoded_url,
-            description=item.description,
-            published=item.published,
-            guid=item.guid,
-            raw_payload=raw_payload,
-        )
-
-    message = ""
-    if isinstance(decoded, dict):
-        message = str(decoded.get("message") or "")
-    raw_payload["google_news_decode_status"] = "failed"
-    if message:
-        raw_payload["google_news_decode_message"] = message
-    return ParsedFeedItem(
-        title=item.title,
-        url=item.url,
-        description=item.description,
-        published=item.published,
-        guid=item.guid,
-        raw_payload=raw_payload,
-    )
 
 
 def _raw_item_values(source: NewsSource, item) -> dict[str, object]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, func, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
@@ -99,18 +99,39 @@ async def normalize_pending_raw_items(
             canonical_url_hash=content_hash(canonical_url),
             normalized_text_hash=content_hash(f"{title} {snippet} {raw_content}"),
             processing_status="normalized",
+            full_text_available=False,
+            full_text_extraction_status=(
+                "skipped" if source.source_type == "google-rss" else "pending"
+            ),
+            full_text_last_error=(
+                "google_rss_feed_only" if source.source_type == "google-rss" else None
+            ),
         )
         session.add(item)
         inserted += 1
     return inserted
 async def mark_exact_duplicates(session: AsyncSession) -> int:
+    google_rss_with_snippet = and_(
+        NormalizedNewsItem.source_type == "google-rss",
+        NormalizedNewsItem.snippet.is_not(None),
+    )
     ranked = (
         select(
             NormalizedNewsItem.id.label("news_id"),
             func.row_number()
             .over(
                 partition_by=(
-                    NormalizedNewsItem.canonical_url_hash,
+                    case(
+                        (google_rss_with_snippet, literal("google-rss-snippet")),
+                        else_=literal("url"),
+                    ),
+                    case(
+                        (
+                            google_rss_with_snippet,
+                            NormalizedNewsItem.normalized_text_hash,
+                        ),
+                        else_=NormalizedNewsItem.canonical_url_hash,
+                    ),
                     NormalizedNewsItem.title_hash,
                 ),
                 order_by=(

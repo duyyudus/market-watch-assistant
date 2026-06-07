@@ -38,6 +38,9 @@ from bot_worker.services.events import (
     split_event_cluster,
     vector_cluster_candidates_for_item,
 )
+from bot_worker.services.extraction_audit import (
+    audit_source_extraction,
+)
 from bot_worker.services.ingestion import (
     is_rss_item_fresh,
     mark_exact_duplicates,
@@ -113,6 +116,7 @@ __all__ = [
     "ClusterBuildStats",
     "add_source",
     "add_watchlist_entry",
+    "audit_source_extraction",
     "baseline_reset_preview",
     "build_digest_record",
     "build_event_clusters",

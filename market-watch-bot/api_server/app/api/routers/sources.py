@@ -62,7 +62,9 @@ async def preview_source_article(
     result = await source_service.preview_article_url(
         url=str(payload.url),
         fallback_snippet=payload.fallback_snippet,
+        fallback_title=payload.fallback_title,
         max_chars=payload.max_chars,
+        source_type=payload.source_type,
     )
     return SourceArticlePreviewRead.model_validate(result, from_attributes=True)
 

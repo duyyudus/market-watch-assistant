@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -17,6 +18,7 @@ from bot_worker.services import (
     refresh_source_quality_scores,
     set_source_enabled,
 )
+from bot_worker.services.extraction_audit import audit_source_extraction
 from common.config import validate_source_type
 
 
@@ -113,6 +115,52 @@ def source_test(identifier: str) -> None:
 def source_fetch(identifier: str) -> None:
     """Fetch and test a source (alias for 'source test')."""
     source_test(identifier)
+
+
+@source_app.command("audit-extraction")
+def source_audit_extraction(
+    starter_sources: Annotated[
+        Path,
+        typer.Option("--starter-sources", help="Starter source YAML path"),
+    ] = Path("starter-sources.yml"),
+    sample_limit: Annotated[
+        int,
+        typer.Option("--sample-limit", min=1, max=10, help="Articles to sample per source"),
+    ] = 2,
+    include_db: Annotated[
+        bool,
+        typer.Option(
+            "--include-db/--no-include-db",
+            help="Include enabled DB sources if reachable",
+        ),
+    ] = True,
+) -> None:
+    """Audit article extraction quality without writing ingestion state."""
+
+    report = _run(
+        audit_source_extraction(
+            starter_sources_path=starter_sources,
+            sample_limit=sample_limit,
+            include_db=include_db,
+        )
+    )
+    _echo_json(_jsonable_report(report))
+
+
+def _jsonable_report(value):
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, list):
+        return [_jsonable_report(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable_report(item) for key, item in value.items()}
+    if hasattr(value, "__dict__"):
+        return {key: _jsonable_report(item) for key, item in vars(value).items()}
+    return value
+
+
 @source_app.command("enable")
 def source_enable(identifier: str) -> None:
     """Enable a specific data source by its identifier."""

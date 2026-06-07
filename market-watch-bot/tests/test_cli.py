@@ -88,6 +88,51 @@ def test_cli_source_add_rejects_unsupported_source_type(monkeypatch) -> None:
     assert "Unsupported source_type" in result.output
 
 
+def test_cli_source_audit_extraction_prints_json_report(monkeypatch, tmp_path) -> None:
+    async def fake_audit_source_extraction(**kwargs):
+        assert kwargs["starter_sources_path"] == tmp_path / "sources.yml"
+        assert kwargs["sample_limit"] == 3
+        return SimpleNamespace(
+            generated_at="2026-06-05T00:00:00+00:00",
+            starter_sources_path=str(tmp_path / "sources.yml"),
+            db_inventory_status="unavailable",
+            source_count=1,
+            sources=[
+                SimpleNamespace(
+                    name="Starter RSS",
+                    url="https://example.com/feed.xml",
+                    source_type="rss",
+                    origin="starter",
+                    status="success",
+                    http_status=200,
+                    item_count=1,
+                    suspicious_boilerplate_hits=[],
+                    error_message=None,
+                    articles=[],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(source_cli, "audit_source_extraction", fake_audit_source_extraction)
+
+    result = runner.invoke(
+        app,
+        [
+            "source",
+            "audit-extraction",
+            "--starter-sources",
+            str(tmp_path / "sources.yml"),
+            "--sample-limit",
+            "3",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"source_count": 1' in result.output
+    assert '"db_inventory_status": "unavailable"' in result.output
+    assert '"name": "Starter RSS"' in result.output
+
+
 def test_cli_alert_list_reports_empty_decisions(monkeypatch) -> None:
     class EmptyResult:
         def all(self) -> list:

@@ -19,9 +19,25 @@ class ParsedFeedItem:
 
 
 def parse_rss_items(content: str | bytes) -> list[ParsedFeedItem]:
-    feed = feedparser.parse(content)
+    if isinstance(content, bytes):
+        try:
+            content_str = content.decode("utf-8", errors="replace")
+        except Exception:
+            content_str = str(content)
+    else:
+        content_str = content
+
+    # Strip empty dc:description elements to prevent feedparser override
+    content_str = re.sub(
+        r"<dc:description\s*/>|<dc:description\s*>\s*</dc:description\s*>",
+        "",
+        content_str,
+        flags=re.IGNORECASE,
+    )
+
+    feed = feedparser.parse(content_str)
     if not feed.entries:
-        feed = feedparser.parse(_repair_mislabeled_utf16(content))
+        feed = feedparser.parse(_repair_mislabeled_utf16(content_str))
     items: list[ParsedFeedItem] = []
     for entry in feed.entries:
         title = _clean_feed_text(entry.get("title", ""))

@@ -91,11 +91,15 @@ async def preview_article_url(
     *,
     url: str,
     fallback_snippet: str | None,
+    fallback_title: str | None,
     max_chars: int,
+    source_type: str | None = None,
 ) -> ArticlePreviewResult:
     return await common_preview_article_url(
         url=url,
+        source_type=source_type,
         fallback_snippet=fallback_snippet,
+        fallback_title=fallback_title,
         max_chars=max_chars,
     )
 

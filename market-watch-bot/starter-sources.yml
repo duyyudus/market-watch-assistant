@@ -57,23 +57,47 @@ sources:
   category: global_macro
   type: rss
   score: 100
-- name: CNBC Markets
-  url: https://www.cnbc.com/markets/
+- name: CNBC Business News
+  url: http://www.cnbc.com/id/10001147/device/rss/rss.html
   region: global
   category: global_macro
-  type: crawler
+  type: rss
   score: 80
 - name: CNBC Investing
-  url: https://www.cnbc.com/investing/
+  url: http://www.cnbc.com/id/15839069/device/rss/rss.html
   region: global
   category: global_macro
-  type: crawler
+  type: rss
+  score: 80
+- name: CNBC Finance
+  url: http://www.cnbc.com/id/10000664/device/rss/rss.html
+  region: global
+  category: global_macro
+  type: rss
+  score: 80
+- name: CNBC Energy
+  url: http://www.cnbc.com/id/19836768/device/rss/rss.html
+  region: global
+  category: global_macro
+  type: rss
+  score: 80
+- name: CNBC World News
+  url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362
+  region: global
+  category: global_macro
+  type: rss
   score: 80
 - name: The Guardian Business
   url: https://www.theguardian.com/uk/business
   region: global
   category: global_macro
   type: crawler
+  score: 75
+- name: Al Jazeera All
+  url: https://www.aljazeera.com/xml/rss/all.xml
+  region: global
+  category: global_macro
+  type: rss
   score: 75
 - name: Al Jazeera Economy
   url: https://www.aljazeera.com/economy/
@@ -99,34 +123,23 @@ sources:
   category: us_equity
   type: crawler
   score: 70
-- name: Investing - Stock News
-  url: https://www.investing.com/rss/news_25.rss
-  region: us
-  category: us_equity
-  type: rss
-  score: 75
-- name: Investing - Commodity News
-  url: https://www.investing.com/rss/news_11.rss
-  region: global
-  category: commodity
-  type: rss
-  score: 75
-- name: Investing - Economy News
-  url: https://www.investing.com/rss/news_14.rss
-  region: global
-  category: global_macro
-  type: rss
-  score: 75
 
 - name: Financial Times Google News Markets
-  url: "https://news.google.com/rss/search?q=site:ft.com+(markets+OR+stocks+OR+bonds+OR+oil+OR+gold+OR+dollar+OR+Fed)&hl=en-US&gl=US&ceid=US:en"
+  url: "https://news.google.com/rss/search?q=site:ft.com+(market+OR+stock+OR+bond+OR+oil+OR+gold+OR+dollar+OR+Fed)&hl=en-US&gl=US&ceid=US:en"
   region: global
   category: global_macro
   type: google-rss
   score: 60
   interval: 1800
 - name: Reuters Google News Markets
-  url: "https://news.google.com/rss/search?q=site:reuters.com+(markets+OR+stocks+OR+bonds+OR+oil+OR+gold+OR+dollar+OR+Fed)&hl=en-US&gl=US&ceid=US:en"
+  url: "https://news.google.com/rss/search?q=site:reuters.com+(market+OR+stock+OR+bond+OR+oil+OR+gold+OR+dollar+OR+Fed)&hl=en-US&gl=US&ceid=US:en"
+  region: global
+  category: global_macro
+  type: google-rss
+  score: 60
+  interval: 1800
+- name: Bloomberg Google News Markets
+  url: "https://news.google.com/rss/search?q=site:bloomberg.com+(market+OR+stock+OR+bond+OR+oil+OR+gold+OR+dollar+OR+Fed)&hl=en-US&gl=US&ceid=US:en"
   region: global
   category: global_macro
   type: google-rss
@@ -139,15 +152,93 @@ sources:
   category: crypto
   type: rss
   score: 75
-- name: Investing - Crypto News
-  url: https://www.investing.com/rss/news_301.rss
-  region: crypto
-  category: crypto
-  type: rss
-  score: 75
 
-- name: Vietstock - Chung Khoan
-  url: http://vietstock.vn/144/chung-khoan.rss
+- name: Vietstock - Tai Chinh
+  url: http://vietstock.vn/734/tai-chinh.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietstock - Bat Dong San
+  url: http://vietstock.vn/763/bat-dong-san.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietstock - Kinh Te Nganh
+  url: http://vietstock.vn/768/kinh-te-nganh.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietstock - Vi Mo
+  url: http://vietstock.vn/761/vi-mo-dau-tu.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietstock - Chinh Sach
+  url: http://vietstock.vn/143/chung-khoan/chinh-sach.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietnambiz - Tai Chinh
+  url: https://vietnambiz.vn/tai-chinh.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietnambiz - Kinh Doanh
+  url: https://vietnambiz.vn/kinh-doanh.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Vietnambiz - Nha Dat
+  url: https://vietnambiz.vn/nha-dat.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: VnEconomy - Tin Moi
+  url: https://vneconomy.vn/tin-moi.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: VnEconomy - Tieu Diem
+  url: https://vneconomy.vn/tieu-diem.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Tuoi Tre - Kinh Doanh
+  url: https://tuoitre.vn/rss/kinh-doanh.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: VnExpress - Kinh Doanh
+  url: http://vnexpress.net/rss/kinh-doanh.rss
+  region: vietnam
+  category: vietnam_equity
+  type: rss
+  language: vi
+  score: 70
+- name: Bao SGDD - Tin Moi
+  url: https://saigondautu.com.vn/rss/home.rss
   region: vietnam
   category: vietnam_equity
   type: rss

@@ -6,10 +6,13 @@ from time import mktime, perf_counter
 
 import httpx
 
+from common.article_fallbacks import first_article_fallback_text
 from common.article_text import extract_article_text
 from common.config import validate_source_type
 from common.crawler import ParsedCrawlerArticle, crawl_section_articles
 from common.rss import ParsedFeedItem, parse_rss_items
+from common.source_parsing import parse_source_items_async
+from common.source_policies import article_fetch_headers, crawler_fetch_headers
 
 PREVIEW_SUPPORTED_SOURCE_TYPES = {"rss", "google-rss", "crawler"}
 DEFAULT_ARTICLE_MAX_CHARS = 20_000
@@ -109,13 +112,25 @@ async def preview_source_url(
         )
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            response = await client.get(str(url))
+            headers = (
+                crawler_fetch_headers()
+                if source_type == "crawler"
+                else article_fetch_headers()
+            )
+            response = await client.get(
+                str(url),
+                headers=headers,
+            )
             response.raise_for_status()
             if source_type == "crawler":
                 articles = await crawl_section_articles(
                     section_url=url,
                     section_html=response.text,
-                    fetch_html=lambda article_url: _fetch_text(client, article_url),
+                    fetch_html=lambda article_url: _fetch_text(
+                        client,
+                        article_url,
+                        headers=crawler_fetch_headers(),
+                    ),
                     limit=limit,
                 )
                 items = [_crawler_preview_item(article) for article in articles[:limit]]
@@ -144,6 +159,15 @@ async def preview_source_url(
             message=_format_fetch_error(exc),
         )
 
+    if source_type == "google-rss":
+        return await _source_preview_from_google_rss(
+            url=url,
+            source_type=source_type,
+            http_status=response.status_code,
+            duration_ms=_duration_ms(started),
+            body=response.text,
+            limit=limit,
+        )
     return SourcePreviewResult.from_rss(
         url=url,
         source_type=source_type,
@@ -157,17 +181,30 @@ async def preview_source_url(
 async def preview_article_url(
     *,
     url: str,
+    source_type: str | None = None,
     fallback_snippet: str | None = None,
+    fallback_title: str | None = None,
     max_chars: int = DEFAULT_ARTICLE_MAX_CHARS,
 ) -> ArticlePreviewResult:
     started = perf_counter()
+    if source_type == "google-rss":
+        return ArticlePreviewResult(
+            status="skipped",
+            url=url,
+            http_status=None,
+            duration_ms=_duration_ms(started),
+            text="",
+            text_length=0,
+            truncated=False,
+            error_message="google_rss_feed_only",
+        )
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            response = await client.get(str(url))
+            response = await client.get(str(url), headers=article_fetch_headers())
             response.raise_for_status()
-        text = extract_article_text(response.text)
-        if not text and fallback_snippet:
-            text = fallback_snippet.strip()
+        text = extract_article_text(response.text, url=url)
+        if not text:
+            text = first_article_fallback_text(fallback_snippet, fallback_title)
         if not text:
             return _article_error(
                 url=url,
@@ -183,7 +220,7 @@ async def preview_article_url(
             max_chars=max_chars,
         )
     except httpx.HTTPStatusError as exc:
-        text = (fallback_snippet or "").strip()
+        text = first_article_fallback_text(fallback_snippet, fallback_title)
         if text:
             return ArticlePreviewResult(
                 status="fallback",
@@ -202,7 +239,7 @@ async def preview_article_url(
             http_status=exc.response.status_code,
         )
     except Exception as exc:  # noqa: BLE001 - preview should report provider boundary failures
-        text = (fallback_snippet or "").strip()
+        text = first_article_fallback_text(fallback_snippet, fallback_title)
         if text:
             return ArticlePreviewResult(
                 status="fallback",
@@ -231,6 +268,30 @@ def _preview_item(item: ParsedFeedItem) -> SourcePreviewItem:
     )
 
 
+async def _source_preview_from_google_rss(
+    *,
+    url: str,
+    source_type: str,
+    http_status: int,
+    duration_ms: int,
+    body: str,
+    limit: int,
+) -> SourcePreviewResult:
+    items = [
+        _preview_item(item)
+        for item in (await parse_source_items_async(body, source_type="google-rss"))[:limit]
+    ]
+    return SourcePreviewResult(
+        status="success",
+        url=url,
+        source_type=source_type,
+        http_status=http_status,
+        duration_ms=duration_ms,
+        item_count=len(items),
+        items=items,
+    )
+
+
 def _crawler_preview_item(item: ParsedCrawlerArticle) -> SourcePreviewItem:
     return SourcePreviewItem(
         title=item.title,
@@ -241,8 +302,13 @@ def _crawler_preview_item(item: ParsedCrawlerArticle) -> SourcePreviewItem:
     )
 
 
-async def _fetch_text(client: httpx.AsyncClient, url: str) -> str:
-    response = await client.get(str(url))
+async def _fetch_text(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> str:
+    response = await client.get(str(url), headers=headers)
     response.raise_for_status()
     return response.text
 

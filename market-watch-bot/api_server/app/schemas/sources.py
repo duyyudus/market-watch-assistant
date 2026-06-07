@@ -83,7 +83,9 @@ class SourcePreviewRead(BaseModel):
 
 class SourceArticlePreviewRequest(BaseModel):
     url: HttpUrl
+    source_type: str | None = Field(default=None, max_length=32)
     fallback_snippet: str | None = Field(default=None, max_length=10000)
+    fallback_title: str | None = Field(default=None, max_length=1000)
     max_chars: int = Field(default=20000, ge=1, le=50000)
 
 

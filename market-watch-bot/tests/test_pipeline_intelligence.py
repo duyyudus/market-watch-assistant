@@ -121,6 +121,7 @@ class FullTextClient:
         self.responses = responses
         self.active = 0
         self.max_active = 0
+        self.requests: list[tuple[str, dict[str, str]]] = []
 
     async def __aenter__(self):
         return self
@@ -128,7 +129,9 @@ class FullTextClient:
     async def __aexit__(self, *_args):
         return None
 
-    async def get(self, url: str) -> httpx.Response:
+    async def get(self, url: str, **kwargs: object) -> httpx.Response:
+        headers = kwargs.get("headers") or {}
+        self.requests.append((url, dict(headers)))
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         await asyncio.sleep(0)
@@ -144,18 +147,20 @@ def full_text_item(
     *,
     item_id: str = "news_1",
     source_id: str = "src_1",
+    title: str = "Market story",
     snippet: str | None = "RSS summary",
     raw_content: str | None = None,
+    source_type: str = "rss",
 ) -> NormalizedNewsItem:
     return NormalizedNewsItem(
         id=item_id,
         source_id=source_id,
-        title="Market story",
+        title=title,
         snippet=snippet,
         raw_content=raw_content,
         url="https://example.com/story",
         source_name="Example",
-        source_type="rss",
+        source_type=source_type,
         source_score=70,
         language="en",
         region="global",
@@ -225,10 +230,10 @@ async def test_provider_retry_returns_304_without_raising_status_error() -> None
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_content_uses_apex_tls_for_investing_www_feeds(monkeypatch) -> None:
+async def test_fetch_source_content_uses_normal_request(monkeypatch) -> None:
     requests: list[tuple[str, str, dict[str, object]]] = []
 
-    class InvestingClient:
+    class NormalClient:
         def __init__(self, **_kwargs: object) -> None:
             return None
 
@@ -245,15 +250,15 @@ async def test_fetch_source_content_uses_apex_tls_for_investing_www_feeds(monkey
             return response
 
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setattr("bot_worker.services.sources.httpx.AsyncClient", InvestingClient)
+    monkeypatch.setattr("bot_worker.services.sources.httpx.AsyncClient", NormalClient)
     source = NewsSource(
-        id="src_investing",
-        name="Investing - Stock News",
+        id="src_normal",
+        name="Normal - Stock News",
         source_type="rss",
         category="us_equity",
         region="us",
         asset_classes=["us_equity"],
-        url="https://www.investing.com/rss/news_25.rss",
+        url="https://example.com/rss/news_25.rss",
     )
 
     status_code, body, _headers = await fetch_source_content(source)
@@ -263,8 +268,12 @@ async def test_fetch_source_content_uses_apex_tls_for_investing_www_feeds(monkey
     assert requests == [
         (
             "GET",
-            "https://investing.com/rss/news_25.rss",
-            {"headers": {"Host": "www.investing.com"}},
+            "https://example.com/rss/news_25.rss",
+            {
+                "headers": {
+                    "User-Agent": "market-watch-assistant/0.1 (+https://github.com/market-watch-assistant)",
+                }
+            },
         )
     ]
 
@@ -496,7 +505,7 @@ async def test_fetch_source_uses_conditional_headers_and_handles_not_modified(mo
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_resolves_google_rss_item_url_before_insert(monkeypatch) -> None:
+async def test_fetch_source_keeps_google_rss_item_url_before_insert(monkeypatch) -> None:
     source = NewsSource(
         id="src_google_rss",
         name="FT Google RSS",
@@ -507,7 +516,6 @@ async def test_fetch_source_resolves_google_rss_item_url_before_insert(monkeypat
         url="https://news.google.com/rss/search?q=site:ft.com+markets",
     )
     google_url = "https://news.google.com/rss/articles/encoded?oc=5"
-    publisher_url = "https://www.ft.com/content/article-1"
     rss_body = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -550,23 +558,20 @@ async def test_fetch_source_resolves_google_rss_item_url_before_insert(monkeypat
         "bot_worker.services.sources.fetch_source_content",
         fake_fetch_source_content,
     )
-    monkeypatch.setattr(
-        "bot_worker.services.sources.gnewsdecoder",
-        lambda url: {"status": True, "decoded_url": publisher_url, "input": url},
-    )
     session = FetchSession()
 
     result = await fetch_source(session, source)
 
     assert result == {"status": "success", "items": 1, "inserted": 1}
-    assert session.insert_values[0]["raw_url"] == publisher_url
+    assert session.insert_values[0]["raw_url"] == google_url
+    assert session.insert_values[0]["raw_description"] == ""
     assert session.insert_values[0]["raw_payload"]["google_news_url"] == google_url
-    assert session.insert_values[0]["raw_payload"]["google_news_decoded_url"] == publisher_url
-    assert session.insert_values[0]["raw_payload"]["google_news_decode_status"] == "success"
+    assert "google_news_decoded_url" not in session.insert_values[0]["raw_payload"]
+    assert "google_news_decode_status" not in session.insert_values[0]["raw_payload"]
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_keeps_google_rss_item_url_when_decode_fails(monkeypatch) -> None:
+async def test_fetch_source_google_rss_does_not_call_url_resolver(monkeypatch) -> None:
     source = NewsSource(
         id="src_google_rss",
         name="Reuters Google RSS",
@@ -619,10 +624,6 @@ async def test_fetch_source_keeps_google_rss_item_url_when_decode_fails(monkeypa
         "bot_worker.services.sources.fetch_source_content",
         fake_fetch_source_content,
     )
-    monkeypatch.setattr(
-        "bot_worker.services.sources.gnewsdecoder",
-        lambda _url: {"status": False, "message": "decode failed"},
-    )
     session = FetchSession()
 
     result = await fetch_source(session, source)
@@ -630,8 +631,7 @@ async def test_fetch_source_keeps_google_rss_item_url_when_decode_fails(monkeypa
     assert result == {"status": "success", "items": 1, "inserted": 1}
     assert session.insert_values[0]["raw_url"] == google_url
     assert session.insert_values[0]["raw_payload"]["google_news_url"] == google_url
-    assert session.insert_values[0]["raw_payload"]["google_news_decode_status"] == "failed"
-    assert session.insert_values[0]["raw_payload"]["google_news_decode_message"] == "decode failed"
+    assert "google_news_decode_status" not in session.insert_values[0]["raw_payload"]
 
 
 @pytest.mark.asyncio
@@ -810,6 +810,30 @@ def test_full_text_priority_query_tightens_single_source_and_stale_backlog() -> 
     assert "event_clusters.source_count <= :source_count_2" in text
     assert "event_clusters.final_score >= :final_score_2" in text
     assert "normalized_news_items.created_at >= :created_at_1" in text
+    assert "normalized_news_items.source_type != :source_type_1" in text
+
+
+@pytest.mark.asyncio
+async def test_full_text_skips_google_rss_items_without_http(monkeypatch) -> None:
+    item = full_text_item(source_type="google-rss")
+    source = full_text_source()
+    source.source_type = "google-rss"
+    session = FullTextSession([item], {source.id: source})
+    client = FullTextClient([httpx.Response(200, text="<html><body>unused</body></html>")])
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: client,
+    )
+
+    stats = await extract_full_text_for_priority_events(session)
+
+    assert stats.attempted == 0
+    assert stats.skipped == 1
+    assert client.requests == []
+    assert item.full_text_available is False
+    assert item.full_text_extraction_status == "skipped"
+    assert item.full_text_last_error == "google_rss_feed_only"
 
 
 @pytest.mark.asyncio
@@ -908,7 +932,7 @@ async def test_full_text_preloads_sources_without_concurrent_session_get(monkeyp
 
 @pytest.mark.asyncio
 async def test_full_text_terminal_http_error_without_fallback_is_skipped(monkeypatch) -> None:
-    item = full_text_item(snippet=None, raw_content=None)
+    item = full_text_item(title="", snippet=None, raw_content=None)
     source = full_text_source()
     session = FullTextSession([item], {source.id: source})
 
@@ -923,6 +947,32 @@ async def test_full_text_terminal_http_error_without_fallback_is_skipped(monkeyp
     assert stats.failed == 0
     assert item.full_text_available is False
     assert item.full_text_extraction_status == "skipped"
+    assert item.full_text_last_http_status == 403
+
+
+@pytest.mark.asyncio
+async def test_full_text_terminal_http_error_uses_title_fallback(monkeypatch) -> None:
+    item = full_text_item(
+        title="Oil supply shock analysis",
+        snippet=None,
+        raw_content=None,
+    )
+    source = full_text_source()
+    session = FullTextSession([item], {source.id: source})
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: FullTextClient([httpx.Response(403, text="blocked")]),
+    )
+
+    stats = await extract_full_text_for_priority_events(session)
+
+    assert stats.attempted == 1
+    assert stats.fallback_used == 1
+    assert stats.skipped == 0
+    assert item.raw_content == "Oil supply shock analysis"
+    assert item.full_text_available is True
+    assert item.full_text_extraction_status == "fallback"
     assert item.full_text_last_http_status == 403
 
 
@@ -968,6 +1018,59 @@ async def test_full_text_success_sets_extracted_status(monkeypatch) -> None:
     assert item.full_text_available is True
     assert item.full_text_extraction_status == "extracted"
     assert "Market text" in item.raw_content
+
+
+@pytest.mark.asyncio
+async def test_full_text_fetch_uses_article_user_agent(monkeypatch) -> None:
+    item = full_text_item()
+    source = full_text_source()
+    session = FullTextSession([item], {source.id: source})
+    client = FullTextClient(
+        [
+            httpx.Response(
+                200,
+                text="<html><body><article>Market text with enough detail.</article></body></html>",
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: client,
+    )
+
+    stats = await extract_full_text_for_priority_events(session)
+
+    assert stats.extracted == 1
+    assert client.requests[0][1]["User-Agent"].startswith("market-watch-assistant/")
+
+
+@pytest.mark.asyncio
+async def test_full_text_success_uses_shared_boilerplate_cleanup(monkeypatch) -> None:
+    item = full_text_item()
+    source = full_text_source()
+    session = FullTextSession([item], {source.id: source})
+    html = """
+    <html><body><article>
+      <p>Market text with enough useful detail.</p>
+      <div class="box-vif">
+        <p>Diễn đàn Đầu tư Việt Nam 2026 - Summer Summit</p>
+        <p>Vietnam Investment Forum 2026 - Summer Summit quy tụ chuyên gia.</p>
+      </div>
+    </article></body></html>
+    """
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: FullTextClient([httpx.Response(200, text=html)]),
+    )
+
+    stats = await extract_full_text_for_priority_events(session)
+
+    assert stats.extracted == 1
+    assert item.raw_content is not None
+    assert "Market text with enough useful detail" in item.raw_content
+    assert "Vietnam Investment Forum 2026" not in item.raw_content
 
 
 def test_pipeline_metrics_detects_stages_slower_than_prior_average() -> None:

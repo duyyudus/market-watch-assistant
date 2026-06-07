@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+from common.article_text import extract_article_text
+
 
 @dataclass(frozen=True)
 class ParsedCrawlerArticle:
@@ -174,7 +176,7 @@ def parse_article_html(html: str, *, url: str) -> ParsedCrawlerArticle:
         )
         or (parser.times[0] if parser.times else None)
     )
-    content = extract_readable_text(html)
+    content = extract_readable_text(html, url=url)
     return ParsedCrawlerArticle(
         title=normalize_text(title),
         url=url,
@@ -213,18 +215,8 @@ async def crawl_section_articles(
     return articles
 
 
-def extract_readable_text(html: str) -> str | None:
-    try:
-        import trafilatura  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 - parser fallback keeps crawler usable
-        trafilatura = None
-    if trafilatura is not None:
-        text = trafilatura.extract(html)
-        if text:
-            return normalize_text(text)
-    text = re.sub(r"<(script|style).*?</\1>", " ", html, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return normalize_text(text) or None
+def extract_readable_text(html: str, *, url: str | None = None) -> str | None:
+    return extract_article_text(html, url=url)
 
 
 def _parse(html: str) -> _CrawlerHTMLParser:

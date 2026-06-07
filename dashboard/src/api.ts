@@ -528,7 +528,9 @@ export const api = {
     }),
   previewSourceArticle: (payload: {
     url: string;
+    source_type?: string | null;
     fallback_snippet?: string | null;
+    fallback_title?: string | null;
     max_chars: number;
   }) =>
     request<SourceArticlePreviewResponse>("/sources/preview/article", {

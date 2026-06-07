@@ -10,7 +10,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import EventCluster, EventClusterItem, NewsSource, NormalizedNewsItem
+from common.article_fallbacks import first_article_fallback_text
 from common.article_text import extract_article_text
+from common.source_policies import article_fetch_headers
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ def build_full_text_priority_stmt(
         .join(EventClusterItem, EventClusterItem.news_item_id == NormalizedNewsItem.id)
         .join(EventCluster, EventCluster.id == EventClusterItem.event_cluster_id)
         .where(NormalizedNewsItem.full_text_available.is_(False))
+        .where(NormalizedNewsItem.source_type != "google-rss")
         .where(
             or_(
                 NormalizedNewsItem.full_text_extraction_status == "pending",
@@ -144,6 +147,10 @@ async def _extract_one_item(
 ) -> FullTextStats:
     source = sources.get(item.source_id)
     stats = source_stats.setdefault(item.source_id, _empty_source_full_text_stats())
+    if item.source_type == "google-rss" or getattr(source, "source_type", None) == "google-rss":
+        stats["skipped"] += 1
+        _mark_skipped(item, reason="google_rss_feed_only")
+        return FullTextStats(skipped=1)
     if _source_extraction_limited(source):
         stats["attempted"] += 1
         _mark_attempt(item)
@@ -157,7 +164,7 @@ async def _extract_one_item(
     stats["attempted"] += 1
     _mark_attempt(item)
     try:
-        response = await client.get(item.url)
+        response = await client.get(item.url, headers=article_fetch_headers())
         item.full_text_last_http_status = response.status_code
         if response.status_code in TERMINAL_HTTP_STATUSES:
             stats["terminal_failures"] += 1
@@ -172,7 +179,7 @@ async def _extract_one_item(
             _mark_retry(item, reason=f"http_{response.status_code}")
             return FullTextStats(attempted=1, retryable_failed=1, failed=1)
         response.raise_for_status()
-        text = extract_article_text(response.text)
+        text = extract_article_text(response.text, url=item.url)
         if not text:
             stats["terminal_failures"] += 1
             if _use_fallback(item, reason="no_text_extracted"):
@@ -200,7 +207,7 @@ def _mark_attempt(item: NormalizedNewsItem) -> None:
 
 
 def _use_fallback(item: NormalizedNewsItem, *, reason: str) -> bool:
-    fallback = (item.raw_content or item.snippet or "").strip()
+    fallback = first_article_fallback_text(item.raw_content, item.snippet, item.title)
     if not fallback:
         return False
     item.raw_content = fallback

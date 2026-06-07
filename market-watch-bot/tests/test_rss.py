@@ -60,3 +60,34 @@ def test_parse_rss_items_cleans_escaped_html_and_entities() -> None:
     assert len(items) == 1
     assert items[0].title == "Tỷ giá euro ngày 5/6"
     assert items[0].description == "Tỷ giá euro sáng ngày 5/6 đã nhích lên tại nhiều ngân hàng."
+
+
+def test_parse_rss_items_ignores_empty_dc_description() -> None:
+    fixture = """<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>CoinDesk Feed</title>
+    <item>
+      <title>Bitcoin routines</title>
+      <link>https://example.com/btc</link>
+      <description>Bitcoin price recovers after correction.</description>
+      <dc:description/>
+      <guid>btc-1</guid>
+    </item>
+    <item>
+      <title>Ethereum routines</title>
+      <link>https://example.com/eth</link>
+      <description>Ethereum gas fees drop.</description>
+      <dc:description></dc:description>
+      <guid>eth-1</guid>
+    </item>
+  </channel>
+</rss>
+"""
+    items = parse_rss_items(fixture)
+
+    assert len(items) == 2
+    assert items[0].title == "Bitcoin routines"
+    assert items[0].description == "Bitcoin price recovers after correction."
+    assert items[1].title == "Ethereum routines"
+    assert items[1].description == "Ethereum gas fees drop."

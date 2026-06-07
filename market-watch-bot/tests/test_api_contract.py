@@ -539,11 +539,18 @@ async def test_source_article_preview_extracts_and_caps_text(
     from api_server.app.services import sources as source_service
 
     async def fake_preview_article_url(
-        *, url: str, fallback_snippet: str | None, max_chars: int
+        *,
+        url: str,
+        fallback_snippet: str | None,
+        fallback_title: str | None,
+        max_chars: int,
+        source_type: str | None,
     ) -> ArticlePreviewResult:
         assert url == "https://example.com/oil"
         assert fallback_snippet == "RSS fallback"
+        assert fallback_title == "Oil title"
         assert max_chars == 20
+        assert source_type == "rss"
         return ArticlePreviewResult.from_text(
             url=url,
             http_status=200,
@@ -560,6 +567,8 @@ async def test_source_article_preview_extracts_and_caps_text(
         json={
             "url": "https://example.com/oil",
             "fallback_snippet": "RSS fallback",
+            "fallback_title": "Oil title",
+            "source_type": "rss",
             "max_chars": 20,
         },
     )

@@ -335,9 +335,7 @@ async def test_fetch_source_queries_db_and_ignores_existing_urls(monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_google_rss_skips_resolving_existing_urls(monkeypatch) -> None:
-    from bot_worker.rss import ParsedFeedItem
-
+async def test_fetch_source_google_rss_skips_existing_urls_without_resolving(monkeypatch) -> None:
     source = NewsSource(
         id="src_google_rss",
         name="Reuters Google News",
@@ -395,28 +393,17 @@ async def test_fetch_source_google_rss_skips_resolving_existing_urls(monkeypatch
     async def fake_fetch_source_content(_source):
         return 200, GOOGLE_RSS_XML, {}
 
-    resolved_urls = []
-    def fake_resolve_google_rss_item_url(item):
-        resolved_urls.append(item.url)
-        return ParsedFeedItem(
-            title=item.title,
-            url="https://resolved.example.com/some-path",
-            description=item.description,
-            published=item.published,
-            guid=item.guid,
-            raw_payload={"google_news_url": item.url},
-        )
-
     monkeypatch.setattr(source_services, "fetch_source_content", fake_fetch_source_content)
-    monkeypatch.setattr(
-        source_services, "_resolve_google_rss_item_url", fake_resolve_google_rss_item_url
-    )
 
     result = await source_services.fetch_source(FetchSession(), source)
 
     assert result["status"] == "success"
     assert "https://news.google.com/rss/articles/new_url" in queried_raw_payload_urls
     assert "https://news.google.com/rss/articles/existing_url" in queried_raw_payload_urls
-    assert resolved_urls == ["https://news.google.com/rss/articles/new_url"]
     assert result["items"] == 1
     assert result["inserted"] == 1
+    assert executed_values[0]["raw_url"] == "https://news.google.com/rss/articles/new_url"
+    assert executed_values[0]["raw_payload"]["google_news_url"] == (
+        "https://news.google.com/rss/articles/new_url"
+    )
+    assert "google_news_decode_status" not in executed_values[0]["raw_payload"]

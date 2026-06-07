@@ -427,7 +427,7 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
   });
   apiMock.presets.mockResolvedValue({
     sources: {
-      source_types: ["rss", "official"],
+      source_types: ["rss", "google-rss", "official"],
       regions: ["global", "us", "vietnam", "crypto"],
       categories: ["global_macro", "crypto", "vietnam_equity"],
       languages: ["en", "vi"],
@@ -877,6 +877,8 @@ describe("App data states", () => {
       expect(apiMock.previewSourceArticle).toHaveBeenCalledWith({
         url: "https://example.com/bitcoin-etf",
         fallback_snippet: "Fresh inflows hit spot Bitcoin ETFs.",
+        fallback_title: "Bitcoin ETF inflows rise",
+        source_type: "rss",
         max_chars: 20000,
       }),
     );
@@ -887,6 +889,65 @@ describe("App data states", () => {
       target: { value: "https://example.com/changed.xml" },
     });
     expect(screen.queryByText("Bitcoin ETF inflows rise")).not.toBeInTheDocument();
+  });
+
+  it("skips article text preview for google rss sources", async () => {
+    apiMock.previewSource.mockResolvedValue({
+      status: "success",
+      url: "https://example.com/bloomberg.xml",
+      source_type: "google-rss",
+      http_status: 200,
+      duration_ms: 24,
+      item_count: 1,
+      items: [
+        {
+          title: "Oil supply shock analysis",
+          url: "https://www.bloomberg.com/news/articles/oil-supply-shock",
+          description: "",
+          published_at: "2026-06-06T13:00:00Z",
+          guid: "oil-1",
+        },
+      ],
+    });
+    apiMock.previewSourceArticle.mockResolvedValue({
+      status: "skipped",
+      url: "https://www.bloomberg.com/news/articles/oil-supply-shock",
+      http_status: null,
+      duration_ms: 31,
+      text: "",
+      text_length: 0,
+      truncated: false,
+      error_message: "google_rss_feed_only",
+    });
+
+    await renderLoadedApp();
+    switchTo("sources");
+    await screen.findByTestId("source-card-src_1");
+
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    fireEvent.change(screen.getByLabelText("Source URL"), {
+      target: { value: "https://example.com/bloomberg.xml" },
+    });
+    fireEvent.change(screen.getByLabelText("Source type"), { target: { value: "google-rss" } });
+    fireEvent.click(screen.getByRole("button", { name: /poll preview/i }));
+
+    expect(await screen.findByText("Oil supply shock analysis")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /preview article Oil supply shock analysis/i }));
+    await waitFor(() =>
+      expect(apiMock.previewSourceArticle).toHaveBeenCalledWith({
+        url: "https://www.bloomberg.com/news/articles/oil-supply-shock",
+        fallback_snippet: "",
+        fallback_title: "Oil supply shock analysis",
+        source_type: "google-rss",
+        max_chars: 20000,
+      }),
+    );
+
+    expect(await screen.findByText(/google_rss_feed_only/i)).toBeInTheDocument();
+    expect(screen.getByText("skipped · HTTP - · 31ms · 0 chars")).toBeInTheDocument();
+    expect(screen.getByText("No article text available.")).toBeInTheDocument();
+    expect(screen.queryByText(/^Unable to preview article$/i)).not.toBeInTheDocument();
   });
 
   it("previews an existing source feed and article text from the edit form", async () => {
@@ -941,6 +1002,8 @@ describe("App data states", () => {
       expect(apiMock.previewSourceArticle).toHaveBeenCalledWith({
         url: "https://example.com/fed-minutes",
         fallback_snippet: "Policy makers discuss rates.",
+        fallback_title: "Fed minutes preview",
+        source_type: "rss",
         max_chars: 20000,
       }),
     );
