@@ -3,6 +3,7 @@ import { Database, RefreshCcw } from "lucide-react";
 import type { EventCluster } from "../../api";
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/EmptyState";
+import { ResponsiveDataList } from "../../components/ResponsiveDataList";
 import { SectionError } from "../../components/SectionError";
 import { SortableHeader } from "../../components/SortableHeader";
 import { useSortableData } from "../../hooks/useSortableData";
@@ -47,30 +48,28 @@ export function EventRows({
   }
 
   return (
-    <>
-      <div className="grid gap-3 lg:hidden">
-        {sortedEvents.map((event) => (
-          <button
-            className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-left"
-            data-testid={`event-card-${event.id}`}
-            key={event.id}
-            onClick={() => onSelect?.(event.id)}
-            type="button"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <Badge tone={scoreTone(event.final_score)}>{event.final_score}</Badge>
-              <span className="text-xs text-zinc-500">{formatTime(event.last_updated_at)}</span>
-            </div>
-            <div className="mt-2 text-sm font-semibold text-zinc-100">
-              {event.canonical_headline}
-            </div>
-            <div className="mt-2 text-xs text-base-content/60">
-              {event.status} · {event.source_count} sources
-            </div>
-          </button>
-        ))}
-      </div>
-      <div className="hidden overflow-x-auto lg:block">
+    <ResponsiveDataList
+      cards={sortedEvents.map((event) => (
+        <button
+          className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-left"
+          data-testid={`event-card-${event.id}`}
+          key={event.id}
+          onClick={() => onSelect?.(event.id)}
+          type="button"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <Badge tone={scoreTone(event.final_score)}>{event.final_score}</Badge>
+            <span className="text-xs text-zinc-500">{formatTime(event.last_updated_at)}</span>
+          </div>
+          <div className="mt-2 text-sm font-semibold text-zinc-100">
+            {event.canonical_headline}
+          </div>
+          <div className="mt-2 text-xs text-base-content/60">
+            {event.status} · {event.source_count} sources
+          </div>
+        </button>
+      ))}
+      table={
       <table className="table w-full">
         <thead>
           <tr className="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider">
@@ -138,7 +137,7 @@ export function EventRows({
           ))}
         </tbody>
       </table>
-      </div>
-    </>
+      }
+    />
   );
 }

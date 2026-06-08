@@ -20,6 +20,9 @@ export function createResourceCache(options: { ttlMs: number; now?: () => number
       const inFlight = loader().then((value) => {
         entries.set(key, { value, expiresAt: now() + options.ttlMs });
         return value;
+      }).catch((error) => {
+        entries.delete(key);
+        throw error;
       });
       entries.set(key, { ...entry, expiresAt: 0, inFlight });
       return inFlight;

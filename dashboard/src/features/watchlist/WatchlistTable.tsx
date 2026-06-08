@@ -1,13 +1,15 @@
-import { Pencil, Plus, RefreshCcw, Star, Trash2, X } from "lucide-react";
+import { Pencil, Plus, RefreshCcw, Star, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { api, type ConfigurationPresets, type WatchlistEntry, type WatchlistPayload } from "../../api";
 import { Badge } from "../../components/Badge";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { EmptyState } from "../../components/EmptyState";
+import { InlineEditPanel } from "../../components/InlineEditPanel";
 import { Panel } from "../../components/Panel";
 import { SectionError } from "../../components/SectionError";
+import { SortControls } from "../../components/SortControls";
 import { useSortableData } from "../../hooks/useSortableData";
-import { classNames } from "../../lib/classNames";
 
 export function WatchlistTable({
   rows,
@@ -117,26 +119,18 @@ export function WatchlistTable({
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/40 pb-3 mb-4 text-xs text-zinc-500">
-            <span>{sortedRows.length} assets watched</span>
+            <span>{sortedRows.length} entries</span>
             <div className="flex items-center gap-3">
-              <span className="text-[11px] text-zinc-500">Sort by:</span>
-              <SortButton
-                active={sortConfig.key === "symbol"}
+              <SortControls
+                currentSortKey={sortConfig.key}
                 direction={sortConfig.direction}
-                label="Symbol"
-                onClick={() => requestSort("symbol")}
-              />
-              <SortButton
-                active={sortConfig.key === "name"}
-                direction={sortConfig.direction}
-                label="Name"
-                onClick={() => requestSort("name")}
-              />
-              <SortButton
-                active={sortConfig.key === "tier"}
-                direction={sortConfig.direction}
-                label="Tier"
-                onClick={() => requestSort("tier")}
+                label="Sort by:"
+                onSort={requestSort}
+                options={[
+                  { key: "symbol", label: "Symbol" },
+                  { key: "name", label: "Name" },
+                  { key: "tier", label: "Tier" },
+                ]}
               />
             </div>
           </div>
@@ -189,60 +183,17 @@ export function WatchlistTable({
           </div>
         </>
       )}
-      {deletingEntry ? (
-        <div className="modal modal-visible" role="dialog" aria-modal="true">
-          <div className="modal-box border border-zinc-800 bg-zinc-950">
-            <h3 className="font-bold text-lg text-zinc-100">Delete watchlist entry?</h3>
-            <p className="py-4 text-sm text-base-content/75">
-              Are you sure you want to delete <span className="font-semibold text-zinc-200">{deletingEntry.symbol ?? deletingEntry.name}</span>? This action cannot be undone.
-            </p>
-            <div className="modal-action gap-2">
-              <button
-                className="btn btn-sm btn-ghost"
-                onClick={() => setDeletingEntry(null)}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-sm btn-error"
-                onClick={() => void confirmDelete()}
-                type="button"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-          <div className="modal-backdrop bg-black/60" onClick={() => setDeletingEntry(null)}></div>
-        </div>
-      ) : null}
+      <ConfirmDialog
+        confirmLabel="Delete"
+        open={Boolean(deletingEntry)}
+        title="Delete watchlist entry?"
+        description={`Are you sure you want to delete ${
+          deletingEntry?.symbol ?? deletingEntry?.name ?? "this watchlist entry"
+        }? This action cannot be undone.`}
+        onCancel={() => setDeletingEntry(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </Panel>
-  );
-}
-
-function SortButton({
-  active,
-  direction,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  direction: "asc" | "desc";
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={classNames(
-        "hover:text-primary transition-colors flex items-center gap-0.5",
-        active && "text-primary font-semibold",
-      )}
-      type="button"
-    >
-      {label}
-      {active ? (direction === "asc" ? " ▲" : " ▼") : ""}
-    </button>
   );
 }
 
@@ -296,17 +247,11 @@ function WatchlistForm({
   }
 
   return (
-    <div className="mb-5 rounded-md border border-zinc-800 bg-zinc-950/40 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold text-zinc-200">
-          {isNew ? "New watchlist entry" : "Edit watchlist entry"}
-        </div>
-        <button className="btn btn-xs btn-ghost" onClick={onCancel} type="button">
-          <X className="h-4 w-4" />
-          Cancel
-        </button>
-      </div>
-      {formError ? <div className="alert alert-error mb-3 text-sm">{formError}</div> : null}
+    <InlineEditPanel
+      title={isNew ? "New watchlist entry" : "Edit watchlist entry"}
+      error={formError}
+      onCancel={onCancel}
+    >
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <label className="form-control">
           <span className="label-text">Symbol</span>
@@ -384,7 +329,12 @@ function WatchlistForm({
           <span className="label-text">Aliases</span>
           <input
             className="input input-bordered input-sm"
-            onChange={(event) => update("aliases", event.target.value.split(","))}
+            onChange={(event) =>
+              update(
+                "aliases",
+                event.target.value.split(",").map((alias) => alias.trim()),
+              )
+            }
             value={form.aliases.join(", ")}
           />
         </label>
@@ -408,7 +358,7 @@ function WatchlistForm({
           Save watchlist entry
         </button>
       </div>
-    </div>
+    </InlineEditPanel>
   );
 }
 

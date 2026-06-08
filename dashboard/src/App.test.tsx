@@ -46,6 +46,7 @@ class MockEventSource {
   static instances: MockEventSource[] = [];
 
   onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
   private listeners: Record<string, Array<(event: MessageEvent) => void>> = {};
   url: string;
 
@@ -66,6 +67,10 @@ class MockEventSource {
       listener(event);
     }
     this.onmessage?.(event);
+  }
+
+  error() {
+    this.onerror?.(new Event("error"));
   }
 }
 
@@ -640,6 +645,14 @@ describe("App data states", () => {
     await waitFor(() => expect(apiMock.alerts).toHaveBeenCalledTimes(1));
   });
 
+  it("shows live update connection errors", async () => {
+    await renderLoadedApp();
+
+    act(() => MockEventSource.instances[0].error());
+
+    expect(await screen.findByText(/live updates disconnected/i)).toBeInTheDocument();
+  });
+
   it("renders detailed event timeline scoring analysis and actions", async () => {
     await renderLoadedApp();
     switchTo("events");
@@ -682,6 +695,17 @@ describe("App data states", () => {
     );
   });
 
+  it("shows failed queued command errors", async () => {
+    apiMock.createCommand.mockRejectedValueOnce(new Error("queue offline"));
+    await renderLoadedApp();
+    switchTo("sources");
+
+    fireEvent.click(await screen.findByRole("button", { name: /health/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /test fetch Federal Reserve/i }));
+
+    expect(await screen.findByText("queue offline")).toBeInTheDocument();
+  });
+
   it("renders disabled source health as neutral disabled state", async () => {
     apiMock.sourceHealth.mockResolvedValue(
       envelope([
@@ -707,6 +731,17 @@ describe("App data states", () => {
 
     expect(await screen.findAllByText("disabled")).not.toHaveLength(0);
     expect(screen.queryByText("degraded")).not.toBeInTheDocument();
+  });
+
+  it("shows source toggle errors", async () => {
+    apiMock.setSourceEnabled.mockRejectedValueOnce(new Error("source update failed"));
+    await renderLoadedApp();
+    switchTo("sources");
+
+    const sourceCard = await screen.findByTestId("source-card-src_1");
+    fireEvent.click(within(sourceCard).getByRole("checkbox", { name: /disable Federal Reserve/i }));
+
+    expect(await screen.findByText("source update failed")).toBeInTheDocument();
   });
 
   it("persists auto refresh preference and reloads on interval", async () => {
@@ -1119,6 +1154,18 @@ describe("App data states", () => {
     await waitFor(() => expect(apiMock.deleteWatchlistEntry).toHaveBeenCalledWith("watch_1"));
   });
 
+  it("trims watchlist aliases while editing", async () => {
+    await renderLoadedApp();
+    switchTo("watchlist");
+
+    fireEvent.click(await screen.findByRole("button", { name: /edit SPY/i }));
+    fireEvent.change(screen.getByLabelText("Aliases"), {
+      target: { value: "SPY, S&P 500,  SPDR" },
+    });
+
+    expect(screen.getByLabelText("Aliases")).toHaveValue("SPY, S&P 500, SPDR");
+  });
+
   it("saves alert policy settings from operations", async () => {
     await renderLoadedApp();
     switchTo("operations");
@@ -1154,8 +1201,8 @@ describe("App data states", () => {
 
     await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
 
-    // Switch to controls sub-tab to make inputs visible in DOM
-    fireEvent.click(screen.getByRole("button", { name: /setting/i }));
+    // Switch to settings sub-tab to make inputs visible in DOM
+    fireEvent.click(screen.getByRole("button", { name: /settings/i }));
     const channelType = await screen.findByLabelText("Channel type");
     fireEvent.change(channelType, { target: { value: "webhook" } });
 
@@ -1194,6 +1241,43 @@ describe("App data states", () => {
         enabled: true,
       }),
     );
+  });
+
+  it("shows alert action errors", async () => {
+    apiMock.acknowledgeAlert.mockRejectedValueOnce(new Error("alert update failed"));
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    fireEvent.click(
+      within(await screen.findByTestId("alert-row-alert_1")).getByRole("button", {
+        name: /acknowledge/i,
+      }),
+    );
+
+    expect(await screen.findByText("alert update failed")).toBeInTheDocument();
+  });
+
+  it("formats alert decisions with every underscore replaced", async () => {
+    apiMock.alerts.mockResolvedValue(
+      envelope([
+        {
+          id: "alert_multi",
+          event_cluster_id: "evt_1",
+          decision: "some_multi_word_value",
+          reason: "score_above_immediate_threshold",
+          channel: "telegram",
+          sent_at: "2026-05-29T13:05:00Z",
+          created_at: "2026-05-29T13:05:00Z",
+          event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
+          latest_delivery_status: "sent",
+          acknowledged_at: null,
+        },
+      ]),
+    );
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    expect(await screen.findAllByText("some multi word value")).not.toHaveLength(0);
   });
 
   it("shows alert detail metadata and related event news for the selected alert", async () => {

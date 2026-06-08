@@ -1,5 +1,5 @@
-import { FileText, Pencil, Plus, Radio, RefreshCcw, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Plus, Radio, RefreshCcw } from "lucide-react";
+import { useRef, useState } from "react";
 
 import {
   api,
@@ -12,11 +12,14 @@ import {
   type SourcePreviewResponse,
 } from "../../api";
 import { EmptyState } from "../../components/EmptyState";
+import { FeatureTabs } from "../../components/FeatureTabs";
 import { Panel } from "../../components/Panel";
 import { SectionError } from "../../components/SectionError";
-import { SortableHeader } from "../../components/SortableHeader";
 import { useSortableData } from "../../hooks/useSortableData";
 import type { QueueCommand } from "../../types/dashboard";
+import { SourceConfiguredList } from "./SourceConfiguredList";
+import { SourceForm, emptySourcePayload } from "./SourceForm";
+import { SourceHealthPanel } from "./SourceHealthPanel";
 
 export function SourcesTable({
   rows,
@@ -68,8 +71,13 @@ export function SourcesTable({
   }
 
   async function toggle(row: Source) {
-    await api.setSourceEnabled(row.id, !row.enabled);
-    await reload();
+    setBulkError(null);
+    try {
+      await api.setSourceEnabled(row.id, !row.enabled);
+      await reload();
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : "Unable to update source");
+    }
   }
 
   async function toggleAll() {
@@ -206,22 +214,14 @@ export function SourcesTable({
   return (
     <Panel title="Sources">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="tabs tabs-boxed border border-zinc-800/60 bg-zinc-950/60 p-1">
-          <button
-            className={`tab tab-sm ${subTab === "configured" ? "tab-active" : ""}`}
-            onClick={() => setSubTab("configured")}
-            type="button"
-          >
-            Configured
-          </button>
-          <button
-            className={`tab tab-sm ${subTab === "health" ? "tab-active" : ""}`}
-            onClick={() => setSubTab("health")}
-            type="button"
-          >
-            Health
-          </button>
-        </div>
+        <FeatureTabs
+          activeTab={subTab}
+          onChange={setSubTab}
+          tabs={[
+            { id: "configured", label: "Configured" },
+            { id: "health", label: "Health" },
+          ]}
+        />
         <div className="flex flex-wrap items-center gap-3">
           {rows.length ? (
             <label className="label cursor-pointer gap-2 rounded-md border border-zinc-800/60 bg-zinc-950/40 px-3 py-1.5">
@@ -270,7 +270,13 @@ export function SourcesTable({
         />
       ) : null}
       {subTab === "health" ? (
-        <SourceHealthPanel health={health} rows={rows} queue={queue} reload={reload} toggle={toggle} />
+        <SourceHealthPanel
+          health={health}
+          sources={rows}
+          queue={queue}
+          reload={reload}
+          toggle={toggle}
+        />
       ) : error ? (
         <SectionError title="Sources unavailable" message={error} retry={reload} />
       ) : sortedRows.length === 0 ? (
@@ -286,632 +292,15 @@ export function SourcesTable({
           }
         />
       ) : (
-        <>
-        <div className="grid gap-3 lg:hidden">
-          {sortedRows.map((row) => (
-            <div
-              className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3"
-              data-testid={`source-card-${row.id}`}
-              key={row.id}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-semibold text-zinc-100">{row.name}</div>
-                <input
-                  aria-label={`${row.enabled ? "Disable" : "Enable"} ${row.name}`}
-                  className="toggle toggle-sm"
-                  checked={row.enabled}
-                  onChange={() => void toggle(row)}
-                  type="checkbox"
-                />
-              </div>
-              <div className="mt-2 text-xs text-base-content/60">
-                {row.region} · {row.category} · {row.polling_interval_seconds}s
-              </div>
-              <button
-                aria-label={`Edit ${row.name}`}
-                className="btn btn-xs btn-outline btn-primary mt-3"
-                onClick={() => startEdit(row)}
-                type="button"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-                Edit
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="hidden overflow-x-auto lg:block">
-          <table className="table w-full max-w-4xl">
-            <thead>
-              <tr className="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider">
-                <SortableHeader
-                  label="Name"
-                  sortKey="name"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Region"
-                  sortKey="region"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Category"
-                  sortKey="category"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Score"
-                  sortKey="source_score"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Interval"
-                  sortKey="polling_interval_seconds"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Enabled"
-                  sortKey="enabled"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <th className="px-4 py-3 text-left">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/40">
-              {sortedRows.map((row) => (
-                <tr key={row.id} className="border-b border-zinc-800/30">
-                  <td className="py-3 px-4 text-sm font-semibold text-zinc-200">{row.name}</td>
-                  <td className="py-3 px-4 text-zinc-400 font-normal text-xs">{row.region}</td>
-                  <td className="py-3 px-4 text-zinc-400 font-normal text-xs">{row.category}</td>
-                  <td className="py-3 px-4 text-zinc-400 font-normal text-xs">
-                    {row.source_score}
-                  </td>
-                  <td className="py-3 px-4 text-zinc-400 font-normal text-xs">
-                    {row.polling_interval_seconds}s
-                  </td>
-                  <td className="py-3 px-4">
-                    <input
-                      aria-label={`${row.enabled ? "Disable" : "Enable"} ${row.name}`}
-                      className="toggle toggle-sm"
-                      checked={row.enabled}
-                      onChange={() => void toggle(row)}
-                      type="checkbox"
-                    />
-                  </td>
-                  <td className="py-3 px-4">
-                    <button
-                      aria-label={`Edit ${row.name}`}
-                      className="btn btn-xs btn-ghost"
-                      onClick={() => startEdit(row)}
-                      type="button"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        </>
+        <SourceConfiguredList
+          sources={sortedRows}
+          sortKey={sortConfig.key}
+          sortDirection={sortConfig.direction}
+          onSort={requestSort}
+          onEdit={startEdit}
+          onToggle={(source) => void toggle(source)}
+        />
       )}
     </Panel>
   );
-}
-
-function SourceHealthPanel({
-  health,
-  rows,
-  queue,
-  reload,
-  toggle,
-}: {
-  health: SourceHealth[];
-  rows: Source[];
-  queue: QueueCommand;
-  reload: () => Promise<void>;
-  toggle: (row: Source) => Promise<void>;
-}) {
-  if (!health.length) {
-    return (
-      <EmptyState
-        icon={Radio}
-        title="No source health yet"
-        body="Fetch logs will appear after source polling runs."
-        action={
-          <button className="btn btn-sm btn-outline" onClick={() => void reload()} type="button">
-            <RefreshCcw className="h-4 w-4" />
-            Refresh
-          </button>
-        }
-      />
-    );
-  }
-
-  return (
-    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {health.map((row) => {
-        const source = rows.find((item) => item.id === row.source_id);
-        return (
-          <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-4" key={row.source_id}>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-bold text-zinc-100">{row.name}</div>
-                <div className="mt-1 text-xs text-base-content/60">
-                  {row.region} · {row.category} · {row.latest_status ?? "no fetch"}
-                </div>
-              </div>
-              <span
-                className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${healthStatusClass(
-                  row.health_status,
-                )}`}
-              >
-                {row.health_status}
-              </span>
-            </div>
-            <div className="mt-3 grid gap-2 text-xs text-base-content/70 sm:grid-cols-3">
-              <div>{row.average_latency_ms ?? "-"}ms avg</div>
-              <div>{row.consecutive_failure_count} failures</div>
-              <div>{row.enabled ? "enabled" : "disabled"}</div>
-            </div>
-            <div className="mt-3 flex h-12 items-end gap-1">
-              {row.daily_item_counts.map((point) => (
-                <div
-                  className="w-4 rounded-t bg-primary/80 text-center text-[10px] text-base-100"
-                  key={point.date}
-                  style={{ height: `${Math.max(8, Math.min(48, point.count * 8))}px` }}
-                  title={point.date}
-                >
-                  {point.count}
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                aria-label={`Test fetch ${row.name}`}
-                className="btn btn-xs btn-outline btn-primary"
-                onClick={() => queue("source.fetch", { source_id: row.source_id })}
-                type="button"
-              >
-                Test fetch
-              </button>
-              {source ? (
-                <button
-                  className="btn btn-xs btn-outline btn-primary"
-                  onClick={() => void toggle(source)}
-                  type="button"
-                >
-                  {source.enabled ? "Disable" : "Enable"}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function emptySourcePayload(presets?: ConfigurationPresets["sources"] | null): SourcePayload {
-  return {
-    name: "",
-    url: "",
-    source_type: presets?.source_types[0] ?? "",
-    category: presets?.categories[0] ?? "",
-    region: presets?.regions[0] ?? "",
-    language: presets?.languages[0] ?? "",
-    source_score: 60,
-    polling_interval_seconds: 300,
-    enabled: true,
-  };
-}
-
-function SourceForm({
-  form,
-  formError,
-  isNew,
-  presets,
-  saving,
-  setForm,
-  preview,
-  previewError,
-  previewLoading,
-  articlePreview,
-  articleError,
-  articleLoadingUrl,
-  selectedPreviewItem,
-  onCancel,
-  onFormChange,
-  onPollPreview,
-  onPreviewArticle,
-  onSave,
-}: {
-  form: SourcePayload;
-  formError: string | null;
-  isNew: boolean;
-  presets: ConfigurationPresets["sources"] | null;
-  saving: boolean;
-  setForm: (value: SourcePayload) => void;
-  preview: SourcePreviewResponse | null;
-  previewError: string | null;
-  previewLoading: boolean;
-  articlePreview: SourceArticlePreviewResponse | null;
-  articleError: string | null;
-  articleLoadingUrl: string | null;
-  selectedPreviewItem: SourcePreviewItem | null;
-  onCancel: () => void;
-  onFormChange: () => void;
-  onPollPreview: () => Promise<void>;
-  onPreviewArticle: (item: SourcePreviewItem) => Promise<void>;
-  onSave: () => Promise<void>;
-}) {
-  const formRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (formRef.current && typeof formRef.current.scrollIntoView === "function") {
-      formRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, []);
-
-  function update<K extends keyof SourcePayload>(key: K, value: SourcePayload[K]) {
-    if (key === "url" || key === "source_type") {
-      onFormChange();
-    }
-    setForm({ ...form, [key]: value });
-  }
-
-  const canPreview = form.url.trim().length > 0 && !previewLoading;
-
-  return (
-    <div
-      ref={formRef}
-      className="mb-5 rounded-md border border-zinc-800 bg-zinc-950/40 p-4 scroll-mt-20"
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold text-zinc-200">
-          {isNew ? "New source" : "Edit source"}
-        </div>
-        <button className="btn btn-xs btn-ghost" onClick={onCancel} type="button">
-          <X className="h-4 w-4" />
-          Cancel
-        </button>
-      </div>
-      {formError ? <div className="alert alert-error mb-3 text-sm">{formError}</div> : null}
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <label className="form-control">
-          <span className="label-text">Source name</span>
-          <input
-            className="input input-bordered input-sm"
-            onChange={(event) => update("name", event.target.value)}
-            value={form.name}
-          />
-        </label>
-        <label className="form-control md:col-span-2">
-          <span className="label-text">Source URL</span>
-          <div className="flex gap-2">
-            <input
-              className="input input-bordered input-sm min-w-0 flex-1"
-              onChange={(event) => update("url", event.target.value)}
-              value={form.url}
-            />
-            <button
-              className="btn btn-sm btn-outline btn-primary shrink-0"
-              disabled={!canPreview}
-              onClick={() => void onPollPreview()}
-              type="button"
-            >
-              <RefreshCcw className={`h-4 w-4 ${previewLoading ? "animate-spin" : ""}`} />
-              Poll preview
-            </button>
-          </div>
-        </label>
-        <label className="form-control">
-          <span className="label-text">Source type</span>
-          <select
-            className="select select-bordered select-sm"
-            onChange={(event) => update("source_type", event.target.value)}
-            value={form.source_type}
-          >
-            {optionsFor(presets?.source_types ?? [], form.source_type).map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="form-control">
-          <span className="label-text">Region</span>
-          <select
-            className="select select-bordered select-sm"
-            onChange={(event) => update("region", event.target.value)}
-            value={form.region}
-          >
-            {optionsFor(presets?.regions ?? [], form.region).map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="form-control">
-          <span className="label-text">Category</span>
-          <select
-            className="select select-bordered select-sm"
-            onChange={(event) => update("category", event.target.value)}
-            value={form.category}
-          >
-            {optionsFor(presets?.categories ?? [], form.category).map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="form-control">
-          <span className="label-text">Language</span>
-          <select
-            className="select select-bordered select-sm"
-            onChange={(event) => update("language", event.target.value)}
-            value={form.language}
-          >
-            {optionsFor(presets?.languages ?? [], form.language).map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="form-control">
-          <span className="label-text">Source score</span>
-          <input
-            className="input input-bordered input-sm"
-            max={100}
-            min={0}
-            onChange={(event) => update("source_score", Number(event.target.value))}
-            type="number"
-            value={form.source_score}
-          />
-        </label>
-        <label className="form-control">
-          <span className="label-text">Polling interval</span>
-          <input
-            className="input input-bordered input-sm"
-            min={60}
-            onChange={(event) => update("polling_interval_seconds", Number(event.target.value))}
-            type="number"
-            value={form.polling_interval_seconds}
-          />
-        </label>
-        <label className="label cursor-pointer justify-start gap-3 pt-7">
-          <input
-            checked={form.enabled}
-            className="toggle toggle-sm"
-            onChange={(event) => update("enabled", event.target.checked)}
-            type="checkbox"
-          />
-          <span className="label-text">Enabled</span>
-        </label>
-      </div>
-      <div className="mt-4 flex justify-end">
-        <button
-          className="btn btn-sm btn-primary"
-          disabled={saving}
-          onClick={() => void onSave()}
-          type="button"
-        >
-          Save source
-        </button>
-      </div>
-      <SourcePreviewPanel
-        articleError={articleError}
-        articleLoadingUrl={articleLoadingUrl}
-        articlePreview={articlePreview}
-        preview={preview}
-        previewError={previewError}
-        previewLoading={previewLoading}
-        selectedPreviewItem={selectedPreviewItem}
-        onPreviewArticle={onPreviewArticle}
-      />
-    </div>
-  );
-}
-
-function SourcePreviewPanel({
-  preview,
-  previewError,
-  previewLoading,
-  articlePreview,
-  articleError,
-  articleLoadingUrl,
-  selectedPreviewItem,
-  onPreviewArticle,
-}: {
-  preview: SourcePreviewResponse | null;
-  previewError: string | null;
-  previewLoading: boolean;
-  articlePreview: SourceArticlePreviewResponse | null;
-  articleError: string | null;
-  articleLoadingUrl: string | null;
-  selectedPreviewItem: SourcePreviewItem | null;
-  onPreviewArticle: (item: SourcePreviewItem) => Promise<void>;
-}) {
-  if (!preview && !previewError && !previewLoading && !articlePreview && !articleError) {
-    return null;
-  }
-
-  return (
-    <div className="mt-4 border-t border-zinc-800/70 pt-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-bold uppercase text-zinc-400">Preview</div>
-        {preview ? (
-          <div className="text-xs text-base-content/60">
-            {preview.status} · HTTP {preview.http_status ?? "-"} · {preview.duration_ms}ms ·{" "}
-            {preview.item_count} items
-          </div>
-        ) : null}
-      </div>
-      {previewLoading ? (
-        <div className="rounded-md border border-zinc-800 bg-zinc-950/50 p-3 text-sm text-zinc-300">
-          Polling source...
-        </div>
-      ) : null}
-      {previewError ? <div className="alert alert-error mb-3 text-sm">{previewError}</div> : null}
-      {preview && preview.items.length === 0 && !previewError ? (
-        <div className="rounded-md border border-zinc-800 bg-zinc-950/50 p-3 text-sm text-zinc-300">
-          No RSS items were found.
-        </div>
-      ) : null}
-      {preview && preview.items.length > 0 ? (
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)] xl:h-[500px]">
-          <div className="max-h-96 xl:max-h-none xl:h-full overflow-y-auto rounded-md border border-zinc-800">
-            {preview.items.map((item) => {
-              const isSelected =
-                selectedPreviewItem?.url === item.url &&
-                selectedPreviewItem?.title === item.title;
-              return (
-                <button
-                  aria-label={`Preview article ${item.title}`}
-                  className={`block w-full border-b border-zinc-800/60 border-l-2 p-3 text-left last:border-b-0 transition-all ${
-                    isSelected
-                      ? "border-l-primary bg-zinc-900/85 text-zinc-100"
-                      : "border-l-transparent bg-zinc-950/30 hover:bg-zinc-900/70"
-                  }`}
-                  disabled={articleLoadingUrl === item.url}
-                  key={`${item.guid ?? item.url}-${item.title}`}
-                  onClick={() => void onPreviewArticle(item)}
-                  type="button"
-                >
-                <div className="flex items-start gap-2">
-                  <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-zinc-100">
-                      {item.title}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-base-content/60">
-                      {domainFor(item.url)}
-                      {item.published_at ? ` · ${formatPreviewDate(item.published_at)}` : ""}
-                    </div>
-                    {item.description ? (
-                      <div className="mt-2 line-clamp-2 text-xs text-zinc-400">
-                        {item.description}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </button>
-              );
-            })}
-          </div>
-          <ArticlePreviewPanel
-            articleError={articleError}
-            articleLoading={articleLoadingUrl !== null}
-            articlePreview={articlePreview}
-            selectedPreviewItem={selectedPreviewItem}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ArticlePreviewPanel({
-  articlePreview,
-  articleError,
-  articleLoading,
-  selectedPreviewItem,
-}: {
-  articlePreview: SourceArticlePreviewResponse | null;
-  articleError: string | null;
-  articleLoading: boolean;
-  selectedPreviewItem: SourcePreviewItem | null;
-}) {
-  if (!articlePreview && !articleError && !articleLoading && !selectedPreviewItem) {
-    return (
-      <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-4 text-sm text-zinc-400 xl:h-full xl:flex xl:items-center xl:justify-center">
-        Select an item to fetch article text.
-      </div>
-    );
-  }
-  return (
-    <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-4 xl:h-full xl:flex xl:flex-col xl:min-h-0">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/60 shrink-0">
-        <span className="font-bold uppercase text-zinc-400">Article</span>
-        {articlePreview ? (
-          <span>
-            {articlePreview.status} · HTTP {articlePreview.http_status ?? "-"} ·{" "}
-            {articlePreview.duration_ms}ms · {articlePreview.text_length} chars
-          </span>
-        ) : null}
-      </div>
-      {articleLoading ? <div className="text-sm text-zinc-300 mb-3 shrink-0">Fetching article...</div> : null}
-      {articleError ? <div className="alert alert-error mb-3 text-sm shrink-0">{articleError}</div> : null}
-      {selectedPreviewItem?.description ? (
-        <div className="mb-3 rounded border border-zinc-800 bg-zinc-950/60 p-3 shrink-0">
-          <div className="mb-1 text-xs font-bold uppercase text-zinc-400">Snippet</div>
-          <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-zinc-200">
-            {selectedPreviewItem.description}
-          </div>
-        </div>
-      ) : null}
-      {articlePreview ? (
-        <div className="xl:flex-1 xl:flex xl:flex-col xl:min-h-0">
-          {articlePreview.error_message ? (
-            <div className="alert alert-warning mb-3 text-sm shrink-0">{articlePreview.error_message}</div>
-          ) : null}
-          {articlePreview.truncated ? (
-            <div className="mb-2 text-xs font-semibold text-amber-400 shrink-0">
-              Text truncated to preview limit.
-            </div>
-          ) : null}
-          <pre className="max-h-80 whitespace-pre-wrap break-words overflow-y-auto rounded bg-zinc-950/70 p-3 text-xs leading-relaxed text-zinc-200 xl:max-h-none xl:flex-1 xl:min-h-0">
-            {articlePreview.text || "No article text available."}
-          </pre>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function optionsFor(options: string[], value: string): string[] {
-  return value && !options.includes(value) ? [value, ...options] : options;
-}
-
-function domainFor(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}
-
-function formatPreviewDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
-}
-
-function healthStatusClass(status: SourceHealth["health_status"]): string {
-  if (status === "healthy") {
-    return "bg-emerald-500/10 text-emerald-400";
-  }
-  if (status === "degraded") {
-    return "bg-amber-500/10 text-amber-400";
-  }
-  if (status === "disabled") {
-    return "bg-zinc-700/30 text-zinc-400";
-  }
-  return "bg-red-500/10 text-red-400";
 }

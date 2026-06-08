@@ -87,6 +87,23 @@ describe("createResourceCache", () => {
     cache.invalidate("status");
     expect(await cache.get("status", loader)).toBe(3);
   });
+
+  it("allows a failed in-flight request to be retried", async () => {
+    const cache = createResourceCache({ ttlMs: 1000, now: () => 100 });
+    let calls = 0;
+    const loader = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("temporary outage");
+      }
+      return "recovered";
+    };
+
+    await expect(cache.get("status", loader)).rejects.toThrow("temporary outage");
+
+    await expect(cache.get("status", loader)).resolves.toBe("recovered");
+    expect(calls).toBe(2);
+  });
 });
 
 describe("debounceAsync", () => {

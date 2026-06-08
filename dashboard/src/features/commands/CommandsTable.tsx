@@ -1,30 +1,23 @@
 import {
   AlertTriangle,
   Bell,
-  ChevronDown,
-  ChevronRight,
   Layers,
   Play,
   Radio,
   RefreshCcw,
   Search,
   ShieldAlert,
-  TerminalSquare,
   Trash2,
-  XCircle,
 } from "lucide-react";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 
 import type { BotCommand, EventCluster, Source } from "../../api";
 import { api } from "../../api";
-import { Badge } from "../../components/Badge";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { EmptyState } from "../../components/EmptyState";
 import { SectionError } from "../../components/SectionError";
-import { SortableHeader } from "../../components/SortableHeader";
 import { useSortableData } from "../../hooks/useSortableData";
-import { formatTime } from "../../lib/time";
 import type { QueueCommand } from "../../types/dashboard";
+import { CommandHistoryTable } from "./CommandHistoryTable";
 
 const EVENT_STATUSES = [
   "reported",
@@ -34,14 +27,6 @@ const EVENT_STATUSES = [
   "false_signal",
   "merged",
 ] as const;
-
-const STATUS_TONE: Record<string, "info" | "warning" | "success" | "error"> = {
-  pending: "info",
-  running: "warning",
-  succeeded: "success",
-  failed: "error",
-  cancelled: "info",
-};
 
 type PendingConfirm = {
   title: string;
@@ -76,7 +61,6 @@ export function CommandsTable({
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
-  const [eventSelectCmd, setEventSelectCmd] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [targetEventId, setTargetEventId] = useState("");
   const [splitNewsIds, setSplitNewsIds] = useState("");
@@ -475,156 +459,17 @@ export function CommandsTable({
     <div className="space-y-3">
       {commandCenter}
 
-      {sortedRows.length === 0 ? (
-        <EmptyState
-          icon={TerminalSquare}
-          title="No commands queued"
-          body="Manual bot commands will appear here after an operator queues one."
-          action={
-            compact ? null : (
-              <button className="btn btn-sm btn-outline" onClick={() => void retry()} type="button">
-                <RefreshCcw className="h-4 w-4" />
-                Refresh
-              </button>
-            )
-          }
-        />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="table w-full">
-            <thead>
-              <tr className="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider">
-                {!compact ? <th className="w-8" /> : null}
-                <SortableHeader
-                  label="Command"
-                  sortKey="command_type"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Status"
-                  sortKey="status"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                <SortableHeader
-                  label="Created"
-                  sortKey="created_at"
-                  currentSortKey={sortConfig.key}
-                  direction={sortConfig.direction}
-                  onSort={requestSort}
-                />
-                {!compact ? (
-                  <>
-                    <th className="py-3 px-4 text-left">Payload</th>
-                    <th className="py-3 px-4 text-left">Actions</th>
-                  </>
-                ) : null}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/40">
-              {sortedRows.map((row) => {
-                const isExpanded = expandedId === row.id;
-                return (
-                  <Fragment key={row.id}>
-                    <tr className="border-b border-zinc-800/30">
-                      {!compact ? (
-                        <td className="py-3 px-2">
-                          <button
-                            className="btn btn-ghost btn-xs btn-square"
-                            onClick={() => setExpandedId(isExpanded ? null : row.id)}
-                            type="button"
-                            aria-label={`Toggle details for ${row.id}`}
-                          >
-                            {isExpanded ? (
-                              <ChevronDown className="h-3.5 w-3.5" />
-                            ) : (
-                              <ChevronRight className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        </td>
-                      ) : null}
-                      <td className="py-3 px-4 text-sm font-semibold text-zinc-200">
-                        {row.command_type}
-                      </td>
-                      <td className="py-3 px-4 text-xs">
-                        <Badge tone={STATUS_TONE[row.status] ?? "info"}>{row.status}</Badge>
-                      </td>
-                      <td className="py-3 px-4 text-zinc-400 font-normal text-xs">
-                        {formatTime(row.created_at)}
-                      </td>
-                      {!compact ? (
-                        <>
-                          <td className="py-3 px-4 text-zinc-400 font-normal text-xs max-w-[280px] truncate">
-                            {JSON.stringify(row.payload)}
-                          </td>
-                          <td className="py-3 px-4">
-                            {row.status === "pending" ? (
-                              <button
-                                className="btn btn-ghost btn-xs text-error"
-                                onClick={() => void handleCancel(row.id)}
-                                type="button"
-                                aria-label={`Cancel ${row.command_type}`}
-                              >
-                                <XCircle className="h-3.5 w-3.5" />
-                                Cancel
-                              </button>
-                            ) : null}
-                          </td>
-                        </>
-                      ) : null}
-                    </tr>
-                    {isExpanded && !compact ? (
-                      <tr className="bg-zinc-900/50">
-                        <td colSpan={6} className="px-8 py-3">
-                          <div className="grid gap-2 text-xs">
-                            <div className="flex gap-6">
-                              <span className="text-zinc-500">ID:</span>
-                              <span className="font-mono text-zinc-300">{row.id}</span>
-                            </div>
-                            {row.started_at ? (
-                              <div className="flex gap-6">
-                                <span className="text-zinc-500">Started:</span>
-                                <span className="text-zinc-300">{formatTime(row.started_at)}</span>
-                              </div>
-                            ) : null}
-                            {row.completed_at ? (
-                              <div className="flex gap-6">
-                                <span className="text-zinc-500">Completed:</span>
-                                <span className="text-zinc-300">
-                                  {formatTime(row.completed_at)}
-                                </span>
-                              </div>
-                            ) : null}
-                            {row.result ? (
-                              <div>
-                                <span className="text-zinc-500">Result:</span>
-                                <pre className="mt-1 max-h-40 overflow-auto rounded bg-zinc-800 p-2 text-zinc-300 font-mono text-xs">
-                                  {JSON.stringify(row.result, null, 2)}
-                                </pre>
-                              </div>
-                            ) : null}
-                            {row.error_message ? (
-                              <div>
-                                <span className="text-zinc-500">Error:</span>
-                                <pre className="mt-1 max-h-40 overflow-auto rounded bg-red-950/40 border border-red-900/40 p-2 text-red-300 font-mono text-xs">
-                                  {row.error_message}
-                                </pre>
-                              </div>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <CommandHistoryTable
+        rows={sortedRows}
+        compact={compact}
+        expandedId={expandedId}
+        sortKey={sortConfig.key}
+        sortDirection={sortConfig.direction}
+        onExpand={setExpandedId}
+        onSort={requestSort}
+        onCancel={(commandId) => void handleCancel(commandId)}
+        retry={retry}
+      />
 
       <ConfirmDialog
         open={confirm !== null}

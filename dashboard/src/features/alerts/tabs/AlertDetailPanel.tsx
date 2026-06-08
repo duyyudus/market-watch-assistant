@@ -1,33 +1,23 @@
-import { Bell, Database } from "lucide-react";
+import { AlertTriangle, Bell, CheckCircle2, Database, XCircle } from "lucide-react";
 
-import type { AlertDecision, EventDetail } from "../../api";
-import { Badge } from "../../components/Badge";
-import { EmptyState } from "../../components/EmptyState";
-import { SectionError } from "../../components/SectionError";
-import { formatTime } from "../../lib/time";
+import type { AlertDecision, EventDetail } from "../../../api";
+import { EmptyState } from "../../../components/EmptyState";
+import { MetadataRow } from "../../../components/MetadataRow";
+import { SectionError } from "../../../components/SectionError";
+import { StatusBadge, type StatusBadgeTone } from "../../../components/StatusBadge";
+import { formatTime } from "../../../lib/time";
 
 function formatLabel(value: string) {
   return value.replace(/_/g, " ");
 }
 
-const decisionTones: Record<string, string> = {
+const decisionTones: Record<string, StatusBadgeTone> = {
   immediate_alert: "error",
   watchlist_batch: "warning",
   daily_digest: "info",
   archive_only: "neutral",
   suppressed: "neutral",
 };
-
-function MetadataRow({ label, value }: { label: string; value: unknown }) {
-  const displayValue =
-    value === null || value === undefined || value === "" ? "-" : String(value);
-  return (
-    <div className="flex justify-between gap-4 border-b border-zinc-800/60 py-1.5 text-sm">
-      <span className="text-base-content/60">{label}</span>
-      <span className="text-right font-medium text-zinc-200">{displayValue}</span>
-    </div>
-  );
-}
 
 export function AlertDetailPanel({
   alert,
@@ -75,9 +65,9 @@ export function AlertDetailPanel({
   return (
     <div className="space-y-5">
       <div>
-        <Badge tone={badgeTone}>
+        <StatusBadge tone={badgeTone}>
           {formatLabel(alert.decision)}
-        </Badge>
+        </StatusBadge>
         <h2 className="mt-2 text-xl font-bold text-zinc-100">{headline}</h2>
         <p className="mt-1 text-sm text-base-content/70">{alert.reason}</p>
       </div>
@@ -102,9 +92,9 @@ export function AlertDetailPanel({
 
       <section>
         <h3 className="mb-2 text-sm font-bold text-zinc-100">Score breakdown</h3>
-        <div className="mb-3 rounded-lg border border-zinc-800 bg-gradient-to-r from-indigo-950/20 to-purple-950/20 p-4 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-950/30 p-4">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider text-indigo-300">final score</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-400">final score</div>
             <div className="mt-1 text-xs text-zinc-400">Deterministic first, adjusted by overrides</div>
           </div>
           <div className="flex items-baseline gap-2">
@@ -113,7 +103,7 @@ export function AlertDetailPanel({
                 {deterministicScore}
               </span>
             )}
-            <span className="text-3xl font-extrabold text-indigo-400">
+            <span className="text-3xl font-extrabold text-zinc-100">
               {finalScore ?? "-"}
             </span>
           </div>
@@ -157,16 +147,13 @@ export function AlertDetailPanel({
       </section>
 
       {llmData && (
-        <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <section className="space-y-3 rounded-md border border-zinc-800 bg-zinc-950/40 p-4">
           <div className="flex items-center justify-between border-b border-zinc-800/60 pb-2">
             <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-purple-500 animate-pulse" />
               AI Analysis &amp; Insights
             </h3>
             {llmData.confidence && (
-              <span className="text-xs font-semibold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
-                Confidence: {llmData.confidence}
-              </span>
+              <StatusBadge tone="info">Confidence: {llmData.confidence}</StatusBadge>
             )}
           </div>
 
@@ -216,7 +203,7 @@ export function AlertDetailPanel({
             <div className="flex flex-col gap-2 pt-1">
               {llmData.risk_flags.map((flag: string) => (
                 <div key={flag} className="flex items-start gap-2 rounded border border-red-500/20 bg-red-500/5 px-3 py-2 text-red-400 text-[11px] leading-relaxed">
-                  <span className="shrink-0">⚠️</span>
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>{flag}</span>
                 </div>
               ))}
@@ -226,16 +213,13 @@ export function AlertDetailPanel({
       )}
 
       {investigationData && (
-        <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <section className="space-y-3 rounded-md border border-zinc-800 bg-zinc-950/40 p-4">
           <div className="flex items-center justify-between border-b border-zinc-800/60 pb-2">
             <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
               Agent Investigation
             </h3>
             {investigationData.confidence && (
-              <span className="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                Confidence: {investigationData.confidence}
-              </span>
+              <StatusBadge tone="success">Confidence: {investigationData.confidence}</StatusBadge>
             )}
           </div>
 
@@ -249,11 +233,20 @@ export function AlertDetailPanel({
             {investigationData.official_confirmation !== undefined && (
               <div className="col-span-full border-b border-zinc-800/40 py-1.5 flex flex-col gap-0.5">
                 <span className="text-base-content/50 font-bold uppercase tracking-wider text-[9px]">Official Confirmation</span>
-                <span className="text-zinc-300 leading-relaxed">
-                  {typeof investigationData.official_confirmation === "boolean"
-                    ? investigationData.official_confirmation ? "✅ Confirmed" : "❌ Unconfirmed"
-                    : String(investigationData.official_confirmation)}
-                </span>
+                {typeof investigationData.official_confirmation === "boolean" ? (
+                  <span className="flex items-center gap-1.5 text-zinc-300">
+                    {investigationData.official_confirmation ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+                    ) : (
+                      <XCircle className="h-3.5 w-3.5 text-error" />
+                    )}
+                    {investigationData.official_confirmation ? "Confirmed" : "Unconfirmed"}
+                  </span>
+                ) : (
+                  <span className="text-zinc-300 leading-relaxed">
+                    {String(investigationData.official_confirmation)}
+                  </span>
+                )}
               </div>
             )}
             {investigationData.suggested_alert_level && (
@@ -287,7 +280,7 @@ export function AlertDetailPanel({
             <div className="flex flex-col gap-2 pt-1">
               {investigationData.risk_flags.map((flag: string) => (
                 <div key={flag} className="flex items-start gap-2 rounded border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 text-yellow-400 text-[11px] leading-relaxed">
-                  <span className="shrink-0">⚠️</span>
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>{flag}</span>
                 </div>
               ))}
@@ -330,6 +323,8 @@ export function AlertDetailPanel({
                 className="block rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-sm hover:border-primary/40"
                 href={item.url}
                 key={item.news_item_id}
+                rel="noopener noreferrer"
+                target="_blank"
               >
                 <div className="font-semibold text-zinc-100">{item.title}</div>
                 <div className="mt-1 text-xs text-base-content/60">

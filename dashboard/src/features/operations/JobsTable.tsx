@@ -4,8 +4,8 @@ import type { JobRun } from "../../api";
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/EmptyState";
 import { SectionError } from "../../components/SectionError";
+import { SortControls } from "../../components/SortControls";
 import { useSortableData } from "../../hooks/useSortableData";
-import { classNames } from "../../lib/classNames";
 import { formatTime } from "../../lib/time";
 
 export function JobsTable({
@@ -46,41 +46,17 @@ export function JobsTable({
     <div className="space-y-3">
       <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2 text-xs text-zinc-500">
         <span>Job Name</span>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => requestSort("job_name")}
-            className={classNames(
-              "hover:text-primary transition-colors flex items-center gap-0.5",
-              sortConfig.key === "job_name" && "text-primary font-semibold",
-            )}
-            type="button"
-          >
-            Name
-            {sortConfig.key === "job_name" && (sortConfig.direction === "asc" ? " ▲" : " ▼")}
-          </button>
-          <button
-            onClick={() => requestSort("status")}
-            className={classNames(
-              "hover:text-primary transition-colors flex items-center gap-0.5",
-              sortConfig.key === "status" && "text-primary font-semibold",
-            )}
-            type="button"
-          >
-            Status
-            {sortConfig.key === "status" && (sortConfig.direction === "asc" ? " ▲" : " ▼")}
-          </button>
-          <button
-            onClick={() => requestSort("started_at")}
-            className={classNames(
-              "hover:text-primary transition-colors flex items-center gap-0.5",
-              sortConfig.key === "started_at" && "text-primary font-semibold",
-            )}
-            type="button"
-          >
-            Time
-            {sortConfig.key === "started_at" && (sortConfig.direction === "asc" ? " ▲" : " ▼")}
-          </button>
-        </div>
+        <SortControls
+          currentSortKey={sortConfig.key}
+          direction={sortConfig.direction}
+          label="Sort by:"
+          onSort={requestSort}
+          options={[
+            { key: "job_name", label: "Name" },
+            { key: "status", label: "Status" },
+            { key: "started_at", label: "Time" },
+          ]}
+        />
       </div>
       <div className="space-y-2.5">
         {sortedRows.map((row) => (
@@ -106,4 +82,3 @@ export function JobsTable({
     </div>
   );
 }
-

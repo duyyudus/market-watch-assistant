@@ -86,6 +86,8 @@ export function Events(props: {
                         className="block rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-sm hover:border-primary/40"
                         href={item.url}
                         key={item.news_item_id}
+                        rel="noopener noreferrer"
+                        target="_blank"
                       >
                         <div className="font-semibold text-zinc-100">{item.title}</div>
                         <div className="mt-1 text-xs text-base-content/60">
