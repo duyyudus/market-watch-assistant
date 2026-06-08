@@ -41,8 +41,8 @@ export function LLMCostsTab() {
       setLoading(true);
       setError(null);
       setSummary(await api.maintenanceLLMCosts());
-    } catch (err: any) {
-      setError(err?.message || "Failed to load LLM costs");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load LLM costs");
     } finally {
       setLoading(false);
     }
@@ -151,8 +151,8 @@ export function PipelineMetricsTab() {
       const res = await api.maintenancePipelineMetrics(limit, offset);
       setRuns(res.items);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load pipeline metrics");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load pipeline metrics");
     } finally {
       setLoading(false);
     }

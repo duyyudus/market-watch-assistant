@@ -49,8 +49,8 @@ export function CatalystsTab() {
       const res = await api.maintenanceCatalysts(limit, offset);
       setReviews(res.items);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load catalyst reviews");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load catalyst reviews");
     } finally {
       setLoading(false);
     }

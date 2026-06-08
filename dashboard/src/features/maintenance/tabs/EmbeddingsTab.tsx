@@ -42,8 +42,8 @@ export function EmbeddingsTab() {
       setError(null);
       const res = await api.maintenanceEmbeddingStats();
       setStats(res);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load embedding stats");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load embedding stats");
     } finally {
       setLoading(false);
     }

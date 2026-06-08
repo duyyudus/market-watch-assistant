@@ -49,8 +49,8 @@ export function LLMRunsTab() {
       const res = await api.maintenanceLLMRuns(limit, offset);
       setRuns(res.items);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load LLM runs diagnostics");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load LLM runs diagnostics");
     } finally {
       setLoading(false);
     }

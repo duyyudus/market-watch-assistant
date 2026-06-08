@@ -36,8 +36,8 @@ export function FetchLogsTab() {
       const res = await api.maintenanceFetchLogs(limit, offset);
       setLogs(res.items);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load fetch logs");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load fetch logs");
     } finally {
       setLoading(false);
     }

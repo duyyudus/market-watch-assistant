@@ -49,8 +49,8 @@ export function ScoreHistoryTab() {
       const res = await api.maintenanceScoreHistory(limit, offset);
       setHistory(res.items);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load score history");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load score history");
     } finally {
       setLoading(false);
     }

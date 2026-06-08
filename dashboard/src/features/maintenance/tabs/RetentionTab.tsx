@@ -48,8 +48,8 @@ export function RetentionTab() {
       const res = await api.maintenanceRetentionJobs(limit, offset);
       setJobs(res.items);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err?.message || "Failed to load retention jobs history");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load retention jobs history");
     } finally {
       setLoading(false);
     }
