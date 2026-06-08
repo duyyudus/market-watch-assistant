@@ -35,9 +35,11 @@ class FakeEmbeddingSession:
         self.rows = rows
         self.added: list[object] = []
         self.scalars_calls = 0
+        self.scalar_statements: list[object] = []
 
-    async def scalars(self, _stmt):
+    async def scalars(self, stmt):
         self.scalars_calls += 1
+        self.scalar_statements.append(stmt)
         if self.scalars_calls == 1:
             return ScalarRows(self.rows)
         return ScalarRows([])
@@ -150,6 +152,13 @@ def test_validate_embedding_dimensions_rejects_unsupported_vector_column_size() 
         validate_embedding_dimensions(EmbeddingConfig(dimensions=768))
 
 
+def _select_limit_value(stmt: object) -> int | None:
+    limit_clause = getattr(stmt, "_limit_clause", None)
+    if limit_clause is None:
+        return None
+    return int(limit_clause.value)
+
+
 @pytest.mark.asyncio
 async def test_embed_pending_news_items_limits_concurrent_provider_batches(monkeypatch) -> None:
     items = [
@@ -205,6 +214,59 @@ async def test_embed_pending_news_items_limits_concurrent_provider_batches(monke
 
 
 @pytest.mark.asyncio
+async def test_embed_pending_news_items_is_unbounded_by_default(monkeypatch) -> None:
+    items = [
+        NormalizedNewsItem(
+            id=f"news_{index}",
+            title=f"Market news {index}",
+            snippet=f"Snippet {index}",
+            source_name="MarketWatch",
+            source_type="rss",
+            source_score=75,
+            region="crypto",
+            asset_classes=["crypto"],
+            language="en",
+            url=f"https://example.test/news/{index}",
+            title_hash=f"title-{index}",
+            normalized_text_hash=f"text-{index}",
+            processing_status="normalized",
+        )
+        for index in range(101)
+    ]
+    session = FakeEmbeddingSession(items)
+
+    class FakeProvider:
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[float(index), 0.0] for index, _text in enumerate(texts)]
+
+    monkeypatch.setattr(embedding_services, "embedding_provider", lambda _config: FakeProvider())
+
+    count = await embedding_services.embed_pending_news_items(
+        session,
+        config=EmbeddingConfig(provider="local", dimensions=2),
+    )
+
+    assert count == 101
+    assert _select_limit_value(session.scalar_statements[0]) is None
+
+
+@pytest.mark.asyncio
+async def test_embed_pending_news_items_keeps_explicit_limit(monkeypatch) -> None:
+    session = FakeEmbeddingSession([])
+
+    monkeypatch.setattr(embedding_services, "embedding_provider", lambda _config: None)
+
+    count = await embedding_services.embed_pending_news_items(
+        session,
+        config=EmbeddingConfig(provider="local", dimensions=2),
+        limit=100,
+    )
+
+    assert count == 0
+    assert _select_limit_value(session.scalar_statements[0]) == 100
+
+
+@pytest.mark.asyncio
 async def test_embed_pending_event_clusters_limits_concurrent_provider_batches(monkeypatch) -> None:
     clusters = [
         EventCluster(
@@ -251,3 +313,51 @@ async def test_embed_pending_event_clusters_limits_concurrent_provider_batches(m
         "evt_2",
         "evt_3",
     }
+
+
+@pytest.mark.asyncio
+async def test_embed_pending_event_clusters_is_unbounded_by_default(monkeypatch) -> None:
+    clusters = [
+        EventCluster(
+            id=f"evt_{index}",
+            canonical_headline=f"High value event {index}",
+            summary=f"Summary {index}",
+            source_count=1,
+            top_source_score=90,
+            affected_entities=[],
+            regions=["global"],
+            asset_classes=["equity"],
+        )
+        for index in range(101)
+    ]
+    session = FakeEmbeddingSession(clusters)
+
+    class FakeProvider:
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[float(index), 1.0] for index, _text in enumerate(texts)]
+
+    monkeypatch.setattr(embedding_services, "embedding_provider", lambda _config: FakeProvider())
+
+    count = await embedding_services.embed_pending_event_clusters(
+        session,
+        config=EmbeddingConfig(provider="local", dimensions=2),
+    )
+
+    assert count == 101
+    assert _select_limit_value(session.scalar_statements[0]) is None
+
+
+@pytest.mark.asyncio
+async def test_embed_pending_event_clusters_keeps_explicit_limit(monkeypatch) -> None:
+    session = FakeEmbeddingSession([])
+
+    monkeypatch.setattr(embedding_services, "embedding_provider", lambda _config: None)
+
+    count = await embedding_services.embed_pending_event_clusters(
+        session,
+        config=EmbeddingConfig(provider="local", dimensions=2),
+        limit=100,
+    )
+
+    assert count == 0
+    assert _select_limit_value(session.scalar_statements[0]) == 100

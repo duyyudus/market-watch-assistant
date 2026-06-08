@@ -58,7 +58,7 @@ async def _embed_text_batches(
 
 
 async def embed_pending_news_items(
-    session: AsyncSession, *, config: EmbeddingConfig, limit: int = 100
+    session: AsyncSession, *, config: EmbeddingConfig, limit: int | None = None
 ) -> int:
     validate_embedding_dimensions(config)
     existing = select(NewsItemEmbedding.news_item_id)
@@ -67,8 +67,9 @@ async def embed_pending_news_items(
         .where(NormalizedNewsItem.id.not_in(existing))
         .where(NormalizedNewsItem.processing_status != "ignored")
         .order_by(NormalizedNewsItem.created_at.desc())
-        .limit(limit)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     items = list((await session.scalars(stmt)).all())
     if not items:
         return 0
@@ -109,7 +110,7 @@ async def embed_pending_news_items(
 
 
 async def embed_pending_event_clusters(
-    session: AsyncSession, *, config: EmbeddingConfig, limit: int = 100
+    session: AsyncSession, *, config: EmbeddingConfig, limit: int | None = None
 ) -> int:
     validate_embedding_dimensions(config)
     existing = select(EventClusterEmbedding.event_cluster_id)
@@ -117,8 +118,9 @@ async def embed_pending_event_clusters(
         select(EventCluster)
         .where(EventCluster.id.not_in(existing))
         .order_by(EventCluster.created_at.desc())
-        .limit(limit)
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
     clusters = list((await session.scalars(stmt)).all())
     if not clusters:
         return 0
