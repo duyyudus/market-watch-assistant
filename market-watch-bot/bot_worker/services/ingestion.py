@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, case, func, literal, select, update
@@ -20,6 +21,33 @@ from bot_worker.normalize import (
 from bot_worker.rss import ParsedFeedItem
 from bot_worker.services.common import _json_safe, _published_to_string
 from bot_worker.services.sources import effective_source_score
+
+
+@dataclass(frozen=True)
+class _NormalizedCandidate:
+    raw: RawNewsItem
+    source: NewsSource
+    title: str
+    published_at: datetime | None
+    snippet: str
+    raw_content: str
+    canonical_url: str
+    title_hash: str
+    canonical_url_hash: str
+    normalized_text_hash: str
+
+
+def _dedup_key(
+    *,
+    source_type: str,
+    snippet: str | None,
+    canonical_url_hash: str | None,
+    title_hash: str,
+    normalized_text_hash: str,
+) -> tuple[str, str, str]:
+    if source_type == "google-rss" and snippet:
+        return ("google-rss-snippet", normalized_text_hash, title_hash)
+    return ("url", canonical_url_hash or "", "")
 
 
 def is_rss_item_fresh(
@@ -59,8 +87,9 @@ async def normalize_pending_raw_items(
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
-    inserted = 0
     now = datetime.now(UTC)
+
+    candidates: list[_NormalizedCandidate] = []
     for raw, source in rows:
         title = normalize_text(raw.raw_title)
         if not title or not raw.raw_url:
@@ -79,32 +108,103 @@ async def normalize_pending_raw_items(
             raw.raw_url,
             tracking_params=set(tracking_params) if tracking_params is not None else None,
         )
+        item_title_hash = title_hash(title)
+        canonical_url_hash = content_hash(canonical_url)
+        normalized_text_hash = content_hash(f"{title} {snippet} {raw_content}")
+        candidates.append(
+            _NormalizedCandidate(
+                raw=raw,
+                source=source,
+                title=title,
+                published_at=published_at,
+                snippet=snippet,
+                raw_content=raw_content,
+                canonical_url=canonical_url,
+                title_hash=item_title_hash,
+                canonical_url_hash=canonical_url_hash,
+                normalized_text_hash=normalized_text_hash,
+            )
+        )
+
+    existing_keys: set[tuple[str, str, str]] = set()
+    if candidates:
+        canonical_url_hashes = {candidate.canonical_url_hash for candidate in candidates}
+        normalized_text_hashes = {candidate.normalized_text_hash for candidate in candidates}
+        existing_rows = (
+            await session.execute(
+                select(
+                    NormalizedNewsItem.source_type,
+                    NormalizedNewsItem.snippet,
+                    NormalizedNewsItem.canonical_url_hash,
+                    NormalizedNewsItem.title_hash,
+                    NormalizedNewsItem.normalized_text_hash,
+                )
+                .where(NormalizedNewsItem.processing_status == "normalized")
+                .where(
+                    (
+                        NormalizedNewsItem.canonical_url_hash.in_(canonical_url_hashes)
+                    )
+                    | (NormalizedNewsItem.normalized_text_hash.in_(normalized_text_hashes))
+                )
+            )
+        ).all()
+        existing_keys = {
+            _dedup_key(
+                source_type=str(row[0]),
+                snippet=str(row[1]) if row[1] is not None else None,
+                canonical_url_hash=str(row[2]) if row[2] is not None else None,
+                title_hash=str(row[3]),
+                normalized_text_hash=str(row[4]),
+            )
+            for row in existing_rows
+        }
+
+    inserted = 0
+    batch_active_keys: set[tuple[str, str, str]] = set()
+    for candidate in candidates:
+        key = _dedup_key(
+            source_type=candidate.source.source_type,
+            snippet=candidate.snippet,
+            canonical_url_hash=candidate.canonical_url_hash,
+            title_hash=candidate.title_hash,
+            normalized_text_hash=candidate.normalized_text_hash,
+        )
+        processing_status = (
+            "deduped"
+            if key in existing_keys or key in batch_active_keys
+            else "normalized"
+        )
+        if processing_status == "normalized":
+            batch_active_keys.add(key)
+
         item = NormalizedNewsItem(
-            source_id=source.id,
-            raw_item_id=raw.id,
-            title=title,
-            snippet=snippet or None,
-            raw_content=raw_content or None,
-            url=raw.raw_url,
-            canonical_url=canonical_url,
-            source_name=source.name,
-            source_type=source.source_type,
-            source_score=effective_source_score(source),
-            published_at=published_at,
-            fetched_at=raw.fetched_at,
-            language=source.language,
-            region=source.region,
-            asset_classes=source.asset_classes,
-            title_hash=title_hash(title),
-            canonical_url_hash=content_hash(canonical_url),
-            normalized_text_hash=content_hash(f"{title} {snippet} {raw_content}"),
-            processing_status="normalized",
+            source_id=candidate.source.id,
+            raw_item_id=candidate.raw.id,
+            title=candidate.title,
+            snippet=candidate.snippet or None,
+            raw_content=candidate.raw_content or None,
+            url=candidate.raw.raw_url,
+            canonical_url=candidate.canonical_url,
+            source_name=candidate.source.name,
+            source_type=candidate.source.source_type,
+            source_score=effective_source_score(candidate.source),
+            published_at=candidate.published_at,
+            fetched_at=candidate.raw.fetched_at,
+            language=candidate.source.language,
+            region=candidate.source.region,
+            asset_classes=candidate.source.asset_classes,
+            title_hash=candidate.title_hash,
+            canonical_url_hash=candidate.canonical_url_hash,
+            normalized_text_hash=candidate.normalized_text_hash,
+            processing_status=processing_status,
             full_text_available=False,
             full_text_extraction_status=(
-                "skipped" if source.source_type == "google-rss" else "pending"
+                "skipped" if candidate.source.source_type == "google-rss" else "pending"
             ),
             full_text_last_error=(
-                "google_rss_feed_only" if source.source_type == "google-rss" else None
+                "google_rss_feed_only"
+                if candidate.source.source_type == "google-rss"
+                else None
             ),
         )
         session.add(item)
@@ -132,7 +232,10 @@ async def mark_exact_duplicates(session: AsyncSession) -> int:
                         ),
                         else_=NormalizedNewsItem.canonical_url_hash,
                     ),
-                    NormalizedNewsItem.title_hash,
+                    case(
+                        (google_rss_with_snippet, NormalizedNewsItem.title_hash),
+                        else_=literal(""),
+                    ),
                 ),
                 order_by=(
                     NormalizedNewsItem.created_at.asc(),

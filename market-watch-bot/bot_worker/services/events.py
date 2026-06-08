@@ -587,7 +587,7 @@ async def build_event_clusters(
     existing_news = select(EventClusterItem.news_item_id)
     stmt = (
         select(NormalizedNewsItem)
-        .where(NormalizedNewsItem.processing_status.in_(["normalized", "deduped"]))
+        .where(NormalizedNewsItem.processing_status == "normalized")
         .where(NormalizedNewsItem.id.not_in(existing_news))
         .limit(limit)
     )

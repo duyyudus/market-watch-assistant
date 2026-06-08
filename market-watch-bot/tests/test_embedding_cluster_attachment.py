@@ -34,10 +34,12 @@ class FakeSession:
         self.cluster = cluster
         self.added: list[object] = []
         self.executed: list[object] = []
+        self.scalars_statements: list[object] = []
         self.flushes = 0
         self.scalar_results: list[object | None] = []
 
-    async def scalars(self, _stmt):
+    async def scalars(self, stmt):
+        self.scalars_statements.append(stmt)
         return ScalarRows(self._scalars.pop(0))
 
     async def scalar(self, _stmt):
@@ -400,6 +402,18 @@ async def test_build_event_clusters_populates_affected_tickers_from_news_entitie
     cluster = next(value for value in session.added if isinstance(value, EventCluster))
     assert cluster.affected_entities == ["Bitcoin"]
     assert cluster.affected_tickers == ["BTC"]
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_excludes_deduped_news_items() -> None:
+    session = FakeSession(scalars=[[], []])
+
+    stats = await services.build_event_clusters(session)
+
+    assert stats.created_clusters == 0
+    sql = str(session.scalars_statements[0]).lower()
+    assert "processing_status = :processing_status_1" in sql
+    assert "deduped" not in sql
 
 
 @pytest.mark.asyncio

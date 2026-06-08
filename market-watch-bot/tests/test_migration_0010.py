@@ -62,3 +62,21 @@ def test_full_text_extraction_state_migration_declares_item_state_columns() -> N
     ]
     for fragment in expected_fragments:
         assert fragment in migration
+
+
+def test_active_url_dedup_migration_declares_backfill_and_index() -> None:
+    migration_paths = sorted(Path("alembic/versions").glob("*active_url_dedup*.py"))
+    assert len(migration_paths) == 1
+    migration = migration_paths[0].read_text(encoding="utf-8")
+
+    expected_fragments = [
+        "down_revision: str | None = \"0013_event_item_decision_meta\"",
+        "row_number() OVER",
+        "PARTITION BY canonical_url_hash",
+        "processing_status = 'normalized'",
+        "ix_normalized_news_items_active_url_dedup",
+        "[\"canonical_url_hash\"]",
+        "canonical_url_hash IS NOT NULL",
+    ]
+    for fragment in expected_fragments:
+        assert fragment in migration

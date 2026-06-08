@@ -142,11 +142,16 @@ async def test_normalize_google_rss_items_marks_full_text_skipped() -> None:
     class NormalizeSession:
         def __init__(self) -> None:
             self.added: list[object] = []
+            self.execute_count = 0
 
         async def execute(self, _stmt):
+            self.execute_count += 1
+
             class Result:
-                def all(self):
-                    return [(raw, source)]
+                def all(self_inner):
+                    if self.execute_count == 1:
+                        return [(raw, source)]
+                    return []
 
             return Result()
 
@@ -163,3 +168,289 @@ async def test_normalize_google_rss_items_marks_full_text_skipped() -> None:
     assert item.full_text_available is False
     assert item.full_text_extraction_status == "skipped"
     assert item.full_text_last_error == "google_rss_feed_only"
+
+
+async def test_normalize_marks_second_duplicate_in_same_batch_as_deduped() -> None:
+    source = NewsSource(
+        id="src_rss",
+        name="Market RSS",
+        source_type="rss",
+        source_score=80,
+        language="en",
+        region="global",
+        asset_classes=["global_macro"],
+    )
+    raws = [
+        RawNewsItem(
+            id="raw_1",
+            source_id=source.id,
+            raw_title="Fed holds rates",
+            raw_description="Policy unchanged.",
+            raw_url="https://example.com/news?utm_source=x",
+            raw_published_at="2026-06-02T09:00:00+00:00",
+            raw_payload={},
+            content_hash="hash_1",
+            fetched_at=datetime(2026, 6, 2, 9, 1, tzinfo=UTC),
+        ),
+        RawNewsItem(
+            id="raw_2",
+            source_id=source.id,
+            raw_title="  fed   holds RATES ",
+            raw_description="Policy unchanged.",
+            raw_url="https://example.com/news",
+            raw_published_at="2026-06-02T09:01:00+00:00",
+            raw_payload={},
+            content_hash="hash_2",
+            fetched_at=datetime(2026, 6, 2, 9, 2, tzinfo=UTC),
+        ),
+    ]
+
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.execute_count = 0
+
+        async def execute(self, _stmt):
+            self.execute_count += 1
+
+            class Result:
+                def all(self_inner):
+                    if self.execute_count == 1:
+                        return [(raw, source) for raw in raws]
+                    return []
+
+            return Result()
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+    session = NormalizeSession()
+
+    inserted = await normalize_pending_raw_items(session, freshness_hours=24 * 365)
+
+    assert inserted == 2
+    assert [item.processing_status for item in session.added] == ["normalized", "deduped"]
+
+
+async def test_normalize_marks_same_url_with_different_title_as_deduped() -> None:
+    source = NewsSource(
+        id="src_rss",
+        name="Market RSS",
+        source_type="rss",
+        source_score=80,
+        language="en",
+        region="global",
+        asset_classes=["global_macro"],
+    )
+    raws = [
+        RawNewsItem(
+            id="raw_1",
+            source_id=source.id,
+            raw_title="Asian shares skid after Wall St tech selloff",
+            raw_description="Markets fall.",
+            raw_url="https://apnews.com/article/markets-tech-selloff?utm_source=feed",
+            raw_published_at="2026-06-02T09:00:00+00:00",
+            raw_payload={},
+            content_hash="hash_1",
+            fetched_at=datetime(2026, 6, 2, 9, 1, tzinfo=UTC),
+        ),
+        RawNewsItem(
+            id="raw_2",
+            source_id=source.id,
+            raw_title="Asian shares slide after big tech losses on Wall Street",
+            raw_description="Markets fall.",
+            raw_url="https://apnews.com/article/markets-tech-selloff",
+            raw_published_at="2026-06-02T09:01:00+00:00",
+            raw_payload={},
+            content_hash="hash_2",
+            fetched_at=datetime(2026, 6, 2, 9, 2, tzinfo=UTC),
+        ),
+    ]
+
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.execute_count = 0
+
+        async def execute(self, _stmt):
+            self.execute_count += 1
+
+            class Result:
+                def all(self_inner):
+                    if self.execute_count == 1:
+                        return [(raw, source) for raw in raws]
+                    return []
+
+            return Result()
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+    session = NormalizeSession()
+
+    inserted = await normalize_pending_raw_items(session, freshness_hours=24 * 365)
+
+    assert inserted == 2
+    assert [item.processing_status for item in session.added] == ["normalized", "deduped"]
+
+
+async def test_normalize_marks_existing_active_signature_as_deduped() -> None:
+    source = NewsSource(
+        id="src_rss",
+        name="Market RSS",
+        source_type="rss",
+        source_score=80,
+        language="en",
+        region="global",
+        asset_classes=["global_macro"],
+    )
+    raw = RawNewsItem(
+        id="raw_1",
+        source_id=source.id,
+        raw_title="Oil rises",
+        raw_description="Crude climbs.",
+        raw_url="https://example.com/oil",
+        raw_published_at="2026-06-02T09:00:00+00:00",
+        raw_payload={},
+        content_hash="hash",
+        fetched_at=datetime(2026, 6, 2, 9, 1, tzinfo=UTC),
+    )
+    existing_row = (
+        "rss",
+        None,
+        content_hash("https://example.com/oil"),
+        title_hash("Earlier oil title"),
+        content_hash("Earlier oil title Earlier snippet "),
+    )
+
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.execute_count = 0
+
+        async def execute(self, _stmt):
+            self.execute_count += 1
+
+            class Result:
+                def all(self_inner):
+                    if self.execute_count == 1:
+                        return [(raw, source)]
+                    return [existing_row]
+
+            return Result()
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+    session = NormalizeSession()
+
+    inserted = await normalize_pending_raw_items(session, freshness_hours=24 * 365)
+
+    assert inserted == 1
+    assert session.added[0].processing_status == "deduped"
+
+
+async def test_normalize_marks_existing_active_same_url_as_deduped() -> None:
+    source = NewsSource(
+        id="src_rss",
+        name="Market RSS",
+        source_type="rss",
+        source_score=80,
+        language="en",
+        region="global",
+        asset_classes=["global_macro"],
+    )
+    raw = RawNewsItem(
+        id="raw_1",
+        source_id=source.id,
+        raw_title="Updated AP market wrap",
+        raw_description="Markets fall.",
+        raw_url="https://apnews.com/article/markets-tech-selloff",
+        raw_published_at="2026-06-02T09:00:00+00:00",
+        raw_payload={},
+        content_hash="hash",
+        fetched_at=datetime(2026, 6, 2, 9, 1, tzinfo=UTC),
+    )
+    existing_row = (
+        "rss",
+        None,
+        content_hash("https://apnews.com/article/markets-tech-selloff"),
+        title_hash("Earlier AP title"),
+        content_hash("Earlier AP title Earlier snippet "),
+    )
+
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.execute_count = 0
+
+        async def execute(self, _stmt):
+            self.execute_count += 1
+
+            class Result:
+                def all(self_inner):
+                    if self.execute_count == 1:
+                        return [(raw, source)]
+                    return [existing_row]
+
+            return Result()
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+    session = NormalizeSession()
+
+    inserted = await normalize_pending_raw_items(session, freshness_hours=24 * 365)
+
+    assert inserted == 1
+    assert session.added[0].processing_status == "deduped"
+
+
+async def test_normalize_ignores_existing_deduped_signature_for_active_status() -> None:
+    source = NewsSource(
+        id="src_rss",
+        name="Market RSS",
+        source_type="rss",
+        source_score=80,
+        language="en",
+        region="global",
+        asset_classes=["global_macro"],
+    )
+    raw = RawNewsItem(
+        id="raw_1",
+        source_id=source.id,
+        raw_title="Copper slips",
+        raw_description="Metals soften.",
+        raw_url="https://example.com/copper",
+        raw_published_at="2026-06-02T09:00:00+00:00",
+        raw_payload={},
+        content_hash="hash",
+        fetched_at=datetime(2026, 6, 2, 9, 1, tzinfo=UTC),
+    )
+
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.executed: list[object] = []
+
+        async def execute(self, stmt):
+            self.executed.append(stmt)
+
+            class Result:
+                def all(self_inner):
+                    if len(self.executed) == 1:
+                        return [(raw, source)]
+                    return []
+
+            return Result()
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+    session = NormalizeSession()
+
+    inserted = await normalize_pending_raw_items(session, freshness_hours=24 * 365)
+
+    assert inserted == 1
+    assert session.added[0].processing_status == "normalized"
+    assert "processing_status" in str(session.executed[1])
