@@ -222,3 +222,4 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .antigravitycli/
+.llm_comparison/

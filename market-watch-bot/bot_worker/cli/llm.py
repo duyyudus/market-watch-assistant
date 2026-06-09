@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -14,6 +14,7 @@ from bot_worker.db.models import (
     LLMAnalysisRun,
     NormalizedNewsItem,
 )
+from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services import (
     classify_news_item_with_llm,
     enrich_event_clusters_with_llm,
@@ -22,7 +23,20 @@ from bot_worker.services import (
     score_event_with_llm,
     summarize_event_with_llm,
 )
-from common.llm import LLMConfig, build_event_analysis_prompt
+from bot_worker.services.market import market_move_score_for_cluster
+from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
+from common.llm import (
+    LLMAnalysis,
+    LLMClassification,
+    LLMConfig,
+    LLMEventScore,
+    LLMEventSummary,
+    build_event_analysis_prompt,
+    build_event_score_prompt,
+    build_event_summary_prompt,
+    build_news_classification_prompt,
+    llm_provider,
+)
 
 
 async def _event_or_exit(session, event_id: str) -> EventCluster:
@@ -199,5 +213,391 @@ def llm_usage(since: Annotated[str, typer.Option("--since")] = "7d") -> None:
                 "total_tokens": total_tokens,
             }
         )
+
+    _run(_with_session(action))
+
+
+def _format_cell(val: object) -> str:
+    if val is None:
+        return "N/A"
+    if isinstance(val, list):
+        if not val:
+            return "[]"
+        return "<br>".join(f"- {x}" for x in val)
+    return str(val).replace("\n", "<br>")
+
+
+def _generate_news_comparison_report(
+    news_item: NormalizedNewsItem,
+    model_a: str,
+    model_b: str,
+    res_a: LLMClassification | None,
+    res_b: LLMClassification | None,
+    usage_a: dict[str, object] | None,
+    usage_b: dict[str, object] | None,
+    err_a: str | None,
+    err_b: str | None,
+) -> str:
+    def get_field(res: LLMClassification | None, err: str | None, field: str) -> str:
+        if err is not None:
+            return f"**Error**: {err}"
+        if res is None:
+            return "N/A"
+        return _format_cell(getattr(res, field, None))
+
+    def format_usage(usage: dict[str, object] | None, err: str | None) -> str:
+        if err is not None:
+            return f"**Error**: {err}"
+        if not usage:
+            return "N/A"
+        prompt = usage.get("prompt_tokens", 0)
+        completion = usage.get("completion_tokens", 0)
+        total = usage.get("total_tokens", 0)
+        return f"Prompt: {prompt}<br>Completion: {completion}<br>Total: {total}"
+
+    lines = [
+        "# LLM Model Comparison Report: News Item Classification",
+        "",
+        f"**Target News Item ID**: `{news_item.id}`",
+        "",
+        f"**Title**: {news_item.title}",
+        "",
+        f"**Snippet**: {news_item.snippet or ''}",
+        "",
+        f"**Source**: {news_item.source_name} ({news_item.source_type})",
+        "",
+        f"**Published At**: "
+        f"{news_item.published_at.isoformat() if news_item.published_at else 'N/A'}",
+        "",
+        f"**Region/Asset Classes**: "
+        f"{news_item.region} / {', '.join(news_item.asset_classes or [])}",
+        "",
+        "## Side-by-Side Comparison",
+        "",
+        f"| Field | Model A (`{model_a}`) | Model B (`{model_b}`) |",
+        "| :--- | :--- | :--- |",
+        f"| **Token Usage** | {format_usage(usage_a, err_a)} | "
+        f"{format_usage(usage_b, err_b)} |",
+        f"| **Item Type** | {get_field(res_a, err_a, 'item_type')} | "
+        f"{get_field(res_b, err_b, 'item_type')} |",
+        f"| **Actionability** | {get_field(res_a, err_a, 'actionability')} | "
+        f"{get_field(res_b, err_b, 'actionability')} |",
+        f"| **Event Type** | {get_field(res_a, err_a, 'event_type')} | "
+        f"{get_field(res_b, err_b, 'event_type')} |",
+        f"| **Region** | {get_field(res_a, err_a, 'region')} | "
+        f"{get_field(res_b, err_b, 'region')} |",
+        f"| **Asset Classes** | {get_field(res_a, err_a, 'asset_classes')} | "
+        f"{get_field(res_b, err_b, 'asset_classes')} |",
+        f"| **Entities** | {get_field(res_a, err_a, 'entities')} | "
+        f"{get_field(res_b, err_b, 'entities')} |",
+        f"| **Tickers** | {get_field(res_a, err_a, 'tickers')} | "
+        f"{get_field(res_b, err_b, 'tickers')} |",
+        f"| **Duplicate Hint** | {get_field(res_a, err_a, 'duplicate_hint')} | "
+        f"{get_field(res_b, err_b, 'duplicate_hint')} |",
+        f"| **Confidence** | {get_field(res_a, err_a, 'confidence')} | "
+        f"{get_field(res_b, err_b, 'confidence')} |",
+        f"| **Rationale** | {get_field(res_a, err_a, 'rationale')} | "
+        f"{get_field(res_b, err_b, 'rationale')} |",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _generate_event_comparison_report(
+    event_cluster: EventCluster,
+    model_a: str,
+    model_b: str,
+    enrich_a: LLMAnalysis | None,
+    enrich_b: LLMAnalysis | None,
+    enrich_usage_a: dict[str, object] | None,
+    enrich_usage_b: dict[str, object] | None,
+    enrich_err_a: str | None,
+    enrich_err_b: str | None,
+    summary_a: LLMEventSummary | None,
+    summary_b: LLMEventSummary | None,
+    summary_usage_a: dict[str, object] | None,
+    summary_usage_b: dict[str, object] | None,
+    summary_err_a: str | None,
+    summary_err_b: str | None,
+    score_a: LLMEventScore | None,
+    score_b: LLMEventScore | None,
+    score_usage_a: dict[str, object] | None,
+    score_usage_b: dict[str, object] | None,
+    score_err_a: str | None,
+    score_err_b: str | None,
+) -> str:
+    def get_field(res: object | None, err: str | None, field: str) -> str:
+        if err is not None:
+            return f"**Error**: {err}"
+        if res is None:
+            return "N/A"
+        return _format_cell(getattr(res, field, None))
+
+    def format_usage(usage: dict[str, object] | None, err: str | None) -> str:
+        if err is not None:
+            return f"**Error**: {err}"
+        if not usage:
+            return "N/A"
+        prompt = usage.get("prompt_tokens", 0)
+        completion = usage.get("completion_tokens", 0)
+        total = usage.get("total_tokens", 0)
+        return f"Prompt: {prompt}<br>Completion: {completion}<br>Total: {total}"
+
+    def sum_usage(usages: list[dict[str, object] | None]) -> str:
+        prompt = 0
+        completion = 0
+        total = 0
+        for usage in usages:
+            if usage:
+                prompt += int(usage.get("prompt_tokens") or 0)
+                completion += int(usage.get("completion_tokens") or 0)
+                total += int(usage.get("total_tokens") or 0)
+        return f"Prompt: {prompt}<br>Completion: {completion}<br>Total: {total}"
+
+    lines = [
+        "# LLM Model Comparison Report: Event Cluster operations",
+        "",
+        f"**Target Event Cluster ID**: `{event_cluster.id}`",
+        "",
+        f"**Headline**: {event_cluster.canonical_headline}",
+        "",
+        f"**Deterministic Score**: {event_cluster.final_score}",
+        "",
+        f"**Regions/Asset Classes**: "
+        f"{', '.join(event_cluster.regions or [])} / "
+        f"{', '.join(event_cluster.asset_classes or [])}",
+        "",
+        "## Summary of Combined Token Usage",
+        "",
+        "| Model | Total Combined Token Usage |",
+        "| :--- | :--- |",
+        f"| **Model A (`{model_a}`)** | "
+        f"{sum_usage([enrich_usage_a, summary_usage_a, score_usage_a])} |",
+        f"| **Model B (`{model_b}`)** | "
+        f"{sum_usage([enrich_usage_b, summary_usage_b, score_usage_b])} |",
+        "",
+        "## 1. Enrich (Event Analysis) Comparison",
+        "",
+        f"| Field | Model A (`{model_a}`) | Model B (`{model_b}`) |",
+        "| :--- | :--- | :--- |",
+        f"| **Token Usage** | {format_usage(enrich_usage_a, enrich_err_a)} | "
+        f"{format_usage(enrich_usage_b, enrich_err_b)} |",
+        f"| **Summary** | {get_field(enrich_a, enrich_err_a, 'summary')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'summary')} |",
+        f"| **Event Type** | {get_field(enrich_a, enrich_err_a, 'event_type')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'event_type')} |",
+        f"| **Status Assessment** | {get_field(enrich_a, enrich_err_a, 'status_assessment')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'status_assessment')} |",
+        f"| **Confidence** | {get_field(enrich_a, enrich_err_a, 'confidence')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'confidence')} |",
+        f"| **Impact Rationale** | {get_field(enrich_a, enrich_err_a, 'impact_rationale')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'impact_rationale')} |",
+        f"| **Why It Matters** | {get_field(enrich_a, enrich_err_a, 'why_it_matters')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'why_it_matters')} |",
+        f"| **Risk Flags** | {get_field(enrich_a, enrich_err_a, 'risk_flags')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'risk_flags')} |",
+        f"| **Score Modifier** | {get_field(enrich_a, enrich_err_a, 'score_modifier')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'score_modifier')} |",
+        f"| **Modifier Reason** | {get_field(enrich_a, enrich_err_a, 'modifier_reason')} | "
+        f"{get_field(enrich_b, enrich_err_b, 'modifier_reason')} |",
+        "",
+        "## 2. Summary Generation Comparison",
+        "",
+        f"| Field | Model A (`{model_a}`) | Model B (`{model_b}`) |",
+        "| :--- | :--- | :--- |",
+        f"| **Token Usage** | {format_usage(summary_usage_a, summary_err_a)} | "
+        f"{format_usage(summary_usage_b, summary_err_b)} |",
+        f"| **Summary** | {get_field(summary_a, summary_err_a, 'summary')} | "
+        f"{get_field(summary_b, summary_err_b, 'summary')} |",
+        f"| **Status** | {get_field(summary_a, summary_err_a, 'status')} | "
+        f"{get_field(summary_b, summary_err_b, 'status')} |",
+        f"| **Affected Assets** | {get_field(summary_a, summary_err_a, 'affected_assets')} | "
+        f"{get_field(summary_b, summary_err_b, 'affected_assets')} |",
+        f"| **Digest Bullets** | {get_field(summary_a, summary_err_a, 'digest_bullets')} | "
+        f"{get_field(summary_b, summary_err_b, 'digest_bullets')} |",
+        f"| **Why It Matters** | {get_field(summary_a, summary_err_a, 'why_it_matters')} | "
+        f"{get_field(summary_b, summary_err_b, 'why_it_matters')} |",
+        f"| **Alert Message** | {get_field(summary_a, summary_err_a, 'alert_message')} | "
+        f"{get_field(summary_b, summary_err_b, 'alert_message')} |",
+        f"| **Caveats** | {get_field(summary_a, summary_err_a, 'caveats')} | "
+        f"{get_field(summary_b, summary_err_b, 'caveats')} |",
+        "",
+        "## 3. Score Assessment Comparison",
+        "",
+        f"| Field | Model A (`{model_a}`) | Model B (`{model_b}`) |",
+        "| :--- | :--- | :--- |",
+        f"| **Token Usage** | {format_usage(score_usage_a, score_err_a)} | "
+        f"{format_usage(score_usage_b, score_err_b)} |",
+        f"| **Impact Score** | {get_field(score_a, score_err_a, 'impact_score')} | "
+        f"{get_field(score_b, score_err_b, 'impact_score')} |",
+        f"| **Relevance Score** | {get_field(score_a, score_err_a, 'relevance_score')} | "
+        f"{get_field(score_b, score_err_b, 'relevance_score')} |",
+        f"| **Confidence Score** | {get_field(score_a, score_err_a, 'confidence_score')} | "
+        f"{get_field(score_b, score_err_b, 'confidence_score')} |",
+        f"| **Risk Flags** | {get_field(score_a, score_err_a, 'risk_flags')} | "
+        f"{get_field(score_b, score_err_b, 'risk_flags')} |",
+        f"| **Score Modifier** | {get_field(score_a, score_err_a, 'score_modifier')} | "
+        f"{get_field(score_b, score_err_b, 'score_modifier')} |",
+        f"| **Modifier Reason** | {get_field(score_a, score_err_a, 'modifier_reason')} | "
+        f"{get_field(score_b, score_err_b, 'modifier_reason')} |",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+@llm_app.command("compare-model")
+def llm_compare_model(
+    model_a: str,
+    model_b: str,
+    target_id: str,
+) -> None:
+    """Compare performance of two different LLM models side-by-side on a news item or event."""
+    config = _enabled_llm_config()
+    config_a = replace(config, model=model_a)
+    config_b = replace(config, model=model_b)
+
+    async def action(session):
+        news_item = await session.get(NormalizedNewsItem, target_id)
+        event_cluster = None
+        if news_item is None:
+            event_cluster = await session.get(EventCluster, target_id)
+
+        if news_item is None and event_cluster is None:
+            typer.echo(
+                f"Error: Target ID '{target_id}' not found in "
+                "normalized_news_items or event_clusters."
+            )
+            raise typer.Exit(1)
+
+        provider_a = llm_provider(config_a)
+        provider_b = llm_provider(config_b)
+
+        if news_item is not None:
+            prompt = build_news_classification_prompt(news_item)
+
+            res_a, usage_a, err_a = None, None, None
+            try:
+                res_a, usage_a = await provider_a.classify_news_item(prompt)
+            except Exception as e:
+                err_a = str(e)
+
+            res_b, usage_b, err_b = None, None, None
+            try:
+                res_b, usage_b = await provider_b.classify_news_item(prompt)
+            except Exception as e:
+                err_b = str(e)
+
+            report = _generate_news_comparison_report(
+                news_item=news_item,
+                model_a=model_a,
+                model_b=model_b,
+                res_a=res_a,
+                res_b=res_b,
+                usage_a=usage_a,
+                usage_b=usage_b,
+                err_a=err_a,
+                err_b=err_b,
+            )
+        else:
+            move_score = await market_move_score_for_cluster(session, event_cluster)
+            watch_entries = await watchlist_entries(session)
+            base_score = score_event(
+                ScoreInput(
+                    top_source_score=event_cluster.top_source_score,
+                    source_count=event_cluster.source_count,
+                    watchlist_tier=tier_for_entities(
+                        entities=event_cluster.affected_entities or [],
+                        tickers=event_cluster.affected_tickers or [],
+                        entries=watch_entries,
+                    ),
+                    is_duplicate=False,
+                    is_stale=event_cluster.status == "stale",
+                    unique_high_quality_source_count=int(
+                        event_cluster.high_quality_source_count or 0
+                    ),
+                    status=event_cluster.status,
+                    market_move_score=move_score,
+                )
+            )
+            score_breakdown = asdict(base_score)
+
+            enrich_prompt = build_event_analysis_prompt(
+                event_cluster,
+                score_breakdown=score_breakdown,
+                market_move_score=move_score,
+            )
+            summary_prompt = build_event_summary_prompt(event_cluster)
+            score_prompt = build_event_score_prompt(
+                event_cluster,
+                score_breakdown=score_breakdown,
+                market_move_score=move_score,
+            )
+
+            enrich_a, enrich_usage_a, enrich_err_a = None, None, None
+            summary_a, summary_usage_a, summary_err_a = None, None, None
+            score_a, score_usage_a, score_err_a = None, None, None
+
+            try:
+                enrich_a, enrich_usage_a = await provider_a.analyze_event(enrich_prompt)
+            except Exception as e:
+                enrich_err_a = str(e)
+            try:
+                summary_a, summary_usage_a = await provider_a.summarize_event(summary_prompt)
+            except Exception as e:
+                summary_err_a = str(e)
+            try:
+                score_a, score_usage_a = await provider_a.score_event(score_prompt)
+            except Exception as e:
+                score_err_a = str(e)
+
+            enrich_b, enrich_usage_b, enrich_err_b = None, None, None
+            summary_b, summary_usage_b, summary_err_b = None, None, None
+            score_b, score_usage_b, score_err_b = None, None, None
+
+            try:
+                enrich_b, enrich_usage_b = await provider_b.analyze_event(enrich_prompt)
+            except Exception as e:
+                enrich_err_b = str(e)
+            try:
+                summary_b, summary_usage_b = await provider_b.summarize_event(summary_prompt)
+            except Exception as e:
+                summary_err_b = str(e)
+            try:
+                score_b, score_usage_b = await provider_b.score_event(score_prompt)
+            except Exception as e:
+                score_err_b = str(e)
+
+            report = _generate_event_comparison_report(
+                event_cluster=event_cluster,
+                model_a=model_a,
+                model_b=model_b,
+                enrich_a=enrich_a,
+                enrich_b=enrich_b,
+                enrich_usage_a=enrich_usage_a,
+                enrich_usage_b=enrich_usage_b,
+                enrich_err_a=enrich_err_a,
+                enrich_err_b=enrich_err_b,
+                summary_a=summary_a,
+                summary_b=summary_b,
+                summary_usage_a=summary_usage_a,
+                summary_usage_b=summary_usage_b,
+                summary_err_a=summary_err_a,
+                summary_err_b=summary_err_b,
+                score_a=score_a,
+                score_b=score_b,
+                score_usage_a=score_usage_a,
+                score_usage_b=score_usage_b,
+                score_err_a=score_err_a,
+                score_err_b=score_err_b,
+            )
+
+        import os
+
+        os.makedirs(".llm_comparison", exist_ok=True)
+        filepath = os.path.join(".llm_comparison", f"llm_compare_{target_id}.md")
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(report)
+
+        typer.echo(f"Comparison report saved to {filepath}")
 
     _run(_with_session(action))

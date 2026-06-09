@@ -1775,3 +1775,317 @@ def test_cli_embedding_status_reports_counts(monkeypatch) -> None:
     assert result.exit_code == 0
     assert '"news_items": 3' in result.output
     assert '"news_embeddings": 2' in result.output
+
+
+def test_cli_llm_compare_model_news(monkeypatch) -> None:
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from common.llm import LLMClassification
+
+    # 1. Create a dummy NormalizedNewsItem
+    news_item = NormalizedNewsItem(
+        id="news_compare_test",
+        title="Test News Title",
+        snippet="Test News Snippet",
+        source_name="Test Source",
+        source_type="rss",
+        source_score=80,
+        region="us",
+        asset_classes=["equity"],
+        language="en",
+    )
+
+    class MockSession:
+        async def get(self, model, key):
+            if model is NormalizedNewsItem and key == "news_compare_test":
+                return news_item
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(MockSession())
+
+    # Mock settings to return LLM enabled
+    class Settings:
+        openrouter_api_key = "fake_key"
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "google/gemini-3.1-flash-lite"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    monkeypatch.setattr(llm_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+
+    # Mock complete_structured or provider methods
+    async def mock_classify(*args, **kwargs):
+        return LLMClassification(
+            item_type="news",
+            actionability="high",
+            event_type="macro",
+            region="us",
+            asset_classes=["equity"],
+            entities=["Fed"],
+            tickers=["SPY"],
+            duplicate_hint="no",
+            confidence=90,
+            rationale="Rationale here",
+        ), {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    # Since llm_provider returns an OpenRouterChatProvider, we mock llm_provider
+    provider_mock = MagicMock()
+    provider_mock.classify_news_item = AsyncMock(side_effect=mock_classify)
+
+    monkeypatch.setattr(llm_cli, "llm_provider", lambda config: provider_mock)
+
+    filepath = os.path.join(".llm_comparison", "llm_compare_news_compare_test.md")
+    if os.path.exists(filepath):
+        os.remove(filepath)
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "llm",
+                "compare-model",
+                "google/gemini-3.1-flash-lite",
+                "openai/gpt-4o-mini",
+                "news_compare_test",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert f"Comparison report saved to {filepath}" in result.output
+        assert os.path.exists(filepath)
+        with open(filepath, encoding="utf-8") as f:
+            content = f.read()
+            assert "# LLM Model Comparison Report: News Item Classification" in content
+            assert "Test News Title" in content
+            assert "google/gemini-3.1-flash-lite" in content
+            assert "openai/gpt-4o-mini" in content
+            assert "Prompt: 100" in content
+            assert "SPY" in content
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+
+def test_cli_llm_compare_model_event(monkeypatch) -> None:
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from common.llm import LLMAnalysis, LLMEventScore, LLMEventSummary
+
+    event = EventCluster(
+        id="evt_compare_test",
+        canonical_headline="Test Event Headline",
+        summary="Test Event Summary",
+        status="reported",
+        regions=["vietnam"],
+        asset_classes=["equity"],
+        affected_entities=["VCB"],
+        affected_tickers=["VCB"],
+        source_count=1,
+        top_source_score=85,
+        final_score=78,
+    )
+
+    class MockSession:
+        async def get(self, model, key):
+            if model is EventCluster and key == "evt_compare_test":
+                return event
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(MockSession())
+
+    # Mock settings
+    class Settings:
+        openrouter_api_key = "fake_key"
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "google/gemini-3.1-flash-lite"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    monkeypatch.setattr(llm_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+
+    # Mock the service helpers and scoring calls
+    async def mock_market_move(*args):
+        return 50
+    async def mock_watchlist(*args):
+        return []
+
+    # We must patch them inside llm_cli
+    monkeypatch.setattr(
+        "bot_worker.cli.llm.market_move_score_for_cluster",
+        mock_market_move
+    )
+    monkeypatch.setattr(
+        "bot_worker.cli.llm.watchlist_entries",
+        mock_watchlist
+    )
+
+    # Mock provider calls
+    async def mock_analyze(*args):
+        return LLMAnalysis(
+            summary="Analyzed summary",
+            event_type="macro",
+            status_assessment="reported",
+            confidence=85,
+            impact_rationale="Rationale",
+            why_it_matters="Why matters",
+            risk_flags=["volatile"],
+            score_modifier=5,
+            modifier_reason="Reason",
+        ), {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    async def mock_summarize(*args):
+        return LLMEventSummary(
+            summary="Summarized text",
+            status="reported",
+            affected_assets=["VCB"],
+            digest_bullets=["Bullet 1"],
+            why_it_matters="Why it matters",
+            alert_message="Alert message",
+            caveats=["Caveat 1"],
+        ), {"prompt_tokens": 200, "completion_tokens": 100, "total_tokens": 300}
+
+    async def mock_score(*args):
+        return LLMEventScore(
+            impact_score=80,
+            relevance_score=75,
+            confidence_score=90,
+            risk_flags=[],
+            score_modifier=2,
+            modifier_reason="Reason score",
+        ), {"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75}
+
+    provider_mock = MagicMock()
+    provider_mock.analyze_event = AsyncMock(side_effect=mock_analyze)
+    provider_mock.summarize_event = AsyncMock(side_effect=mock_summarize)
+    provider_mock.score_event = AsyncMock(side_effect=mock_score)
+
+    monkeypatch.setattr(llm_cli, "llm_provider", lambda config: provider_mock)
+
+    filepath = os.path.join(".llm_comparison", "llm_compare_evt_compare_test.md")
+    if os.path.exists(filepath):
+        os.remove(filepath)
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "llm",
+                "compare-model",
+                "google/gemini-3.1-flash-lite",
+                "openai/gpt-4o-mini",
+                "evt_compare_test",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert f"Comparison report saved to {filepath}" in result.output
+        assert os.path.exists(filepath)
+        with open(filepath, encoding="utf-8") as f:
+            content = f.read()
+            assert "# LLM Model Comparison Report: Event Cluster operations" in content
+            assert "Test Event Headline" in content
+            assert "google/gemini-3.1-flash-lite" in content
+            assert "openai/gpt-4o-mini" in content
+            assert "Total Combined Token Usage" in content
+            # Sum of 150 + 300 + 75 is 525 (prompt: 350, completion: 175)
+            assert "Prompt: 350<br>Completion: 175<br>Total: 525" in content
+            assert "Bullet 1" in content
+            assert "volatile" in content
+            assert "impact score" in content.lower()
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+
+def test_cli_llm_compare_model_not_found(monkeypatch) -> None:
+    class MockSession:
+        async def get(self, model, key):
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(MockSession())
+
+    # Mock settings
+    class Settings:
+        openrouter_api_key = "fake_key"
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "google/gemini-3.1-flash-lite"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v1"
+            temperature = 0.1
+            max_tokens = 700
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    monkeypatch.setattr(llm_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(
+        app,
+        [
+            "llm",
+            "compare-model",
+            "google/gemini-3.1-flash-lite",
+            "openai/gpt-4o-mini",
+            "not_existent",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Error: Target ID 'not_existent' not found" in result.output
