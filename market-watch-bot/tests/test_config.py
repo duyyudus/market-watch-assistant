@@ -139,10 +139,10 @@ def test_vietnam_starter_source_points_to_real_rss_feed() -> None:
     sources_path = next(p for p in paths_to_try if p.exists())
     data = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
     vietstock = next(
-        source for source in data["sources"] if source["name"] == "Vietstock - Chung Khoan"
+        source for source in data["sources"] if source["name"] == "Vietstock - Tai Chinh"
     )
 
-    assert vietstock["url"] == "http://vietstock.vn/144/chung-khoan.rss"
+    assert vietstock["url"] == "http://vietstock.vn/734/tai-chinh.rss"
 
 
 def test_coindesk_starter_source_uses_reachable_rss_feed() -> None:
