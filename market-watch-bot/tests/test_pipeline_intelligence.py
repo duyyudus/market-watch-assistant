@@ -18,8 +18,8 @@ from bot_worker.services.external_providers import (
     request_with_retry,
 )
 from bot_worker.services.full_text import (
-    build_full_text_priority_stmt,
-    extract_full_text_for_priority_events,
+    build_full_text_backlog_stmt,
+    extract_full_text_for_pending_items,
 )
 from bot_worker.services.market import fetch_market_moves_with_stats
 from bot_worker.services.pipeline import run_pipeline
@@ -121,6 +121,8 @@ class FullTextClient:
         self.responses = responses
         self.active = 0
         self.max_active = 0
+        self.active_by_domain: dict[str, int] = {}
+        self.max_active_by_domain: dict[str, int] = {}
         self.requests: list[tuple[str, dict[str, str]]] = []
 
     async def __aenter__(self):
@@ -130,13 +132,22 @@ class FullTextClient:
         return None
 
     async def get(self, url: str, **kwargs: object) -> httpx.Response:
+        from urllib.parse import urlsplit
+
+        domain = urlsplit(url).netloc
         headers = kwargs.get("headers") or {}
         self.requests.append((url, dict(headers)))
         self.active += 1
         self.max_active = max(self.max_active, self.active)
+        self.active_by_domain[domain] = self.active_by_domain.get(domain, 0) + 1
+        self.max_active_by_domain[domain] = max(
+            self.max_active_by_domain.get(domain, 0),
+            self.active_by_domain[domain],
+        )
         await asyncio.sleep(0)
         response = self.responses.pop(0)
         self.active -= 1
+        self.active_by_domain[domain] -= 1
         if isinstance(response, Exception):
             raise response
         response.request = httpx.Request("GET", url)
@@ -151,6 +162,7 @@ def full_text_item(
     snippet: str | None = "RSS summary",
     raw_content: str | None = None,
     source_type: str = "rss",
+    url: str = "https://example.com/story",
 ) -> NormalizedNewsItem:
     return NormalizedNewsItem(
         id=item_id,
@@ -158,7 +170,7 @@ def full_text_item(
         title=title,
         snippet=snippet,
         raw_content=raw_content,
-        url="https://example.com/story",
+        url=url,
         source_name="Example",
         source_type=source_type,
         source_score=70,
@@ -168,6 +180,7 @@ def full_text_item(
         is_paywalled=False,
         full_text_available=False,
         full_text_extraction_status="pending",
+        full_text_attempt_count=0,
         title_hash="title",
         normalized_text_hash="body",
     )
@@ -796,21 +809,22 @@ def test_normalized_news_item_supports_raw_content_for_full_text_extraction() ->
     assert item.raw_content.startswith("VN-Index")
 
 
-def test_full_text_priority_query_tightens_single_source_and_stale_backlog() -> None:
-    stmt = build_full_text_priority_stmt(
-        threshold=70,
-        single_source_threshold=80,
-        lookback_days=7,
-        limit=20,
-    )
+def test_full_text_backlog_query_selects_pending_normalized_items_without_event_filter() -> None:
+    stmt = build_full_text_backlog_stmt(limit=500)
     text = str(stmt)
 
-    assert "event_clusters.source_count > :source_count_1" in text
-    assert "event_clusters.final_score >= :final_score_1" in text
-    assert "event_clusters.source_count <= :source_count_2" in text
-    assert "event_clusters.final_score >= :final_score_2" in text
-    assert "normalized_news_items.created_at >= :created_at_1" in text
+    assert "JOIN event_cluster_items" not in text
+    assert "JOIN event_clusters" not in text
+    assert "normalized_news_items.processing_status = :processing_status_1" in text
     assert "normalized_news_items.source_type != :source_type_1" in text
+    assert (
+        "normalized_news_items.full_text_extraction_status = :full_text_extraction_status_1"
+        in text
+    )
+    assert (
+        "normalized_news_items.full_text_extraction_status = :full_text_extraction_status_2"
+        in text
+    )
 
 
 @pytest.mark.asyncio
@@ -826,7 +840,7 @@ async def test_full_text_skips_google_rss_items_without_http(monkeypatch) -> Non
         lambda **_kwargs: client,
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.attempted == 0
     assert stats.skipped == 1
@@ -847,7 +861,7 @@ async def test_full_text_terminal_http_error_uses_snippet_fallback(monkeypatch) 
         lambda **_kwargs: FullTextClient([httpx.Response(401, text="blocked")]),
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.attempted == 1
     assert stats.extracted == 0
@@ -863,13 +877,13 @@ async def test_full_text_terminal_http_error_uses_snippet_fallback(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_full_text_extracts_limited_items_per_source_concurrently(monkeypatch) -> None:
+async def test_full_text_extracts_all_selected_items_concurrently(monkeypatch) -> None:
     items = [
-        full_text_item(item_id="news_1", source_id="src_1"),
-        full_text_item(item_id="news_2", source_id="src_1"),
-        full_text_item(item_id="news_3", source_id="src_1"),
-        full_text_item(item_id="news_4", source_id="src_2"),
-        full_text_item(item_id="news_5", source_id="src_2"),
+        full_text_item(item_id="news_1", source_id="src_1", url="https://one.example/story"),
+        full_text_item(item_id="news_2", source_id="src_1", url="https://two.example/story"),
+        full_text_item(item_id="news_3", source_id="src_1", url="https://three.example/story"),
+        full_text_item(item_id="news_4", source_id="src_2", url="https://four.example/story"),
+        full_text_item(item_id="news_5", source_id="src_2", url="https://five.example/story"),
     ]
     sources = {"src_1": full_text_source("src_1"), "src_2": full_text_source("src_2")}
     session = FullTextSession(items, sources)
@@ -879,6 +893,7 @@ async def test_full_text_extracts_limited_items_per_source_concurrently(monkeypa
             httpx.Response(200, text="<html><body>two</body></html>"),
             httpx.Response(200, text="<html><body>three</body></html>"),
             httpx.Response(200, text="<html><body>four</body></html>"),
+            httpx.Response(200, text="<html><body>five</body></html>"),
         ]
     )
 
@@ -887,23 +902,121 @@ async def test_full_text_extracts_limited_items_per_source_concurrently(monkeypa
         lambda **_kwargs: client,
     )
 
-    stats = await extract_full_text_for_priority_events(session, per_source_limit=2)
+    stats = await extract_full_text_for_pending_items(session)
 
-    assert stats.attempted == 4
-    assert stats.extracted == 4
-    assert client.max_active == 4
+    assert stats.attempted == 5
+    assert stats.extracted == 5
+    assert client.max_active == 5
     assert items[0].full_text_extraction_status == "extracted"
     assert items[1].full_text_extraction_status == "extracted"
-    assert items[2].full_text_extraction_status == "pending"
+    assert items[2].full_text_extraction_status == "extracted"
     assert items[3].full_text_extraction_status == "extracted"
     assert items[4].full_text_extraction_status == "extracted"
 
 
 @pytest.mark.asyncio
+async def test_full_text_serializes_requests_per_article_domain(monkeypatch) -> None:
+    items = [
+        full_text_item(item_id="news_1", url="https://vnexpress.net/story-1"),
+        full_text_item(item_id="news_2", url="https://vnexpress.net/story-2"),
+        full_text_item(item_id="news_3", url="https://vnexpress.net/story-3"),
+    ]
+    source = full_text_source()
+    session = FullTextSession(items, {source.id: source})
+    client = FullTextClient(
+        [
+            httpx.Response(200, text="<html><body>one</body></html>"),
+            httpx.Response(200, text="<html><body>two</body></html>"),
+            httpx.Response(200, text="<html><body>three</body></html>"),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: client,
+    )
+
+    stats = await extract_full_text_for_pending_items(session, max_concurrency=3)
+
+    assert stats.extracted == 3
+    assert client.max_active_by_domain["vnexpress.net"] == 1
+
+
+@pytest.mark.asyncio
+async def test_full_text_defers_same_domain_after_rate_limit(monkeypatch) -> None:
+    items = [
+        full_text_item(item_id="news_1", url="https://vnexpress.net/story-1"),
+        full_text_item(item_id="news_2", url="https://vnexpress.net/story-2"),
+    ]
+    items[1].full_text_last_http_status = 429
+    source = full_text_source()
+    session = FullTextSession(items, {source.id: source})
+    client = FullTextClient(
+        [
+            httpx.Response(429, headers={"Retry-After": "120"}, text="slow down"),
+            httpx.Response(200, text="<html><body>should not be requested</body></html>"),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: client,
+    )
+
+    stats = await extract_full_text_for_pending_items(session, max_concurrency=2)
+
+    assert stats.attempted == 1
+    assert stats.retryable_failed == 2
+    assert [request[0] for request in client.requests] == ["https://vnexpress.net/story-1"]
+    assert items[0].full_text_extraction_status == "retry"
+    assert items[0].full_text_last_error == "http_429"
+    assert items[1].full_text_extraction_status == "retry"
+    assert items[1].full_text_last_error == "source_rate_limited"
+    assert items[1].full_text_last_http_status is None
+    assert items[1].full_text_attempt_count == 0
+    assert items[1].full_text_next_retry_at is not None
+
+
+@pytest.mark.asyncio
+async def test_full_text_spaces_requests_per_article_domain(monkeypatch) -> None:
+    items = [
+        full_text_item(item_id="news_1", url="https://vnexpress.net/story-1"),
+        full_text_item(item_id="news_2", url="https://vnexpress.net/story-2"),
+    ]
+    source = full_text_source()
+    session = FullTextSession(items, {source.id: source})
+    client = FullTextClient(
+        [
+            httpx.Response(200, text="<html><body>one</body></html>"),
+            httpx.Response(200, text="<html><body>two</body></html>"),
+        ]
+    )
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(
+        "bot_worker.services.full_text.httpx.AsyncClient",
+        lambda **_kwargs: client,
+    )
+    monkeypatch.setattr("bot_worker.services.full_text.asyncio.sleep", fake_sleep)
+
+    stats = await extract_full_text_for_pending_items(
+        session,
+        max_concurrency=2,
+        domain_request_interval_seconds=1.5,
+    )
+
+    assert stats.extracted == 2
+    assert any(delay >= 1.4 for delay in sleep_calls)
+
+
+@pytest.mark.asyncio
 async def test_full_text_preloads_sources_without_concurrent_session_get(monkeypatch) -> None:
     items = [
-        full_text_item(item_id="news_1", source_id="src_1"),
-        full_text_item(item_id="news_2", source_id="src_2"),
+        full_text_item(item_id="news_1", source_id="src_1", url="https://one.example/story"),
+        full_text_item(item_id="news_2", source_id="src_2", url="https://two.example/story"),
     ]
     sources = {"src_1": full_text_source("src_1"), "src_2": full_text_source("src_2")}
     session = FullTextSession(items, sources)
@@ -919,7 +1032,7 @@ async def test_full_text_preloads_sources_without_concurrent_session_get(monkeyp
         lambda **_kwargs: client,
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.attempted == 2
     assert stats.extracted == 2
@@ -941,7 +1054,7 @@ async def test_full_text_terminal_http_error_without_fallback_is_skipped(monkeyp
         lambda **_kwargs: FullTextClient([httpx.Response(403, text="blocked")]),
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.skipped == 1
     assert stats.failed == 0
@@ -965,7 +1078,7 @@ async def test_full_text_terminal_http_error_uses_title_fallback(monkeypatch) ->
         lambda **_kwargs: FullTextClient([httpx.Response(403, text="blocked")]),
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.attempted == 1
     assert stats.fallback_used == 1
@@ -987,7 +1100,7 @@ async def test_full_text_retryable_http_error_marks_retry(monkeypatch) -> None:
         lambda **_kwargs: FullTextClient([httpx.Response(503, text="unavailable")]),
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.retryable_failed == 1
     assert stats.failed == 1
@@ -1011,7 +1124,7 @@ async def test_full_text_success_sets_extracted_status(monkeypatch) -> None:
         lambda **_kwargs: FullTextClient([httpx.Response(200, text=html)]),
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.extracted == 1
     assert stats.failed == 0
@@ -1039,7 +1152,7 @@ async def test_full_text_fetch_uses_article_user_agent(monkeypatch) -> None:
         lambda **_kwargs: client,
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.extracted == 1
     assert client.requests[0][1]["User-Agent"].startswith("market-watch-assistant/")
@@ -1065,7 +1178,7 @@ async def test_full_text_success_uses_shared_boilerplate_cleanup(monkeypatch) ->
         lambda **_kwargs: FullTextClient([httpx.Response(200, text=html)]),
     )
 
-    stats = await extract_full_text_for_priority_events(session)
+    stats = await extract_full_text_for_pending_items(session)
 
     assert stats.extracted == 1
     assert item.raw_content is not None
@@ -1126,7 +1239,7 @@ async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> Non
     monkeypatch.setattr("bot_worker.services.pipeline.mark_exact_duplicates", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.build_event_clusters", return_cluster_stats)
     monkeypatch.setattr(
-        "bot_worker.services.pipeline.extract_full_text_for_priority_events",
+        "bot_worker.services.pipeline.extract_full_text_for_pending_items",
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
@@ -1142,13 +1255,13 @@ async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> Non
         "poll_sources",
         "normalize_raw_items",
         "dedupe_news_items",
+        "full_text_extraction",
         "extract_entities",
         "generate_embeddings",
         "cluster_events",
         "generate_event_embeddings",
         "enrich_events_with_llm",
         "fetch_market_moves",
-        "full_text_extraction",
         "record_alert_decisions",
         "run_missed_catalyst_review",
     ]
@@ -1196,7 +1309,7 @@ async def test_run_pipeline_isolates_entity_extraction_failure_from_later_stages
     monkeypatch.setattr("bot_worker.services.pipeline.embed_pending_event_clusters", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.enrich_event_clusters_with_llm", return_zero)
     monkeypatch.setattr(
-        "bot_worker.services.pipeline.extract_full_text_for_priority_events",
+        "bot_worker.services.pipeline.extract_full_text_for_pending_items",
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
@@ -1248,7 +1361,7 @@ async def test_run_pipeline_keeps_full_text_stage_success_for_terminal_fallbacks
     monkeypatch.setattr("bot_worker.services.pipeline.mark_exact_duplicates", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.build_event_clusters", return_cluster_stats)
     monkeypatch.setattr(
-        "bot_worker.services.pipeline.extract_full_text_for_priority_events",
+        "bot_worker.services.pipeline.extract_full_text_for_pending_items",
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
@@ -1316,7 +1429,7 @@ async def test_run_pipeline_keeps_poll_sources_success_for_interval_skips(monkey
     monkeypatch.setattr("bot_worker.services.pipeline.mark_exact_duplicates", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.build_event_clusters", return_cluster_stats)
     monkeypatch.setattr(
-        "bot_worker.services.pipeline.extract_full_text_for_priority_events",
+        "bot_worker.services.pipeline.extract_full_text_for_pending_items",
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)

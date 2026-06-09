@@ -21,7 +21,7 @@ from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pen
 from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
 from bot_worker.services.events import ClusterBuildStats, build_event_clusters
-from bot_worker.services.full_text import extract_full_text_for_priority_events
+from bot_worker.services.full_text import extract_full_text_for_pending_items
 from bot_worker.services.ingestion import mark_exact_duplicates, normalize_pending_raw_items
 from bot_worker.services.investigation import (
     queue_event_investigation_runs,
@@ -166,6 +166,40 @@ async def run_pipeline(
         start_time=stage_start,
         end_time=datetime.now(UTC),
         items_out=duplicates,
+    )
+
+    full_text_extracted = 0
+    full_text_attempted = 0
+    full_text_fallback_used = 0
+    full_text_skipped = 0
+    full_text_retryable_failed = 0
+    full_text_failed = 0
+    stage_start = datetime.now(UTC)
+    stage_status = "success"
+    try:
+        full_text_stats = await _run_stage_savepoint(
+            session,
+            lambda: extract_full_text_for_pending_items(session),
+        )
+        full_text_attempted = getattr(full_text_stats, "attempted", 0)
+        full_text_extracted = full_text_stats.extracted
+        full_text_fallback_used = getattr(full_text_stats, "fallback_used", 0)
+        full_text_skipped = getattr(full_text_stats, "skipped", 0)
+        full_text_retryable_failed = getattr(full_text_stats, "retryable_failed", 0)
+        full_text_failed = getattr(full_text_stats, "failed", full_text_retryable_failed)
+        if full_text_retryable_failed:
+            degraded_stages.append("full_text_extraction")
+            stage_status = "degraded"
+    except Exception as exc:  # noqa: BLE001
+        degraded_stages.append("full_text_extraction")
+        stage_status = "degraded"
+        logger.error("  ❌ Failed to extract full text: %s", exc)
+    metrics.record_stage(
+        stage_name="full_text_extraction",
+        start_time=stage_start,
+        end_time=datetime.now(UTC),
+        items_out=full_text_extracted,
+        status=stage_status,
     )
 
     news_embeddings = 0
@@ -357,40 +391,6 @@ async def run_pipeline(
         start_time=stage_start,
         end_time=datetime.now(UTC),
         items_out=market_moves_fetched,
-        status=stage_status,
-    )
-
-    full_text_extracted = 0
-    full_text_attempted = 0
-    full_text_fallback_used = 0
-    full_text_skipped = 0
-    full_text_retryable_failed = 0
-    full_text_failed = 0
-    stage_start = datetime.now(UTC)
-    stage_status = "success"
-    try:
-        full_text_stats = await _run_stage_savepoint(
-            session,
-            lambda: extract_full_text_for_priority_events(session),
-        )
-        full_text_attempted = getattr(full_text_stats, "attempted", 0)
-        full_text_extracted = full_text_stats.extracted
-        full_text_fallback_used = getattr(full_text_stats, "fallback_used", 0)
-        full_text_skipped = getattr(full_text_stats, "skipped", 0)
-        full_text_retryable_failed = getattr(full_text_stats, "retryable_failed", 0)
-        full_text_failed = getattr(full_text_stats, "failed", full_text_retryable_failed)
-        if full_text_retryable_failed:
-            degraded_stages.append("full_text_extraction")
-            stage_status = "degraded"
-    except Exception as exc:  # noqa: BLE001
-        degraded_stages.append("full_text_extraction")
-        stage_status = "degraded"
-        logger.error("  ❌ Failed to extract full text: %s", exc)
-    metrics.record_stage(
-        stage_name="full_text_extraction",
-        start_time=stage_start,
-        end_time=datetime.now(UTC),
-        items_out=full_text_extracted,
         status=stage_status,
     )
 

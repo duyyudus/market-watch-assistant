@@ -106,6 +106,7 @@ async def client():
             asset_classes=["global_macro"],
             is_paywalled=False,
             full_text_available=True,
+            full_text_extraction_status="extracted",
             processing_status="clustered",
             title_hash="mock_title_hash",
             canonical_url_hash="mock_url_hash",
@@ -569,7 +570,7 @@ async def test_news_detail_includes_article_text_metadata_entities_and_clusters(
     assert payload["snippet"] == "Policy makers leaned less hawkish in the latest statement."
     assert payload["raw_content"] == "Full article text about the Federal Reserve policy path."
     assert payload["full_text_available"] is True
-    assert payload["full_text_extraction_status"] == "pending"
+    assert payload["full_text_extraction_status"] == "extracted"
     assert payload["entities"][0]["normalized_name"] == "Federal Reserve"
     assert payload["clusters"][0]["event_cluster_id"] == "evt_1"
 
