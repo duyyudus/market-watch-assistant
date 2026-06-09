@@ -29,7 +29,6 @@ from bot_worker.events import (
     is_vector_cluster_attachable,
     vector_similarity_score,
 )
-from bot_worker.llm import LLMConfig
 from bot_worker.normalize import content_hash
 from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
 from bot_worker.services.llm import resolve_llm_cluster_decision
@@ -40,6 +39,7 @@ from bot_worker.services.watchlists import (
     watchlist_entries,
 )
 from bot_worker.watchlist import WatchlistEntry, match_watchlist
+from common.llm import LLMConfig
 
 
 @dataclass(frozen=True)

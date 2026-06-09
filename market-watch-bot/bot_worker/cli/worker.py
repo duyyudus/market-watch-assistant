@@ -17,7 +17,6 @@ from bot_worker.db.models import DigestRecord, JobRun
 from bot_worker.db.session import make_session_factory
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.llm import LLMConfig
 from bot_worker.services import (
     CORE_JOBS,
     AlertDeliveryConfig,
@@ -28,6 +27,7 @@ from bot_worker.services import (
 from bot_worker.services.bot_commands import process_pending_bot_commands
 from bot_worker.services.digests import build_digest_record, send_digest_record
 from bot_worker.services.operations import run_operational_checks
+from common.llm import LLMConfig
 
 COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25

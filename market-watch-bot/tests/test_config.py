@@ -68,6 +68,7 @@ def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_p
     assert settings.embeddings.max_concurrency == 3
     assert settings.llm.provider == "openrouter"
     assert settings.llm.model == "openai/gpt-4.1-mini"
+    assert settings.llm.service_tier is None
     assert settings.llm.max_concurrency == 3
     assert settings.llm.min_modifier == -10
     assert settings.llm.max_modifier == 10
@@ -90,6 +91,45 @@ def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_p
     assert settings.market_data.symbol_map["SPY"] == "SPY"
     assert settings.configuration_presets.sources.source_types == ["rss", "google-rss", "crawler"]
     assert settings.configuration_presets.watchlist.tiers == ["S", "A", "B", "C", "D"]
+
+
+def test_load_settings_accepts_openrouter_service_tier(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    settings_file = tmp_path / "settings.yml"
+    env_file.write_text(
+        "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app\n",
+        encoding="utf-8",
+    )
+    settings_file.write_text(
+        """
+llm:
+  service_tier: priority
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file, settings_file=settings_file)
+
+    assert settings.llm.service_tier == "priority"
+
+
+def test_load_settings_rejects_invalid_openrouter_service_tier(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    settings_file = tmp_path / "settings.yml"
+    env_file.write_text(
+        "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app\n",
+        encoding="utf-8",
+    )
+    settings_file.write_text(
+        """
+llm:
+  service_tier: standard
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="service_tier"):
+        load_settings(env_file=env_file, settings_file=settings_file)
 
 
 def test_validate_source_type_accepts_google_rss() -> None:

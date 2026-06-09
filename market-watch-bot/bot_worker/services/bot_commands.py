@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot_worker.db.models import AlertChannel, BotCommand, EventCluster, NewsSource
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.llm import LLMConfig
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
@@ -35,6 +34,7 @@ from bot_worker.services.retention import RetentionPolicy, retention_preview, ru
 from bot_worker.services.sources import fetch_source, refresh_source_quality_scores
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 from common.bot_commands import ALLOWED_COMMAND_TYPES, EVENT_STATUSES
+from common.llm import LLMConfig
 
 
 def utcnow() -> datetime:

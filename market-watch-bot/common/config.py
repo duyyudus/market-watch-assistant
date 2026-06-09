@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from dotenv import dotenv_values
@@ -77,6 +77,7 @@ class LLMSettings(BaseModel):
     provider: str = "openrouter"
     api_base_url: str = "https://openrouter.ai/api/v1"
     model: str = "openai/gpt-4.1-mini"
+    service_tier: Literal["flex", "priority"] | None = None
     api_key_env: str = "OPENROUTER_API_KEY"
     prompt_version: str = "event-v1"
     temperature: float = 0.1

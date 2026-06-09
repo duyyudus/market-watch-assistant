@@ -21,15 +21,15 @@ from bot_worker.investigation import (
     InvestigationConfig,
     should_queue_event_investigation,
 )
-from bot_worker.llm import (
+from bot_worker.normalize import normalize_text
+from bot_worker.services.common import _json_safe
+from common.llm import (
     INVESTIGATION_PROMPT_VERSION,
     LLMConfig,
     build_investigation_prompt,
+    llm_provider,
     prompt_hash,
 )
-from bot_worker.normalize import normalize_text
-from bot_worker.services.common import _json_safe
-from bot_worker.services.llm import llm_provider
 
 LOCAL_EVIDENCE_STOPWORDS = {
     "after",

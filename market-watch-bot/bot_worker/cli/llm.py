@@ -14,7 +14,6 @@ from bot_worker.db.models import (
     LLMAnalysisRun,
     NormalizedNewsItem,
 )
-from bot_worker.llm import LLMConfig, build_event_analysis_prompt
 from bot_worker.services import (
     classify_news_item_with_llm,
     enrich_event_clusters_with_llm,
@@ -23,6 +22,7 @@ from bot_worker.services import (
     score_event_with_llm,
     summarize_event_with_llm,
 )
+from common.llm import LLMConfig, build_event_analysis_prompt
 
 
 async def _event_or_exit(session, event_id: str) -> EventCluster:

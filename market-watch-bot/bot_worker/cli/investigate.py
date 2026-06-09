@@ -10,7 +10,6 @@ from bot_worker.cli.apps import investigate_app
 from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
 from bot_worker.db.models import AgentInvestigation, MarketMove
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.llm import LLMConfig
 from bot_worker.services.investigation import (
     list_pending_investigations,
     run_asset_investigation,
@@ -18,6 +17,7 @@ from bot_worker.services.investigation import (
     run_move_investigation,
     run_pending_investigations,
 )
+from common.llm import LLMConfig
 
 
 def _enabled_investigation_config() -> InvestigationConfig:

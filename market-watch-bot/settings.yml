@@ -44,7 +44,8 @@ llm:
   enabled: true
   provider: openrouter
   api_base_url: https://openrouter.ai/api/v1
-  model: openai/gpt-5.4-nano
+  model: google/gemini-3.1-flash-lite
+  service_tier: flex
   api_key_env: OPENROUTER_API_KEY
   prompt_version: event-v1
   temperature: 0.1

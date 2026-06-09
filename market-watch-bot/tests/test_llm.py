@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from bot_worker.db.models import EventCluster, NormalizedNewsItem
-from bot_worker.llm import (
+from common.llm import (
     LLMAnalysis,
     LLMClassification,
     LLMClusterDecision,
@@ -23,6 +23,12 @@ from bot_worker.llm import (
     normalize_usage,
     strict_json_schema,
 )
+
+
+def test_bot_worker_llm_reexports_shared_config_for_compatibility() -> None:
+    from bot_worker.llm import LLMConfig as WorkerLLMConfig
+
+    assert WorkerLLMConfig is LLMConfig
 
 
 def test_llm_trigger_policy_selects_high_value_events() -> None:
@@ -267,6 +273,69 @@ def test_normalize_usage_preserves_nested_openrouter_usage_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openrouter_structured_completion_omits_service_tier_by_default(
+    monkeypatch,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": LLMAnalysis(
+                                summary="Checked.",
+                                event_type="policy",
+                                status_assessment="reported",
+                                confidence=70,
+                                impact_rationale="Relevant.",
+                                why_it_matters="Markets may react.",
+                                risk_flags=[],
+                                score_modifier=0,
+                                modifier_reason="No change.",
+                            ).model_dump_json()
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 10},
+            }
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            requests.append(deepcopy(json))
+            return FakeResponse()
+
+    monkeypatch.setattr("common.llm.httpx.AsyncClient", FakeClient)
+    provider = OpenRouterChatProvider(LLMConfig(enabled=True, api_key="key"))
+
+    _result, usage = await provider.complete_structured(
+        prompt="prompt",
+        schema_name="schema",
+        schema_model=LLMAnalysis,
+        system_message="system",
+    )
+
+    assert "service_tier" not in requests[0]
+    assert usage["total_tokens"] == 10
+
+
+@pytest.mark.asyncio
 async def test_openrouter_structured_completion_retries_without_strict_schema_on_400(
     monkeypatch,
 ) -> None:
@@ -327,11 +396,14 @@ async def test_openrouter_structured_completion_retries_without_strict_schema_on
                         }
                     ],
                     "usage": {"total_tokens": 10},
+                    "service_tier": "flex",
                 },
             )
 
-    monkeypatch.setattr("bot_worker.llm.httpx.AsyncClient", FakeClient)
-    provider = OpenRouterChatProvider(LLMConfig(enabled=True, api_key="key"))
+    monkeypatch.setattr("common.llm.httpx.AsyncClient", FakeClient)
+    provider = OpenRouterChatProvider(
+        LLMConfig(enabled=True, api_key="key", service_tier="flex")
+    )
 
     result, usage = await provider.complete_structured(
         prompt="prompt",
@@ -342,5 +414,8 @@ async def test_openrouter_structured_completion_retries_without_strict_schema_on
 
     assert isinstance(result, LLMAnalysis)
     assert usage["total_tokens"] == 10
+    assert usage["service_tier"] == "flex"
+    assert requests[0]["service_tier"] == "flex"
+    assert requests[1]["service_tier"] == "flex"
     assert requests[0]["response_format"]["json_schema"]["strict"] is True
     assert "strict" not in requests[1]["response_format"]["json_schema"]

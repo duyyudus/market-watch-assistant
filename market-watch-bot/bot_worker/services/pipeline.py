@@ -14,9 +14,6 @@ from bot_worker.embeddings import (
     EmbeddingConfig,
 )
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.llm import (
-    LLMConfig,
-)
 from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pending_alerts
 from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
@@ -37,6 +34,9 @@ from bot_worker.services.market import (
 from bot_worker.services.pipeline_metrics import PipelineRunMetrics
 from bot_worker.services.sources import fetch_source
 from bot_worker.services.watchlists import watchlist_entries
+from common.llm import (
+    LLMConfig,
+)
 
 logger = logging.getLogger("bot_worker")
 CORE_JOBS = [

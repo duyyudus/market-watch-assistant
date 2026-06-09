@@ -20,12 +20,12 @@ from bot_worker.db.models import (
 )
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.llm import LLMConfig
 from bot_worker.services import (
     AlertDeliveryConfig,
     record_job_run,
     run_pipeline,
 )
+from common.llm import LLMConfig
 
 
 @pipeline_app.command("run")
