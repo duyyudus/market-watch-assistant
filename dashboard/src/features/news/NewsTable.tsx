@@ -200,7 +200,7 @@ export function NewsTable({
           }
         />
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_570px]">
           <div className="min-w-0">
             <ResponsiveDataList
               cards={sortedRows.map((row) => (
@@ -364,7 +364,7 @@ function NewsDetailPanel({
   }
 
   return (
-    <aside className="max-h-[78vh] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950/30 p-4">
+    <aside className="h-fit rounded-md border border-zinc-800 bg-zinc-950/30 p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-bold text-zinc-100">Article detail</h3>
@@ -399,7 +399,7 @@ function NewsDetailPanel({
       </div>
 
       <DetailSection title="Snippet" body={detail.snippet || "No snippet available."} />
-      <DetailSection title="Full text" body={detail.raw_content || "No full article text available."} />
+      <DetailSection title="Full text" body={detail.raw_content || "No full article text available."} scrollable />
 
       <div className="mt-4">
         <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500">Entities</h4>
@@ -456,11 +456,24 @@ function DetailRow({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
-function DetailSection({ title, body }: { title: string; body: string }) {
+function DetailSection({
+  title,
+  body,
+  scrollable = false,
+}: {
+  title: string;
+  body: string;
+  scrollable?: boolean;
+}) {
   return (
     <div className="mt-4">
       <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500">{title}</h4>
-      <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded bg-zinc-950/70 p-3 text-xs leading-relaxed text-zinc-200">
+      <pre
+        className={classNames(
+          "mt-2 whitespace-pre-wrap break-words rounded bg-zinc-950/70 p-3 text-xs leading-relaxed text-zinc-200",
+          scrollable ? "max-h-[32rem] overflow-y-auto" : "",
+        )}
+      >
         {body}
       </pre>
     </div>

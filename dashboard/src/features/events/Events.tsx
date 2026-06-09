@@ -22,7 +22,7 @@ export function Events(props: {
   retry: () => Promise<void>;
 }) {
   return (
-    <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+    <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
       <Panel title="Event clusters">
         {props.error ? (
           <SectionError title="Event clusters unavailable" message={props.error} retry={props.retry} />
