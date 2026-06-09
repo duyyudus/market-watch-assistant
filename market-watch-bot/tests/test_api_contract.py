@@ -24,6 +24,7 @@ from common.db.models import (
     LLMAnalysisRun,
     MarketMove,
     MissedCatalystReview,
+    NewsEntity,
     NewsItemEmbedding,
     NewsSource,
     NormalizedNewsItem,
@@ -37,6 +38,8 @@ from common.db.models import (
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+RECENT_AT = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+RECENT_DAY = RECENT_AT.date().isoformat()
 
 
 @pytest.fixture()
@@ -91,15 +94,66 @@ async def client():
             id="news_1",
             source_id="src_1",
             title="Fed signals a slower rate path",
+            snippet="Policy makers leaned less hawkish in the latest statement.",
+            raw_content="Full article text about the Federal Reserve policy path.",
             url="https://example.com/news",
+            canonical_url="https://www.example.com/news",
             source_name="Federal Reserve",
             source_type="official",
             source_score=100,
+            language="en",
             region="us",
             asset_classes=["global_macro"],
+            is_paywalled=False,
+            full_text_available=True,
             processing_status="clustered",
             title_hash="mock_title_hash",
+            canonical_url_hash="mock_url_hash",
             normalized_text_hash="mock_text_hash",
+            created_at=datetime(2026, 5, 29, 13, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 29, 13, 2, tzinfo=UTC),
+        )
+        other_news = NormalizedNewsItem(
+            id="news_2",
+            source_id="src_1",
+            title="Treasury yields fall after jobs report",
+            snippet="Labor data eased rates pressure.",
+            url="https://markets.example.net/jobs",
+            canonical_url=None,
+            source_name="Federal Reserve",
+            source_type="official",
+            source_score=100,
+            language="en",
+            region="us",
+            asset_classes=["rates"],
+            is_paywalled=False,
+            full_text_available=False,
+            processing_status="new",
+            title_hash="mock_title_hash_2",
+            normalized_text_hash="mock_text_hash_2",
+            created_at=datetime(2026, 5, 29, 12, 30, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 29, 12, 31, tzinfo=UTC),
+        )
+        older_news = NormalizedNewsItem(
+            id="news_3",
+            source_id="src_2",
+            title="Older oil supply analysis",
+            snippet="Older article from another publisher.",
+            url="https://oil.example.org/supply",
+            canonical_url=None,
+            source_name="Oil Wire",
+            source_type="rss",
+            source_score=70,
+            language="en",
+            region="global",
+            asset_classes=["commodity"],
+            is_paywalled=False,
+            full_text_available=False,
+            processing_status="new",
+            title_hash="mock_title_hash_3",
+            normalized_text_hash="mock_text_hash_3",
+            created_at=datetime(2026, 5, 28, 12, 30, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 28, 12, 31, tzinfo=UTC),
         )
         alert = AlertDecision(
             id="alert_1",
@@ -227,7 +281,7 @@ async def client():
             status="success",
             duration_ms=120,
             item_count=5,
-            fetched_at=datetime(2026, 5, 29, 12, 55, tzinfo=UTC),
+            fetched_at=RECENT_AT,
         )
         cluster_item = EventClusterItem(
             event_cluster_id="evt_1",
@@ -235,6 +289,17 @@ async def client():
             relation_type="seed",
             similarity_score=91,
             added_at=datetime(2026, 5, 29, 13, 1, tzinfo=UTC),
+        )
+        entity = NewsEntity(
+            id="ent_1",
+            news_item_id="news_1",
+            entity_type="organization",
+            raw_text="Federal Reserve",
+            normalized_name="Federal Reserve",
+            ticker=None,
+            exchange=None,
+            country="US",
+            confidence=96,
         )
         score_history = EventScoreHistory(
             id="score_1",
@@ -270,7 +335,25 @@ async def client():
             embedding_version="1",
             dimensions=1536,
             embedding_text_hash="hash_1",
-            vector=[0.1]*1536,
+            vector=[0.1] * 1536,
+        )
+        other_news_embedding = NewsItemEmbedding(
+            news_item_id="news_2",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_3",
+            vector=[0.3] * 1536,
+        )
+        older_news_embedding = NewsItemEmbedding(
+            news_item_id="news_3",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_4",
+            vector=[0.4] * 1536,
         )
         event_embedding = EventClusterEmbedding(
             event_cluster_id="evt_1",
@@ -292,7 +375,7 @@ async def client():
             status="succeeded",
             result={"summary": "Less hawkish Fed path.", "risk_flags": ["rates"]},
             usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
-            created_at=datetime(2026, 5, 29, 13, 7, tzinfo=UTC),
+            created_at=RECENT_AT,
         )
         investigation = AgentInvestigation(
             id="inv_1",
@@ -319,11 +402,35 @@ async def client():
             status="completed",
             deleted_counts={"news": 10},
         )
-        session.add_all([
-            source, event, news, alert, channel, suppression_rule, job, command, watch, presets,
-            fetch_log, cluster_item, score_history, catalyst, news_embedding,
-            event_embedding, llm_run, investigation, market_move, retention
-        ])
+        session.add_all(
+            [
+                source,
+                event,
+                news,
+                other_news,
+                older_news,
+                alert,
+                channel,
+                suppression_rule,
+                job,
+                command,
+                watch,
+                presets,
+                fetch_log,
+                cluster_item,
+                entity,
+                score_history,
+                catalyst,
+                news_embedding,
+                other_news_embedding,
+                older_news_embedding,
+                event_embedding,
+                llm_run,
+                investigation,
+                market_move,
+                retention,
+            ]
+        )
         await session.commit()
 
     async def override_session():
@@ -390,6 +497,84 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_news_list_supports_limit_and_article_domain_filter(client: AsyncClient) -> None:
+    limited = await client.get("/news?limit=1")
+    assert limited.status_code == 200
+    assert len(limited.json()["items"]) == 1
+    assert limited.json()["total"] == 3
+
+    response = await client.get("/news?domain=www.example.com")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == "news_1"
+    assert payload["items"][0]["canonical_url"] == "https://www.example.com/news"
+
+
+@pytest.mark.asyncio
+async def test_news_list_supports_source_status_and_region_filters(
+    client: AsyncClient,
+) -> None:
+    source_response = await client.get("/news?source_id=src_2")
+    assert source_response.status_code == 200
+    source_payload = source_response.json()
+    assert source_payload["total"] == 1
+    assert source_payload["items"][0]["id"] == "news_3"
+    assert source_payload["items"][0]["source_id"] == "src_2"
+
+    status_region_response = await client.get("/news?status=new&region=global")
+    assert status_region_response.status_code == 200
+    status_region_payload = status_region_response.json()
+    assert status_region_payload["total"] == 1
+    assert status_region_payload["items"][0]["processing_status"] == "new"
+    assert status_region_payload["items"][0]["region"] == "global"
+
+
+@pytest.mark.asyncio
+async def test_news_filter_options_list_distinct_statuses_and_regions(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/news/filter-options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "statuses": ["clustered", "new"],
+        "regions": ["global", "us"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_news_domains_lists_distinct_article_domains_from_all_news(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/news/domains")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [
+        "markets.example.net",
+        "oil.example.org",
+        "www.example.com",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_news_detail_includes_article_text_metadata_entities_and_clusters(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/news/news_1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "news_1"
+    assert payload["snippet"] == "Policy makers leaned less hawkish in the latest statement."
+    assert payload["raw_content"] == "Full article text about the Federal Reserve policy path."
+    assert payload["full_text_available"] is True
+    assert payload["full_text_extraction_status"] == "pending"
+    assert payload["entities"][0]["normalized_name"] == "Federal Reserve"
+    assert payload["clusters"][0]["event_cluster_id"] == "evt_1"
+
+
+@pytest.mark.asyncio
 async def test_event_detail_includes_timeline_analysis_investigation_and_market_moves(
     client: AsyncClient,
 ) -> None:
@@ -428,7 +613,7 @@ async def test_source_health_endpoint_reports_status_latency_and_daily_counts(
     assert source["latest_status"] == "success"
     assert source["average_latency_ms"] == 120
     assert source["consecutive_failure_count"] == 0
-    assert source["daily_item_counts"] == [{"date": "2026-05-29", "count": 5}]
+    assert source["daily_item_counts"] == [{"date": RECENT_DAY, "count": 5}]
 
 
 @pytest.mark.asyncio
@@ -601,7 +786,7 @@ async def test_maintenance_observability_endpoints_return_costs_and_pipeline_met
 
     assert costs.status_code == 200
     cost_payload = costs.json()
-    assert cost_payload["daily"][0]["date"] == "2026-05-29"
+    assert cost_payload["daily"][0]["date"] == RECENT_DAY
     assert cost_payload["daily"][0]["total_tokens"] == 150
     assert cost_payload["weekly"]["total_tokens"] == 150
     assert cost_payload["by_model"][0]["model"] == "gpt-4o"
@@ -1298,7 +1483,7 @@ async def test_maintenance_endpoints(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert "total_news_items" in data
-    assert data["news_items_with_embeddings"] == 1
+    assert data["news_items_with_embeddings"] == 3
     assert data["embedding_coverage_pct"] == 100.0
     assert data["event_clusters_with_embeddings"] == 1
     assert data["cluster_embedding_coverage_pct"] == 100.0

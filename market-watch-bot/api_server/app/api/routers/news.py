@@ -16,12 +16,33 @@ async def list_news(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status_filter: str | None = Query(None, alias="status"),
+    domain: str | None = None,
+    source_id: str | None = None,
+    region: str | None = None,
     q: str | None = None,
 ) -> ListEnvelope[NewsRead]:
     rows, total = await news_service.list_news(
-        session, limit=limit, offset=offset, status_filter=status_filter, q=q
+        session,
+        limit=limit,
+        offset=offset,
+        status_filter=status_filter,
+        domain=domain,
+        source_id=source_id,
+        region=region,
+        q=q,
     )
     return ListEnvelope(items=[NewsRead.model_validate(row) for row in rows], total=total)
+
+
+@router.get("/news/domains", response_model=ListEnvelope[str])
+async def list_news_domains(session: SessionDep) -> ListEnvelope[str]:
+    domains = await news_service.list_news_domains(session)
+    return ListEnvelope(items=domains, total=len(domains))
+
+
+@router.get("/news/filter-options")
+async def list_news_filter_options(session: SessionDep) -> dict[str, list[str]]:
+    return await news_service.list_news_filter_options(session)
 
 
 @router.get("/news/{news_id}")

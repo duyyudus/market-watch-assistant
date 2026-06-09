@@ -11,6 +11,8 @@ import type {
   EventCluster,
   EventDetail,
   JobRun,
+  NewsDetail,
+  NewsFilterOptions,
   NewsItem,
   Source,
   SourceHealth,
@@ -22,7 +24,7 @@ import { settle } from "../lib/errors";
 import type { DashboardState, ResourceErrors, ResourceKey, View } from "../types/dashboard";
 import { emptyErrors, emptyState } from "./state";
 
-type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail">;
+type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail" | "newsDetail">;
 export type AlertSubTab = "decisions" | "settings";
 
 function messageFromError(error: unknown, fallback: string) {
@@ -36,6 +38,13 @@ export function useDashboardData() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [newsLimit, setNewsLimit] = useState(100);
+  const [newsOffset, setNewsOffset] = useState(0);
+  const [newsDomain, setNewsDomain] = useState("");
+  const [newsSourceId, setNewsSourceId] = useState("");
+  const [newsStatus, setNewsStatus] = useState("normalized");
+  const [newsRegion, setNewsRegion] = useState("");
+  const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [autoRefreshMs, setAutoRefreshMs] = useState<number>(
     () => Number(localStorage.getItem("mw-auto-refresh-ms") ?? "0"),
@@ -45,6 +54,19 @@ export function useDashboardData() {
   const [alertSubTab, setAlertSubTab] = useState<AlertSubTab>("decisions");
   const loadingKeys = useRef(new Set<ResourceKey>());
   const resourceCache = useRef(createResourceCache({ ttlMs: 15_000 })).current;
+  const newsParams = `${newsLimit}:${newsDomain}:${newsOffset}:${newsSourceId}:${newsStatus}:${newsRegion}`;
+  const previousNewsParams = useRef(newsParams);
+  const newsFilters = useMemo(
+    () =>
+      newsSourceId || newsStatus || newsRegion
+        ? {
+            ...(newsSourceId ? { sourceId: newsSourceId } : {}),
+            ...(newsStatus ? { status: newsStatus } : {}),
+            ...(newsRegion ? { region: newsRegion } : {}),
+          }
+        : undefined,
+    [newsRegion, newsSourceId, newsStatus],
+  );
 
   const applyResult = useCallback((key: ResourceKey, value: unknown) => {
     setState((current) => {
@@ -58,7 +80,16 @@ export function useDashboardData() {
       if (key === "events") {
         return { ...current, events: normalizeListResponse<EventCluster>(value).items };
       }
-      if (key === "news") return { ...current, news: normalizeListResponse<NewsItem>(value).items };
+      if (key === "news") {
+        const response = normalizeListResponse<NewsItem>(value);
+        return { ...current, news: response.items, newsTotal: response.total };
+      }
+      if (key === "newsDomains") {
+        return { ...current, newsDomains: normalizeListResponse<string>(value).items };
+      }
+      if (key === "newsFilterOptions") {
+        return { ...current, newsFilterOptions: value as NewsFilterOptions };
+      }
       if (key === "alerts") {
         return { ...current, alerts: normalizeListResponse<AlertDecision>(value).items };
       }
@@ -98,7 +129,12 @@ export function useDashboardData() {
       sources: api.sources,
       sourceHealth: api.sourceHealth,
       events: api.events,
-      news: api.news,
+      news: () =>
+        newsFilters
+          ? api.news(newsLimit, newsDomain || undefined, newsOffset, newsFilters)
+          : api.news(newsLimit, newsDomain || undefined, newsOffset),
+      newsDomains: api.newsDomains,
+      newsFilterOptions: api.newsFilterOptions,
       alerts: api.alerts,
       alertChannels: api.alertChannels,
       alertSuppressionRules: api.alertSuppressionRules,
@@ -108,7 +144,7 @@ export function useDashboardData() {
       alertPolicy: api.alertPolicy,
       presets: api.presets,
     }),
-    [],
+    [newsDomain, newsFilters, newsLimit, newsOffset],
   );
 
   const loadResources = useCallback(
@@ -178,12 +214,34 @@ export function useDashboardData() {
     [resourceCache],
   );
 
+  const loadNewsDetail = useCallback(
+    async (id: string, invalidate = false) => {
+      const key = `news:${id}`;
+      if (invalidate) resourceCache.invalidate(key);
+      const result = await settle("newsDetail", resourceCache.get(key, () => api.newsDetail(id)));
+      if ("error" in result) {
+        setResourceErrors((current) => ({ ...current, newsDetail: result.error }));
+        return;
+      }
+      setState((current) => ({
+        ...current,
+        newsDetails: { ...current.newsDetails, [id]: result.value as NewsDetail },
+      }));
+      setResourceErrors((current) => {
+        const next = { ...current };
+        delete next.newsDetail;
+        return next;
+      });
+    },
+    [resourceCache],
+  );
+
   const load = useCallback(
     async (invalidate = false) => {
       const keysByView: Record<View, ListResourceKey[]> = {
         overview: ["status", "events", "alerts"],
         events: ["status", "events"],
-        news: ["status", "news"],
+        news: ["status", "news", "newsDomains", "newsFilterOptions", "sources"],
         alerts:
           alertSubTab === "settings"
             ? ["status", "alertChannels", "alertSuppressionRules", "presets"]
@@ -206,6 +264,13 @@ export function useDashboardData() {
   useEffect(() => {
     if (view !== "overview") void load();
   }, [load, view]);
+
+  useEffect(() => {
+    if (previousNewsParams.current !== newsParams) {
+      previousNewsParams.current = newsParams;
+      if (view === "news") void loadResources(["news"], true);
+    }
+  }, [loadResources, newsParams, view]);
 
   useEffect(() => {
     let source: EventSource | null = null;
@@ -261,12 +326,23 @@ export function useDashboardData() {
     [selectedEventId, state.events],
   );
   const selectedEventDetail = selectedEvent ? state.eventDetails[selectedEvent.id] : undefined;
+  const selectedNews = useMemo(
+    () => state.news.find((item) => item.id === selectedNewsId) ?? null,
+    [selectedNewsId, state.news],
+  );
+  const selectedNewsDetail = selectedNewsId ? state.newsDetails[selectedNewsId] : undefined;
 
   useEffect(() => {
     if (view === "events" && selectedEvent?.id) {
       void loadEventDetail(selectedEvent.id);
     }
   }, [loadEventDetail, selectedEvent?.id, view]);
+
+  useEffect(() => {
+    if (view === "news" && selectedNews?.id) {
+      void loadNewsDetail(selectedNews.id);
+    }
+  }, [loadNewsDetail, selectedNews?.id, view]);
 
   const selectedAlert = useMemo(
     () => state.alerts.find((alert) => alert.id === selectedAlertId) ?? state.alerts[0],
@@ -362,6 +438,41 @@ export function useDashboardData() {
     (alert) => alert.decision === "immediate_alert" && !alert.acknowledged_at,
   ).length;
 
+  const updateNewsLimit = useCallback((limit: number) => {
+    setNewsLimit(limit);
+    setNewsOffset(0);
+    setSelectedNewsId(null);
+  }, []);
+
+  const updateNewsDomain = useCallback((domain: string) => {
+    setNewsDomain(domain);
+    setNewsOffset(0);
+    setSelectedNewsId(null);
+  }, []);
+
+  const updateNewsSourceId = useCallback((sourceId: string) => {
+    setNewsSourceId(sourceId);
+    setNewsOffset(0);
+    setSelectedNewsId(null);
+  }, []);
+
+  const updateNewsStatus = useCallback((status: string) => {
+    setNewsStatus(status);
+    setNewsOffset(0);
+    setSelectedNewsId(null);
+  }, []);
+
+  const updateNewsRegion = useCallback((region: string) => {
+    setNewsRegion(region);
+    setNewsOffset(0);
+    setSelectedNewsId(null);
+  }, []);
+
+  const updateNewsOffset = useCallback((offset: number) => {
+    setNewsOffset(Math.max(0, offset));
+    setSelectedNewsId(null);
+  }, []);
+
   return {
     view,
     setView,
@@ -381,6 +492,8 @@ export function useDashboardData() {
     loadAlertDetail,
     selectedEvent,
     selectedEventDetail,
+    selectedNewsId,
+    selectedNewsDetail,
     selectedAlert,
     selectedAlertDetail,
     selectedAlertEventDetail,
@@ -393,6 +506,20 @@ export function useDashboardData() {
     dismissAlert,
     unacknowledgedAlerts,
     setSelectedEventId,
+    setSelectedNewsId,
+    loadNewsDetail,
+    newsLimit,
+    setNewsLimit: updateNewsLimit,
+    newsOffset,
+    setNewsOffset: updateNewsOffset,
+    newsDomain,
+    setNewsDomain: updateNewsDomain,
+    newsSourceId,
+    setNewsSourceId: updateNewsSourceId,
+    newsStatus,
+    setNewsStatus: updateNewsStatus,
+    newsRegion,
+    setNewsRegion: updateNewsRegion,
     setSelectedAlertId,
   };
 }

@@ -9,6 +9,7 @@ import type {
   EventCluster,
   EventDetail,
   JobRun,
+  NewsDetail,
   NewsItem,
   Source,
   SourceHealth,
@@ -34,6 +35,13 @@ export type DashboardState = {
   events: EventCluster[];
   eventDetails: Record<string, EventDetail>;
   news: NewsItem[];
+  newsTotal: number;
+  newsDomains: string[];
+  newsFilterOptions: {
+    statuses: string[];
+    regions: string[];
+  };
+  newsDetails: Record<string, NewsDetail>;
   alerts: AlertDecision[];
   alertDetails: Record<string, AlertDecision>;
   alertChannels: AlertChannel[];
@@ -52,6 +60,9 @@ export type ResourceKey =
   | "events"
   | "eventDetail"
   | "news"
+  | "newsDomains"
+  | "newsFilterOptions"
+  | "newsDetail"
   | "alerts"
   | "alertDetail"
   | "alertChannels"

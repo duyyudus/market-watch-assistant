@@ -172,17 +172,76 @@ export type EventDetail = EventCluster & {
   market_moves: EventMarketMove[];
 };
 
+export type NewsEntity = {
+  id: string;
+  entity_type: string;
+  raw_text: string;
+  normalized_name: string;
+  ticker?: string | null;
+  exchange?: string | null;
+  country?: string | null;
+  confidence: number;
+};
+
+export type NewsClusterLink = {
+  event_cluster_id: string;
+  relation_type: string;
+  similarity_score?: number | null;
+  decision_metadata?: Record<string, any> | null;
+  added_at?: string | null;
+};
+
+export type NewsFilters = {
+  sourceId?: string;
+  status?: string;
+  region?: string;
+};
+
+export type NewsFilterOptions = {
+  statuses: string[];
+  regions: string[];
+};
+
 export type NewsItem = {
   id: string;
+  source_id?: string;
   title: string;
+  snippet?: string | null;
+  raw_content?: string | null;
+  url: string;
+  canonical_url?: string | null;
   source_name: string;
   source_type: string;
   source_score: number;
+  language?: string;
   region: string;
   asset_classes: string[];
   processing_status: string;
+  is_paywalled?: boolean;
+  full_text_available?: boolean;
+  full_text_extraction_status?: string;
+  full_text_attempt_count?: number;
+  full_text_last_attempted_at?: string | null;
+  full_text_last_http_status?: number | null;
+  full_text_last_error?: string | null;
+  full_text_next_retry_at?: string | null;
   published_at?: string | null;
   fetched_at?: string | null;
+};
+
+export type NewsDetail = NewsItem & {
+  source_id: string;
+  language: string;
+  is_paywalled: boolean;
+  full_text_available: boolean;
+  full_text_extraction_status: string;
+  full_text_attempt_count: number;
+  full_text_last_attempted_at?: string | null;
+  full_text_last_http_status?: number | null;
+  full_text_last_error?: string | null;
+  full_text_next_retry_at?: string | null;
+  entities: NewsEntity[];
+  clusters: NewsClusterLink[];
 };
 
 export type AlertDecision = {
@@ -485,6 +544,20 @@ export function buildMaintenancePipelineMetricsPath(limit?: number, offset?: num
   return `/maintenance/pipeline-metrics?limit=${limit || 20}&offset=${offset || 0}`;
 }
 
+export function buildNewsPath(
+  limit = 100,
+  domain?: string,
+  offset = 0,
+  filters?: NewsFilters,
+): string {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (domain) params.set("domain", domain);
+  if (filters?.sourceId) params.set("source_id", filters.sourceId);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.region) params.set("region", filters.region);
+  return `/news?${params.toString()}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...buildRequestHeaders(API_AUTH_TOKEN), ...(init?.headers ?? {}) },
@@ -506,7 +579,11 @@ export const api = {
   sourceHealth: () => request<ListEnvelope<SourceHealth>>("/sources/health"),
   events: () => request<ListEnvelope<EventCluster>>("/events?limit=100"),
   event: (id: string) => request<EventDetail>(`/events/${id}`),
-  news: () => request<ListEnvelope<NewsItem>>("/news?limit=100"),
+  news: (limit = 100, domain?: string, offset = 0, filters?: NewsFilters) =>
+    request<ListEnvelope<NewsItem>>(buildNewsPath(limit, domain, offset, filters)),
+  newsDomains: () => request<ListEnvelope<string>>("/news/domains"),
+  newsFilterOptions: () => request<NewsFilterOptions>("/news/filter-options"),
+  newsDetail: (id: string) => request<NewsDetail>(`/news/${id}`),
   alerts: () => request<ListEnvelope<AlertDecision>>("/alerts?limit=100"),
   alert: (id: string) => request<AlertDecision>(`/alerts/${id}`),
   alertChannels: () => request<ListEnvelope<AlertChannel>>("/alert-channels"),

@@ -9,6 +9,9 @@ const apiMock = vi.hoisted(() => ({
   events: vi.fn(),
   event: vi.fn(),
   news: vi.fn(),
+  newsDomains: vi.fn(),
+  newsFilterOptions: vi.fn(),
+  newsDetail: vi.fn(),
   alerts: vi.fn(),
   alert: vi.fn(),
   sourceHealth: vi.fn(),
@@ -274,6 +277,8 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         source_name: "Federal Reserve",
         source_type: "official",
         source_score: 100,
+        url: "https://www.example.com/news",
+        canonical_url: "https://example.com/news",
         region: "us",
         asset_classes: ["global_macro"],
         processing_status: "clustered",
@@ -282,6 +287,58 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       },
     ]),
   );
+  apiMock.newsDomains.mockResolvedValue({ items: ["example.com", "oil.example.org"], total: 2 });
+  apiMock.newsFilterOptions.mockResolvedValue({
+    statuses: ["clustered", "new", "normalized"],
+    regions: ["global", "us"],
+  });
+  apiMock.newsDetail.mockResolvedValue({
+    id: "news_1",
+    source_id: "src_1",
+    title: "Fed signals a slower rate path",
+    snippet: "Policy makers leaned less hawkish.",
+    raw_content: "Full normalized article text.",
+    url: "https://www.example.com/news",
+    canonical_url: "https://example.com/news",
+    source_name: "Federal Reserve",
+    source_type: "official",
+    source_score: 100,
+    published_at: "2026-05-29T13:00:00Z",
+    fetched_at: "2026-05-29T13:00:00Z",
+    language: "en",
+    region: "us",
+    asset_classes: ["global_macro"],
+    processing_status: "clustered",
+    is_paywalled: false,
+    full_text_available: true,
+    full_text_extraction_status: "success",
+    full_text_attempt_count: 1,
+    full_text_last_attempted_at: "2026-05-29T13:02:00Z",
+    full_text_last_http_status: 200,
+    full_text_last_error: null,
+    full_text_next_retry_at: null,
+    entities: [
+      {
+        id: "ent_1",
+        entity_type: "organization",
+        raw_text: "Federal Reserve",
+        normalized_name: "Federal Reserve",
+        ticker: null,
+        exchange: null,
+        country: "US",
+        confidence: 96,
+      },
+    ],
+    clusters: [
+      {
+        event_cluster_id: "evt_1",
+        relation_type: "seed",
+        similarity_score: 91,
+        decision_metadata: null,
+        added_at: "2026-05-29T13:03:00Z",
+      },
+    ],
+  });
   apiMock.alerts.mockResolvedValue(
     envelope([
       {
@@ -780,6 +837,114 @@ describe("App data states", () => {
     expect(await screen.findByText("No priority events yet")).toBeInTheDocument();
     switchTo("news");
     expect(screen.getByText("No normalized news yet")).toBeInTheDocument();
+  });
+
+  it("loads normalized news with the default limit and fetches selected article detail", async () => {
+    await renderLoadedApp();
+
+    switchTo("news");
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, { status: "normalized" }),
+    );
+    await waitFor(() => expect(apiMock.newsDomains).toHaveBeenCalled());
+    await waitFor(() => expect(apiMock.newsFilterOptions).toHaveBeenCalled());
+    expect(await screen.findByRole("option", { name: "oil.example.org" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Federal Reserve · official" })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByTestId("news-row-news_1"));
+
+    await waitFor(() => expect(apiMock.newsDetail).toHaveBeenCalledWith("news_1"));
+    expect(await screen.findByText("Full normalized article text.")).toBeInTheDocument();
+  });
+
+  it("reloads normalized news when the fetch limit changes", async () => {
+    await renderLoadedApp();
+
+    switchTo("news");
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, { status: "normalized" }),
+    );
+    apiMock.news.mockClear();
+
+    fireEvent.change(await screen.findByLabelText("Items per page"), { target: { value: "200" } });
+
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(200, undefined, 0, { status: "normalized" }),
+    );
+  });
+
+  it("loads the next news page using fetch limit as page size", async () => {
+    apiMock.news.mockResolvedValue({
+      items: [
+        {
+          id: "news_1",
+          title: "Fed signals a slower rate path",
+          source_name: "Federal Reserve",
+          source_type: "official",
+          source_score: 100,
+          url: "https://www.example.com/news",
+          canonical_url: "https://example.com/news",
+          region: "us",
+          asset_classes: ["global_macro"],
+          processing_status: "clustered",
+          published_at: "2026-05-29T13:00:00Z",
+          fetched_at: "2026-05-29T13:00:00Z",
+        },
+      ],
+      total: 150,
+    });
+    await renderLoadedApp();
+
+    switchTo("news");
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, { status: "normalized" }),
+    );
+    apiMock.news.mockClear();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Next page" }));
+
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 100, {
+        status: "normalized",
+      }),
+    );
+  });
+
+  it("reloads normalized news when source status and region filters change", async () => {
+    await renderLoadedApp();
+
+    switchTo("news");
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, { status: "normalized" }),
+    );
+
+    apiMock.news.mockClear();
+    fireEvent.change(await screen.findByLabelText("Source"), { target: { value: "src_1" } });
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, {
+        sourceId: "src_1",
+        status: "normalized",
+      }),
+    );
+
+    apiMock.news.mockClear();
+    fireEvent.change(await screen.findByLabelText("Status"), { target: { value: "new" } });
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, {
+        sourceId: "src_1",
+        status: "new",
+      }),
+    );
+
+    apiMock.news.mockClear();
+    fireEvent.change(await screen.findByLabelText("Region"), { target: { value: "global" } });
+    await waitFor(() =>
+      expect(apiMock.news).toHaveBeenCalledWith(100, undefined, 0, {
+        sourceId: "src_1",
+        status: "new",
+        region: "global",
+      }),
+    );
   });
 
   it("keeps successful pages visible when one endpoint fails", async () => {

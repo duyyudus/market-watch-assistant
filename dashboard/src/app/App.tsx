@@ -45,6 +45,8 @@ export function App() {
     loadAlertDetail,
     selectedEvent,
     selectedEventDetail,
+    selectedNewsId,
+    selectedNewsDetail,
     selectedAlert,
     selectedAlertDetail,
     selectedAlertEventDetail,
@@ -57,6 +59,20 @@ export function App() {
     dismissAlert,
     unacknowledgedAlerts,
     setSelectedEventId,
+    setSelectedNewsId,
+    loadNewsDetail,
+    newsLimit,
+    setNewsLimit,
+    newsOffset,
+    setNewsOffset,
+    newsDomain,
+    setNewsDomain,
+    newsSourceId,
+    setNewsSourceId,
+    newsStatus,
+    setNewsStatus,
+    newsRegion,
+    setNewsRegion,
     setSelectedAlertId,
   } = useDashboardData();
   const [themeMode, setThemeMode] = useState<string>(
@@ -284,7 +300,35 @@ export function App() {
                 retry={() => load(true)}
               />
             ) : view === "news" ? (
-              <NewsTable rows={state.news} error={resourceErrors.news} retry={() => load(true)} />
+              <NewsTable
+                rows={state.news}
+                error={resourceErrors.news}
+                detailError={resourceErrors.newsDetail}
+                retry={() => load(true)}
+                selectedNewsId={selectedNewsId}
+                selectedNewsDetail={selectedNewsDetail ?? null}
+                selectNews={(id) => {
+                  setSelectedNewsId(id);
+                  void loadNewsDetail(id);
+                }}
+                limit={newsLimit}
+                setLimit={setNewsLimit}
+                offset={newsOffset}
+                total={state.newsTotal}
+                setOffset={setNewsOffset}
+                domain={newsDomain}
+                setDomain={setNewsDomain}
+                domainOptions={state.newsDomains}
+                sourceId={newsSourceId}
+                setSourceId={setNewsSourceId}
+                sourceOptions={state.sources}
+                status={newsStatus}
+                setStatus={setNewsStatus}
+                statusOptions={state.newsFilterOptions.statuses}
+                region={newsRegion}
+                setRegion={setNewsRegion}
+                regionOptions={state.newsFilterOptions.regions}
+              />
             ) : view === "alerts" ? (
               <Alerts
                 activeTab={alertSubTab}
