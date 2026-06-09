@@ -218,6 +218,7 @@ describe("NewsTable", () => {
 
     expect(selectNews).toHaveBeenCalledWith("news_1");
     expect(screen.getByText("Article detail")).toBeInTheDocument();
+    expect(screen.getByText("news_1")).toBeInTheDocument();
     expect(screen.getByText("Policy makers leaned less hawkish.")).toBeInTheDocument();
     expect(screen.getByText("Full normalized article text.")).toBeInTheDocument();
     const entityChip = screen.getByTestId("news-entity-ent_1");

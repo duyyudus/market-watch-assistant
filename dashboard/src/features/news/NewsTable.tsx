@@ -382,6 +382,7 @@ function NewsDetailPanel({
       </div>
 
       <div className="mt-4 grid gap-2 text-xs">
+        <DetailRow label="ID" value={detail.id} />
         <DetailRow label="Source" value={detail.source_name} />
         <DetailRow label="Domain" value={domainFor(detail.canonical_url ?? detail.url)} />
         <DetailRow label="Status" value={detail.processing_status} />
