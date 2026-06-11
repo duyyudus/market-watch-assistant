@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from bot_worker.db.models import EventCluster, NormalizedNewsItem
 from common.llm import (
+    PROMPT_VERSION,
     LLMAnalysis,
     LLMClassification,
     LLMClusterDecision,
@@ -21,6 +22,7 @@ from common.llm import (
     clamp_score_modifier,
     event_needs_llm_analysis,
     normalize_usage,
+    parse_structured_response_content,
     strict_json_schema,
 )
 
@@ -29,6 +31,13 @@ def test_bot_worker_llm_reexports_shared_config_for_compatibility() -> None:
     from bot_worker.llm import LLMConfig as WorkerLLMConfig
 
     assert WorkerLLMConfig is LLMConfig
+
+
+def test_event_prompt_version_is_bumped_for_alert_message_schema() -> None:
+    config = LLMConfig()
+
+    assert PROMPT_VERSION == "event-v2"
+    assert config.prompt_version == "event-v2"
 
 
 def test_llm_trigger_policy_selects_high_value_events() -> None:
@@ -57,6 +66,26 @@ def test_llm_trigger_policy_selects_high_value_events() -> None:
     assert not event_needs_llm_analysis(ordinary, config=config, market_move_score=0)
 
 
+def test_llm_trigger_policy_uses_configured_analysis_min_score() -> None:
+    market_move = EventCluster(
+        canonical_headline="Oil futures move after shipping report",
+        final_score=58,
+        source_count=2,
+        top_source_score=75,
+    )
+    relevance = EventCluster(
+        canonical_headline="Watchlist company comments on demand",
+        final_score=58,
+        source_count=1,
+        top_source_score=75,
+        relevance_score=82,
+    )
+    config = LLMConfig(enabled=True, analysis_min_score_threshold=60)
+
+    assert not event_needs_llm_analysis(market_move, config=config, market_move_score=75)
+    assert not event_needs_llm_analysis(relevance, config=config, market_move_score=0)
+
+
 def test_llm_prompt_uses_compact_event_context_and_excludes_secrets() -> None:
     event = EventCluster(
         id="evt_1",
@@ -81,6 +110,7 @@ def test_llm_prompt_uses_compact_event_context_and_excludes_secrets() -> None:
 
     assert "Vietnam bank stocks rally" in prompt
     assert "Market move score: 72" in prompt
+    assert "alert_message" in prompt
     assert "OPENROUTER_API_KEY" not in prompt
     assert "secret" not in prompt.casefold()
 
@@ -106,6 +136,32 @@ def test_news_classification_prompt_is_item_scoped() -> None:
     assert "Classify this normalized market news item" in prompt
     assert "Vietnam bank stocks rise" in prompt
     assert "Event cluster" not in prompt
+
+
+def test_news_classification_prompt_caps_full_text() -> None:
+    raw_content = "A" * 8_500 + " SHouldNotAppear"
+    item = NormalizedNewsItem(
+        id="news_1",
+        title="Vietnam bank stocks rise after credit growth update",
+        snippet="Bank shares gained after official lending data.",
+        raw_content=raw_content,
+        source_name="Vietstock",
+        source_type="rss",
+        source_score=75,
+        region="vietnam",
+        asset_classes=["equity"],
+        language="en",
+        url="https://example.test/news",
+        title_hash="title",
+        normalized_text_hash="text",
+    )
+
+    prompt = build_news_classification_prompt(item)
+
+    assert "Vietnam bank stocks rise after credit growth update" in prompt
+    assert "Bank shares gained after official lending data." in prompt
+    assert "A" * 8_000 in prompt
+    assert "SHouldNotAppear" not in prompt
 
 
 def test_event_summary_and_score_prompts_are_distinct() -> None:
@@ -185,13 +241,15 @@ def test_llm_analysis_validation_and_modifier_clamping() -> None:
             "confidence": 84,
             "impact_rationale": "Directly affects credit-sensitive equities.",
             "why_it_matters": "Bank earnings expectations may shift.",
+            "alert_message": "Bank shares may move after a material policy update.",
             "risk_flags": ["single jurisdiction"],
             "score_modifier": 50,
             "modifier_reason": "Official source and market reaction.",
         }
     )
 
-    assert analysis.score_modifier == 10
+    assert analysis.score_modifier == 50
+    assert analysis.alert_message == "Bank shares may move after a material policy update."
     assert clamp_score_modifier(-50, minimum=-5, maximum=7) == -5
 
     with pytest.raises(ValidationError):
@@ -208,7 +266,6 @@ def test_task_specific_llm_schemas_validate_expected_outputs() -> None:
             "asset_classes": ["equity", "macro"],
             "entities": ["S&P 500"],
             "tickers": ["SPY"],
-            "duplicate_hint": "unknown",
             "confidence": 82,
             "rationale": "Opinion about equity supply, not a direct catalyst.",
         }
@@ -244,8 +301,36 @@ def test_task_specific_llm_schemas_validate_expected_outputs() -> None:
 
     assert classification.actionability == "low"
     assert summary.status == "reported"
-    assert score.score_modifier == 10
+    assert score.score_modifier == 99
     assert cluster_decision.decision == "same_event"
+
+
+def test_tolerant_structured_response_parser_accepts_fenced_json() -> None:
+    content = """Here is the JSON:
+```json
+{
+  "summary": "Markets reacted to the policy update.",
+  "event_type": "economic_policy",
+  "status_assessment": "reported",
+  "confidence": 82,
+  "impact_rationale": "The report affects rate expectations.",
+  "why_it_matters": "Rate expectations can move equities and FX.",
+  "alert_message": "Markets react to reported policy update.",
+  "risk_flags": ["reported"],
+  "score_modifier": 2,
+  "modifier_reason": "The deterministic score slightly understates impact."
+}
+```
+"""
+
+    analysis = parse_structured_response_content(content, LLMAnalysis)
+
+    assert analysis.alert_message == "Markets react to reported policy update."
+
+
+def test_tolerant_structured_response_parser_rejects_invalid_prose() -> None:
+    with pytest.raises(ValueError, match="Failed to parse structured LLM response"):
+        parse_structured_response_content("I cannot produce JSON for this.", LLMAnalysis)
 
 
 def test_llm_schema_marks_all_properties_required_for_strict_openrouter_mode() -> None:
@@ -297,6 +382,7 @@ async def test_openrouter_structured_completion_omits_service_tier_by_default(
                                 confidence=70,
                                 impact_rationale="Relevant.",
                                 why_it_matters="Markets may react.",
+                                alert_message="Markets may react to the policy update.",
                                 risk_flags=[],
                                 score_modifier=0,
                                 modifier_reason="No change.",
@@ -388,6 +474,7 @@ async def test_openrouter_structured_completion_retries_without_strict_schema_on
                                     confidence=70,
                                     impact_rationale="Relevant.",
                                     why_it_matters="Markets may react.",
+                                    alert_message="Markets may react to the policy update.",
                                     risk_flags=[],
                                     score_modifier=0,
                                     modifier_reason="No change.",

@@ -47,9 +47,9 @@ llm:
   model: google/gemini-3.1-flash-lite
   service_tier: flex
   api_key_env: OPENROUTER_API_KEY
-  prompt_version: event-v1
+  prompt_version: event-v2
   temperature: 0.1
-  max_tokens: 700
+  max_tokens: 1200
   timeout_seconds: 45
   max_concurrency: 3
   high_score_threshold: 80

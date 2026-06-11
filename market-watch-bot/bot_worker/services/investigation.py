@@ -27,6 +27,7 @@ from common.llm import (
     INVESTIGATION_PROMPT_VERSION,
     LLMConfig,
     build_investigation_prompt,
+    clamp_score_modifier,
     llm_provider,
     prompt_hash,
 )
@@ -454,9 +455,10 @@ async def _execute_investigation_run(
         run.updated_at = utcnow()
         return run
     result_data = result.model_dump()
-    result_data["suggested_score_modifier"] = min(
-        config.max_modifier,
-        max(config.min_modifier, int(result_data["suggested_score_modifier"])),
+    result_data["suggested_score_modifier"] = clamp_score_modifier(
+        int(result_data["suggested_score_modifier"]),
+        minimum=config.min_modifier,
+        maximum=config.max_modifier,
     )
     run.status = "succeeded"
     run.result = _json_safe(result_data)
@@ -758,9 +760,10 @@ async def run_investigations_concurrently(
             continue
 
         result_data = result.model_dump()
-        result_data["suggested_score_modifier"] = min(
-            config.max_modifier,
-            max(config.min_modifier, int(result_data["suggested_score_modifier"])),
+        result_data["suggested_score_modifier"] = clamp_score_modifier(
+            int(result_data["suggested_score_modifier"]),
+            minimum=config.min_modifier,
+            maximum=config.max_modifier,
         )
         run.status = "succeeded"
         run.result = _json_safe(result_data)

@@ -511,6 +511,48 @@ async def test_run_event_investigation_stores_structured_recommendation(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_run_event_investigation_clamps_modifier_with_config(monkeypatch) -> None:
+    target = event()
+    session = FakeInvestigationSession(target)
+
+    class FakeProvider:
+        async def investigate_event(self, _prompt: str):
+            return (
+                LLMInvestigationResult(
+                    summary="Official confirmation is present.",
+                    confidence=82,
+                    official_confirmation="confirmed",
+                    risk_flags=[],
+                    suggested_score_modifier=8,
+                    suggested_alert_level="immediate_alert",
+                    caveats=[],
+                ),
+                {"total_tokens": 123},
+            )
+
+    class FakeSearch:
+        async def search(self, _query: str, *, count: int):
+            return []
+
+    monkeypatch.setattr(investigation_services, "llm_provider", lambda _config: FakeProvider())
+
+    run = await investigation_services.run_event_investigation(
+        session,
+        event_id="evt_1",
+        config=InvestigationConfig(
+            enabled=True,
+            brave_search_api_key="brave-key",
+            max_modifier=3,
+        ),
+        llm_config=LLMConfig(enabled=True, api_key="llm-key"),
+        search_client=FakeSearch(),
+    )
+
+    assert run.status == "succeeded"
+    assert run.result["suggested_score_modifier"] == 3
+
+
+@pytest.mark.asyncio
 async def test_alert_decision_applies_latest_investigation_modifier() -> None:
     investigation = AgentInvestigation(
         id="inv_1",
@@ -973,4 +1015,3 @@ async def test_run_investigations_concurrently_strips_null_bytes(monkeypatch) ->
     assert rows[0].result["risk_flags"] == ["single_source"]
     assert rows[0].result["caveats"] == ["Caveat."]
     assert rows[0].usage == {"total_tokens": 15, "provider_note": "usagevalue"}
-

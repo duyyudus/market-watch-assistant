@@ -80,6 +80,7 @@ async def record_alert_decisions(session: AsyncSession) -> int:
                 "confidence": llm_run.result.get("confidence"),
                 "impact_rationale": llm_run.result.get("impact_rationale"),
                 "why_it_matters": llm_run.result.get("why_it_matters"),
+                "alert_message": llm_run.result.get("alert_message"),
                 "risk_flags": llm_run.result.get("risk_flags", []),
                 "score_modifier": modifier,
                 "modifier_reason": llm_run.result.get("modifier_reason"),

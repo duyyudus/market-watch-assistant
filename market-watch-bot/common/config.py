@@ -79,9 +79,9 @@ class LLMSettings(BaseModel):
     model: str = "openai/gpt-4.1-mini"
     service_tier: Literal["flex", "priority"] | None = None
     api_key_env: str = "OPENROUTER_API_KEY"
-    prompt_version: str = "event-v1"
+    prompt_version: str = "event-v2"
     temperature: float = 0.1
-    max_tokens: int = 700
+    max_tokens: int = 1200
     timeout_seconds: int = 45
     max_concurrency: int = Field(default=3, ge=1)
     high_score_threshold: int = 80

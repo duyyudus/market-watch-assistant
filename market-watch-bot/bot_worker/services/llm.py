@@ -32,6 +32,7 @@ from common.llm import (
     build_event_score_prompt,
     build_event_summary_prompt,
     build_news_classification_prompt,
+    clamp_score_modifier,
     event_input_snapshot,
     event_needs_llm_analysis,
     llm_provider,
@@ -599,9 +600,10 @@ async def score_event_with_llm(
         return run
     run.status = "succeeded"
     score_result = result.model_dump()
-    score_result["score_modifier"] = min(
-        config.max_modifier,
-        max(config.min_modifier, int(score_result["score_modifier"])),
+    score_result["score_modifier"] = clamp_score_modifier(
+        int(score_result["score_modifier"]),
+        minimum=config.min_modifier,
+        maximum=config.max_modifier,
     )
     run.result = score_result
     run.usage = usage
@@ -723,9 +725,10 @@ async def enrich_event_clusters_with_llm(
             run.updated_at = utcnow()
             continue
         result = analysis.model_dump()
-        result["score_modifier"] = min(
-            config.max_modifier,
-            max(config.min_modifier, int(result["score_modifier"])),
+        result["score_modifier"] = clamp_score_modifier(
+            int(result["score_modifier"]),
+            minimum=config.min_modifier,
+            maximum=config.max_modifier,
         )
         run.status = "succeeded"
         run.result = result

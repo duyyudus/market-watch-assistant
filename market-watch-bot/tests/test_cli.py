@@ -287,9 +287,9 @@ def test_cli_investigate_event_runs_service(monkeypatch) -> None:
             api_base_url = "https://openrouter.ai/api/v1"
             model = "model"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -405,9 +405,9 @@ def test_cli_investigate_run_pending_executes_pending_runs(monkeypatch) -> None:
             api_base_url = "https://openrouter.ai/api/v1"
             model = "model"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -512,9 +512,9 @@ async def test_worker_tick_runs_command_drain_without_scheduled_pipeline(monkeyp
             api_base_url = "https://openrouter.ai/api/v1"
             model = "model"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -611,9 +611,9 @@ async def test_worker_tick_runs_scheduled_pipeline_when_interval_elapsed(monkeyp
             api_base_url = "https://openrouter.ai/api/v1"
             model = "model"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -1027,7 +1027,7 @@ def test_cli_llm_usage_summarizes_stored_runs(monkeypatch) -> None:
                     target_id="evt_1",
                     provider="openrouter",
                     model="openai/gpt-4.1-mini",
-                    prompt_version="event-v1",
+                    prompt_version="event-v2",
                     prompt_hash="hash",
                     input_snapshot={},
                     status="succeeded",
@@ -1065,7 +1065,7 @@ def test_cli_llm_enrich_reports_latest_failed_run(monkeypatch) -> None:
         target_id="evt_failed",
         provider="openrouter",
         model="openai/gpt-5.4-mini",
-        prompt_version="event-v1",
+        prompt_version="event-v2",
         prompt_hash="hash",
         input_snapshot={},
         status="failed",
@@ -1815,9 +1815,9 @@ def test_cli_llm_compare_model_news(monkeypatch) -> None:
             api_base_url = "https://openrouter.ai/api/v1"
             model = "google/gemini-3.1-flash-lite"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -1844,7 +1844,6 @@ def test_cli_llm_compare_model_news(monkeypatch) -> None:
             asset_classes=["equity"],
             entities=["Fed"],
             tickers=["SPY"],
-            duplicate_hint="no",
             confidence=90,
             rationale="Rationale here",
         ), {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
@@ -1926,9 +1925,9 @@ def test_cli_llm_compare_model_event(monkeypatch) -> None:
             api_base_url = "https://openrouter.ai/api/v1"
             model = "google/gemini-3.1-flash-lite"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -1970,6 +1969,7 @@ def test_cli_llm_compare_model_event(monkeypatch) -> None:
             confidence=85,
             impact_rationale="Rationale",
             why_it_matters="Why matters",
+            alert_message="Alert message",
             risk_flags=["volatile"],
             score_modifier=5,
             modifier_reason="Reason",
@@ -2057,9 +2057,9 @@ def test_cli_llm_compare_model_not_found(monkeypatch) -> None:
             api_base_url = "https://openrouter.ai/api/v1"
             model = "google/gemini-3.1-flash-lite"
             api_key_env = "OPENROUTER_API_KEY"
-            prompt_version = "event-v1"
+            prompt_version = "event-v2"
             temperature = 0.1
-            max_tokens = 700
+            max_tokens = 1200
             timeout_seconds = 45
             max_concurrency = 3
             high_score_threshold = 80
@@ -2089,3 +2089,288 @@ def test_cli_llm_compare_model_not_found(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "Error: Target ID 'not_existent' not found" in result.output
+
+
+def test_cli_llm_compare_model_multiple(monkeypatch) -> None:
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from common.llm import LLMAnalysis, LLMClassification, LLMEventScore, LLMEventSummary
+
+    news_item = NormalizedNewsItem(
+        id="news_compare_multi",
+        title="Multi News Title",
+        snippet="Multi News Snippet",
+        source_name="Source Multi",
+        source_type="rss",
+        source_score=80,
+        region="us",
+        asset_classes=["equity"],
+        language="en",
+    )
+
+    event = EventCluster(
+        id="evt_compare_multi",
+        canonical_headline="Multi Event Headline",
+        summary="Multi Event Summary",
+        status="reported",
+        regions=["global"],
+        asset_classes=["commodity"],
+        affected_entities=["Oil"],
+        affected_tickers=["USO"],
+        source_count=2,
+        top_source_score=90,
+        final_score=85,
+    )
+
+    class MockSession:
+        async def get(self, model, key):
+            if model is NormalizedNewsItem and key == "news_compare_multi":
+                return news_item
+            if model is EventCluster and key == "evt_compare_multi":
+                return event
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(MockSession())
+
+    class Settings:
+        openrouter_api_key = "fake_key"
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "google/gemini-3.1-flash-lite"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v2"
+            temperature = 0.1
+            max_tokens = 1200
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    monkeypatch.setattr(llm_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+
+    # Mock scoring helpers
+    async def mock_market_move(*args):
+        return 50
+    async def mock_watchlist(*args):
+        return []
+
+    monkeypatch.setattr(
+        "bot_worker.cli.llm.market_move_score_for_cluster",
+        mock_market_move
+    )
+    monkeypatch.setattr(
+        "bot_worker.cli.llm.watchlist_entries",
+        mock_watchlist
+    )
+
+    # Mock provider
+    async def mock_classify(*args, **kwargs):
+        return LLMClassification(
+            item_type="news",
+            actionability="high",
+            event_type="macro",
+            region="us",
+            asset_classes=["equity"],
+            entities=["Fed"],
+            tickers=["SPY"],
+            confidence=90,
+            rationale="Rationale here",
+        ), {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    async def mock_analyze(*args):
+        return LLMAnalysis(
+            summary="Analyzed",
+            event_type="macro",
+            status_assessment="reported",
+            confidence=85,
+            impact_rationale="Rationale",
+            why_it_matters="Why matters",
+            alert_message="Alert message",
+            risk_flags=[],
+            score_modifier=5,
+            modifier_reason="Reason",
+        ), {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    async def mock_summarize(*args):
+        return LLMEventSummary(
+            summary="Summarized",
+            status="reported",
+            affected_assets=["USO"],
+            digest_bullets=["Bullet 1"],
+            why_it_matters="Why it matters",
+            alert_message="Alert message",
+            caveats=[],
+        ), {"prompt_tokens": 200, "completion_tokens": 100, "total_tokens": 300}
+
+    async def mock_score(*args):
+        return LLMEventScore(
+            impact_score=80,
+            relevance_score=75,
+            confidence_score=90,
+            risk_flags=[],
+            score_modifier=2,
+            modifier_reason="Reason score",
+        ), {"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75}
+
+    provider_mock = MagicMock()
+    provider_mock.classify_news_item = AsyncMock(side_effect=mock_classify)
+    provider_mock.analyze_event = AsyncMock(side_effect=mock_analyze)
+    provider_mock.summarize_event = AsyncMock(side_effect=mock_summarize)
+    provider_mock.score_event = AsyncMock(side_effect=mock_score)
+
+    monkeypatch.setattr(llm_cli, "llm_provider", lambda config: provider_mock)
+
+    news_file = os.path.join(".llm_comparison", "llm_compare_news_compare_multi.md")
+    evt_file = os.path.join(".llm_comparison", "llm_compare_evt_compare_multi.md")
+
+    for f in (news_file, evt_file):
+        if os.path.exists(f):
+            os.remove(f)
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "llm",
+                "compare-model",
+                "google/gemini-3.1-flash-lite",
+                "openai/gpt-4o-mini",
+                "news_compare_multi",
+                "evt_compare_multi",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert os.path.exists(news_file)
+        assert os.path.exists(evt_file)
+
+        with open(news_file, encoding="utf-8") as f:
+            assert "Multi News Title" in f.read()
+        with open(evt_file, encoding="utf-8") as f:
+            assert "Multi Event Headline" in f.read()
+
+    finally:
+        for f in (news_file, evt_file):
+            if os.path.exists(f):
+                os.remove(f)
+
+
+def test_cli_llm_compare_model_rerun_all(monkeypatch) -> None:
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from common.llm import LLMClassification
+
+    news_item = NormalizedNewsItem(
+        id="news_compare_rerun",
+        title="Rerun News Title",
+        snippet="Rerun News Snippet",
+        source_name="Source Rerun",
+        source_type="rss",
+        source_score=80,
+        region="us",
+        asset_classes=["equity"],
+        language="en",
+    )
+
+    class MockSession:
+        async def get(self, model, key):
+            if model is NormalizedNewsItem and key == "news_compare_rerun":
+                return news_item
+            return None
+
+    async def fake_with_session(fn):
+        return await fn(MockSession())
+
+    class Settings:
+        openrouter_api_key = "fake_key"
+
+        class llm:
+            enabled = True
+            provider = "openrouter"
+            api_base_url = "https://openrouter.ai/api/v1"
+            model = "google/gemini-3.1-flash-lite"
+            api_key_env = "OPENROUTER_API_KEY"
+            prompt_version = "event-v2"
+            temperature = 0.1
+            max_tokens = 1200
+            timeout_seconds = 45
+            max_concurrency = 3
+            high_score_threshold = 80
+            single_source_score_threshold = 90
+            market_move_score_threshold = 70
+            relevance_score_threshold = 80
+            min_modifier = -10
+            max_modifier = 10
+            cluster_decision_enabled = True
+            cluster_ambiguous_min_similarity = 0.78
+            cluster_decision_min_confidence = 70
+            cluster_decision_candidate_limit = 3
+
+    monkeypatch.setattr(llm_cli, "_settings", lambda: Settings())
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+
+    # Mock provider
+    async def mock_classify(*args, **kwargs):
+        return LLMClassification(
+            item_type="news",
+            actionability="high",
+            event_type="macro",
+            region="us",
+            asset_classes=["equity"],
+            entities=["Fed"],
+            tickers=["SPY"],
+            confidence=90,
+            rationale="Rationale here",
+        ), {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+
+    provider_mock = MagicMock()
+    provider_mock.classify_news_item = AsyncMock(side_effect=mock_classify)
+
+    monkeypatch.setattr(llm_cli, "llm_provider", lambda config: provider_mock)
+
+    os.makedirs(".llm_comparison", exist_ok=True)
+    news_file = os.path.join(".llm_comparison", "llm_compare_news_compare_rerun.md")
+
+    # Create dummy initial report file to trigger rerun detection
+    with open(news_file, "w", encoding="utf-8") as f:
+        f.write("Initial report")
+
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "llm",
+                "compare-model",
+                "google/gemini-3.1-flash-lite",
+                "openai/gpt-4o-mini",
+                "--rerun-all",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert os.path.exists(news_file)
+
+        with open(news_file, encoding="utf-8") as f:
+            content = f.read()
+            assert "Initial report" not in content
+            assert "# LLM Model Comparison Report: News Item Classification" in content
+            assert "Rerun News Title" in content
+
+    finally:
+        if os.path.exists(news_file):
+            os.remove(news_file)

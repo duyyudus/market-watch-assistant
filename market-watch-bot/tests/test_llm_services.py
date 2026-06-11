@@ -14,6 +14,7 @@ from bot_worker.db.models import (
     NormalizedNewsItem,
 )
 from bot_worker.llm import (
+    PROMPT_VERSION,
     LLMAnalysis,
     LLMClassification,
     LLMClusterDecision,
@@ -354,6 +355,7 @@ async def test_enrich_event_clusters_records_successful_structured_result(monkey
                     confidence=88,
                     impact_rationale="Energy prices reacted to supply disruption risk.",
                     why_it_matters="Higher oil prices can affect inflation and energy equities.",
+                    alert_message="Oil jumps after reported Hormuz disruption.",
                     risk_flags=["single source"],
                     score_modifier=7,
                     modifier_reason="High source score and direct market relevance.",
@@ -382,8 +384,59 @@ async def test_enrich_event_clusters_records_successful_structured_result(monkey
     assert run.target_type == "event_cluster"
     assert run.target_id == "evt_1"
     assert run.status == "succeeded"
+    assert run.result["alert_message"] == "Oil jumps after reported Hormuz disruption."
     assert run.result["score_modifier"] == 7
     assert run.usage["total_tokens"] == 180
+
+
+@pytest.mark.asyncio
+async def test_enrich_event_clusters_clamps_modifier_with_config(monkeypatch) -> None:
+    event = EventCluster(
+        id="evt_1",
+        canonical_headline="Oil jumps after Hormuz disruption",
+        final_score=86,
+        source_count=1,
+        top_source_score=92,
+        created_at=datetime(2026, 5, 27, tzinfo=UTC),
+    )
+    session = FakeLLMSession([event])
+
+    class FakeProvider:
+        async def analyze_event(self, _prompt: str) -> tuple[LLMAnalysis, dict[str, int]]:
+            return (
+                LLMAnalysis(
+                    summary="Oil supply risk rose after a disruption.",
+                    event_type="geopolitical",
+                    status_assessment="reported",
+                    confidence=88,
+                    impact_rationale="Energy prices reacted to supply disruption risk.",
+                    why_it_matters="Higher oil prices can affect inflation and energy equities.",
+                    alert_message="Oil jumps after reported Hormuz disruption.",
+                    risk_flags=["single source"],
+                    score_modifier=7,
+                    modifier_reason="High source score and direct market relevance.",
+                ),
+                {"total_tokens": 180},
+            )
+
+    async def fake_market_move_score_for_cluster(_session, _cluster):
+        return 0
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(
+        llm_services,
+        "market_move_score_for_cluster",
+        fake_market_move_score_for_cluster,
+    )
+
+    count = await services.enrich_event_clusters_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key", max_modifier=5),
+    )
+
+    assert count == 1
+    run = next(value for value in session.added if isinstance(value, LLMAnalysisRun))
+    assert run.result["score_modifier"] == 5
 
 
 @pytest.mark.asyncio
@@ -408,6 +461,7 @@ async def test_manual_event_enrichment_can_force_low_value_event(monkeypatch) ->
                     confidence=70,
                     impact_rationale="No direct catalyst is visible.",
                     why_it_matters="Useful for context but not urgent.",
+                    alert_message="Routine market commentary has limited urgency.",
                     risk_flags=[],
                     score_modifier=-2,
                     modifier_reason="Low signal event.",
@@ -471,6 +525,7 @@ async def test_enrich_event_clusters_limits_concurrent_llm_calls(monkeypatch) ->
                     confidence=82,
                     impact_rationale="The event has direct market relevance.",
                     why_it_matters="It can affect watched markets.",
+                    alert_message="A high value market event was analyzed.",
                     risk_flags=[],
                     score_modifier=3,
                     modifier_reason="High relevance event.",
@@ -537,6 +592,7 @@ async def test_enrich_event_clusters_isolates_llm_call_failures(monkeypatch) -> 
                     confidence=82,
                     impact_rationale="The event has direct market relevance.",
                     why_it_matters="It can affect watched markets.",
+                    alert_message="The market event was analyzed.",
                     risk_flags=[],
                     score_modifier=3,
                     modifier_reason="High relevance event.",
@@ -584,11 +640,13 @@ async def test_alert_decision_includes_llm_modifier_in_score_breakdown(monkeypat
         target_id="evt_1",
         provider="openrouter",
         model="openai/gpt-4.1-mini",
-        prompt_version="event-v1",
+        prompt_version=PROMPT_VERSION,
         prompt_hash="hash",
         input_snapshot={},
         result={
             "summary": "A market structure rule was approved.",
+            "alert_message": "SEC approves a reported market structure rule.",
+            "why_it_matters": "The rule can affect exchange and broker operations.",
             "score_modifier": 6,
             "modifier_reason": "Official regulatory source.",
         },
@@ -609,6 +667,12 @@ async def test_alert_decision_includes_llm_modifier_in_score_breakdown(monkeypat
 
     assert count == 1
     alert = next(value for value in session.added if isinstance(value, AlertDecisionRecord))
+    assert alert.score_breakdown["llm"]["alert_message"] == (
+        "SEC approves a reported market structure rule."
+    )
+    assert alert.score_breakdown["llm"]["why_it_matters"] == (
+        "The rule can affect exchange and broker operations."
+    )
     assert alert.score_breakdown["llm"]["score_modifier"] == 6
     assert alert.score_breakdown["llm"]["modifier_reason"] == "Official regulatory source."
 
@@ -641,7 +705,6 @@ async def test_classify_news_item_records_classify_prompt_version(monkeypatch) -
                     asset_classes=["equity"],
                     entities=["banks"],
                     tickers=[],
-                    duplicate_hint="unknown",
                     confidence=80,
                     rationale="Bank equities are directly mentioned.",
                 ),
@@ -684,7 +747,6 @@ async def test_extract_entities_with_llm_persists_news_entities_without_watchlis
                     asset_classes=["crypto"],
                     entities=["Bitcoin"],
                     tickers=["BTC"],
-                    duplicate_hint="possible",
                     confidence=86,
                     rationale="Bitcoin is the only affected asset in the headline.",
                 ),
@@ -733,7 +795,6 @@ async def test_extract_entities_with_llm_does_not_persist_long_ticker_phrases(
                     asset_classes=["equity"],
                     entities=[],
                     tickers=[long_phrase],
-                    duplicate_hint="possible",
                     confidence=83,
                     rationale="The phrase is an entity, not a ticker.",
                 ),
@@ -772,7 +833,6 @@ async def test_extract_entities_with_llm_caps_overlong_entity_strings(monkeypatc
                     asset_classes=["equity"],
                     entities=[overlong_entity],
                     tickers=[],
-                    duplicate_hint="possible",
                     confidence=80,
                     rationale="The item mentions a long entity name.",
                 ),
@@ -851,7 +911,6 @@ async def test_extract_entities_with_llm_limits_concurrent_classification_calls(
                     asset_classes=["crypto"],
                     entities=[f"Entity {item_id}"],
                     tickers=[],
-                    duplicate_hint="possible",
                     confidence=80,
                     rationale="The item mentions a market entity.",
                 ),
@@ -896,7 +955,6 @@ async def test_extract_entities_with_llm_isolates_classification_failures(monkey
                     asset_classes=["crypto"],
                     entities=["Bitcoin"],
                     tickers=["BTC"],
-                    duplicate_hint="possible",
                     confidence=86,
                     rationale="Bitcoin is the affected asset.",
                 ),
@@ -986,7 +1044,6 @@ async def test_extract_entities_with_llm_force_deletes_existing_entities_and_rec
                     asset_classes=["crypto"],
                     entities=["Bitcoin"],
                     tickers=[],
-                    duplicate_hint="possible",
                     confidence=86,
                     rationale="Bitcoin is the affected asset.",
                 ),

@@ -145,7 +145,7 @@ def llm_enrich(event_id: Annotated[str, typer.Option("--event")]) -> None:
     _run(_with_session(action))
 @llm_app.command("summarize")
 def llm_summarize(event_id: Annotated[str, typer.Option("--event")]) -> None:
-    """Trigger manual LLM summary generation for a specific event cluster."""
+    """Generate a manual summary; production alerts use event enrichment."""
     config = _enabled_llm_config()
 
     async def action(session):
@@ -161,7 +161,7 @@ def llm_summarize(event_id: Annotated[str, typer.Option("--event")]) -> None:
     _run(_with_session(action))
 @llm_app.command("score")
 def llm_score(event_id: Annotated[str, typer.Option("--event")]) -> None:
-    """Trigger manual LLM scoring (impact, severity) for a specific event cluster."""
+    """Generate a manual score; production alerts use event enrichment."""
     config = _enabled_llm_config()
 
     async def action(session):
@@ -292,8 +292,6 @@ def _generate_news_comparison_report(
         f"{get_field(res_b, err_b, 'entities')} |",
         f"| **Tickers** | {get_field(res_a, err_a, 'tickers')} | "
         f"{get_field(res_b, err_b, 'tickers')} |",
-        f"| **Duplicate Hint** | {get_field(res_a, err_a, 'duplicate_hint')} | "
-        f"{get_field(res_b, err_b, 'duplicate_hint')} |",
         f"| **Confidence** | {get_field(res_a, err_a, 'confidence')} | "
         f"{get_field(res_b, err_b, 'confidence')} |",
         f"| **Rationale** | {get_field(res_a, err_a, 'rationale')} | "
@@ -449,155 +447,188 @@ def _generate_event_comparison_report(
 def llm_compare_model(
     model_a: str,
     model_b: str,
-    target_id: str,
+    target_ids: Annotated[
+        list[str],
+        typer.Argument(help="List of news or event IDs to compare"),
+    ] = None,
+    rerun_all: Annotated[
+        bool,
+        typer.Option(
+            "--rerun-all",
+            help="Rerun comparison against all existing reports in .llm_comparison/",
+        ),
+    ] = False,
 ) -> None:
-    """Compare performance of two different LLM models side-by-side on a news item or event."""
+    """Compare performance of two LLM models side-by-side on multiple news items or events."""
     config = _enabled_llm_config()
     config_a = replace(config, model=model_a)
     config_b = replace(config, model=model_b)
 
     async def action(session):
-        news_item = await session.get(NormalizedNewsItem, target_id)
-        event_cluster = None
-        if news_item is None:
-            event_cluster = await session.get(EventCluster, target_id)
+        import os
 
-        if news_item is None and event_cluster is None:
+        ids = list(target_ids or [])
+        if rerun_all and os.path.exists(".llm_comparison"):
+            for filename in os.listdir(".llm_comparison"):
+                if filename.startswith("llm_compare_") and filename.endswith(".md"):
+                    t_id = filename[len("llm_compare_") : -len(".md")]
+                    if t_id and t_id not in ids:
+                        ids.append(t_id)
+
+        if not ids:
             typer.echo(
-                f"Error: Target ID '{target_id}' not found in "
-                "normalized_news_items or event_clusters."
+                "Error: Please provide at least one news-or-event-id "
+                "or use --rerun-all."
             )
             raise typer.Exit(1)
 
         provider_a = llm_provider(config_a)
         provider_b = llm_provider(config_b)
 
-        if news_item is not None:
-            prompt = build_news_classification_prompt(news_item)
+        os.makedirs(".llm_comparison", exist_ok=True)
+        processed_count = 0
 
-            res_a, usage_a, err_a = None, None, None
-            try:
-                res_a, usage_a = await provider_a.classify_news_item(prompt)
-            except Exception as e:
-                err_a = str(e)
+        for target_id in ids:
+            news_item = await session.get(NormalizedNewsItem, target_id)
+            event_cluster = None
+            if news_item is None:
+                event_cluster = await session.get(EventCluster, target_id)
 
-            res_b, usage_b, err_b = None, None, None
-            try:
-                res_b, usage_b = await provider_b.classify_news_item(prompt)
-            except Exception as e:
-                err_b = str(e)
+            if news_item is None and event_cluster is None:
+                typer.echo(
+                    f"Error: Target ID '{target_id}' not found in "
+                    "normalized_news_items or event_clusters. Skipping."
+                )
+                continue
 
-            report = _generate_news_comparison_report(
-                news_item=news_item,
-                model_a=model_a,
-                model_b=model_b,
-                res_a=res_a,
-                res_b=res_b,
-                usage_a=usage_a,
-                usage_b=usage_b,
-                err_a=err_a,
-                err_b=err_b,
-            )
-        else:
-            move_score = await market_move_score_for_cluster(session, event_cluster)
-            watch_entries = await watchlist_entries(session)
-            base_score = score_event(
-                ScoreInput(
-                    top_source_score=event_cluster.top_source_score,
-                    source_count=event_cluster.source_count,
-                    watchlist_tier=tier_for_entities(
-                        entities=event_cluster.affected_entities or [],
-                        tickers=event_cluster.affected_tickers or [],
-                        entries=watch_entries,
-                    ),
-                    is_duplicate=False,
-                    is_stale=event_cluster.status == "stale",
-                    unique_high_quality_source_count=int(
-                        event_cluster.high_quality_source_count or 0
-                    ),
-                    status=event_cluster.status,
+            if news_item is not None:
+                prompt = build_news_classification_prompt(news_item)
+
+                res_a, usage_a, err_a = None, None, None
+                try:
+                    res_a, usage_a = await provider_a.classify_news_item(prompt)
+                except Exception as e:
+                    err_a = str(e)
+
+                res_b, usage_b, err_b = None, None, None
+                try:
+                    res_b, usage_b = await provider_b.classify_news_item(prompt)
+                except Exception as e:
+                    err_b = str(e)
+
+                report = _generate_news_comparison_report(
+                    news_item=news_item,
+                    model_a=model_a,
+                    model_b=model_b,
+                    res_a=res_a,
+                    res_b=res_b,
+                    usage_a=usage_a,
+                    usage_b=usage_b,
+                    err_a=err_a,
+                    err_b=err_b,
+                )
+            else:
+                move_score = await market_move_score_for_cluster(session, event_cluster)
+                watch_entries = await watchlist_entries(session)
+                base_score = score_event(
+                    ScoreInput(
+                        top_source_score=event_cluster.top_source_score,
+                        source_count=event_cluster.source_count,
+                        watchlist_tier=tier_for_entities(
+                            entities=event_cluster.affected_entities or [],
+                            tickers=event_cluster.affected_tickers or [],
+                            entries=watch_entries,
+                        ),
+                        is_duplicate=False,
+                        is_stale=event_cluster.status == "stale",
+                        unique_high_quality_source_count=int(
+                            event_cluster.high_quality_source_count or 0
+                        ),
+                        status=event_cluster.status,
+                        market_move_score=move_score,
+                    )
+                )
+                score_breakdown = asdict(base_score)
+
+                enrich_prompt = build_event_analysis_prompt(
+                    event_cluster,
+                    score_breakdown=score_breakdown,
                     market_move_score=move_score,
                 )
-            )
-            score_breakdown = asdict(base_score)
+                summary_prompt = build_event_summary_prompt(event_cluster)
+                score_prompt = build_event_score_prompt(
+                    event_cluster,
+                    score_breakdown=score_breakdown,
+                    market_move_score=move_score,
+                )
 
-            enrich_prompt = build_event_analysis_prompt(
-                event_cluster,
-                score_breakdown=score_breakdown,
-                market_move_score=move_score,
-            )
-            summary_prompt = build_event_summary_prompt(event_cluster)
-            score_prompt = build_event_score_prompt(
-                event_cluster,
-                score_breakdown=score_breakdown,
-                market_move_score=move_score,
-            )
+                enrich_a, enrich_usage_a, enrich_err_a = None, None, None
+                summary_a, summary_usage_a, summary_err_a = None, None, None
+                score_a, score_usage_a, score_err_a = None, None, None
 
-            enrich_a, enrich_usage_a, enrich_err_a = None, None, None
-            summary_a, summary_usage_a, summary_err_a = None, None, None
-            score_a, score_usage_a, score_err_a = None, None, None
+                try:
+                    enrich_a, enrich_usage_a = await provider_a.analyze_event(enrich_prompt)
+                except Exception as e:
+                    enrich_err_a = str(e)
+                try:
+                    summary_a, summary_usage_a = await provider_a.summarize_event(summary_prompt)
+                except Exception as e:
+                    summary_err_a = str(e)
+                try:
+                    score_a, score_usage_a = await provider_a.score_event(score_prompt)
+                except Exception as e:
+                    score_err_a = str(e)
 
-            try:
-                enrich_a, enrich_usage_a = await provider_a.analyze_event(enrich_prompt)
-            except Exception as e:
-                enrich_err_a = str(e)
-            try:
-                summary_a, summary_usage_a = await provider_a.summarize_event(summary_prompt)
-            except Exception as e:
-                summary_err_a = str(e)
-            try:
-                score_a, score_usage_a = await provider_a.score_event(score_prompt)
-            except Exception as e:
-                score_err_a = str(e)
+                enrich_b, enrich_usage_b, enrich_err_b = None, None, None
+                summary_b, summary_usage_b, summary_err_b = None, None, None
+                score_b, score_usage_b, score_err_b = None, None, None
 
-            enrich_b, enrich_usage_b, enrich_err_b = None, None, None
-            summary_b, summary_usage_b, summary_err_b = None, None, None
-            score_b, score_usage_b, score_err_b = None, None, None
+                try:
+                    enrich_b, enrich_usage_b = await provider_b.analyze_event(enrich_prompt)
+                except Exception as e:
+                    enrich_err_b = str(e)
+                try:
+                    summary_b, summary_usage_b = await provider_b.summarize_event(summary_prompt)
+                except Exception as e:
+                    summary_err_b = str(e)
+                try:
+                    score_b, score_usage_b = await provider_b.score_event(score_prompt)
+                except Exception as e:
+                    score_err_b = str(e)
 
-            try:
-                enrich_b, enrich_usage_b = await provider_b.analyze_event(enrich_prompt)
-            except Exception as e:
-                enrich_err_b = str(e)
-            try:
-                summary_b, summary_usage_b = await provider_b.summarize_event(summary_prompt)
-            except Exception as e:
-                summary_err_b = str(e)
-            try:
-                score_b, score_usage_b = await provider_b.score_event(score_prompt)
-            except Exception as e:
-                score_err_b = str(e)
+                report = _generate_event_comparison_report(
+                    event_cluster=event_cluster,
+                    model_a=model_a,
+                    model_b=model_b,
+                    enrich_a=enrich_a,
+                    enrich_b=enrich_b,
+                    enrich_usage_a=enrich_usage_a,
+                    enrich_usage_b=enrich_usage_b,
+                    enrich_err_a=enrich_err_a,
+                    enrich_err_b=enrich_err_b,
+                    summary_a=summary_a,
+                    summary_b=summary_b,
+                    summary_usage_a=summary_usage_a,
+                    summary_usage_b=summary_usage_b,
+                    summary_err_a=summary_err_a,
+                    summary_err_b=summary_err_b,
+                    score_a=score_a,
+                    score_b=score_b,
+                    score_usage_a=score_usage_a,
+                    score_usage_b=score_usage_b,
+                    score_err_a=score_err_a,
+                    score_err_b=score_err_b,
+                )
 
-            report = _generate_event_comparison_report(
-                event_cluster=event_cluster,
-                model_a=model_a,
-                model_b=model_b,
-                enrich_a=enrich_a,
-                enrich_b=enrich_b,
-                enrich_usage_a=enrich_usage_a,
-                enrich_usage_b=enrich_usage_b,
-                enrich_err_a=enrich_err_a,
-                enrich_err_b=enrich_err_b,
-                summary_a=summary_a,
-                summary_b=summary_b,
-                summary_usage_a=summary_usage_a,
-                summary_usage_b=summary_usage_b,
-                summary_err_a=summary_err_a,
-                summary_err_b=summary_err_b,
-                score_a=score_a,
-                score_b=score_b,
-                score_usage_a=score_usage_a,
-                score_usage_b=score_usage_b,
-                score_err_a=score_err_a,
-                score_err_b=score_err_b,
-            )
+            filepath = os.path.join(".llm_comparison", f"llm_compare_{target_id}.md")
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(report)
 
-        import os
+            typer.echo(f"Comparison report saved to {filepath}")
+            processed_count += 1
 
-        os.makedirs(".llm_comparison", exist_ok=True)
-        filepath = os.path.join(".llm_comparison", f"llm_compare_{target_id}.md")
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(report)
-
-        typer.echo(f"Comparison report saved to {filepath}")
+        if processed_count == 0:
+            typer.echo("Error: No valid news-or-event-ids were found.")
+            raise typer.Exit(1)
 
     _run(_with_session(action))
