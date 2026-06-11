@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  font-size: 112.5%; /* Increase overall base font size by one step (16px -> 18px) */
+}
+
 :root {
   color-scheme: light;
 
