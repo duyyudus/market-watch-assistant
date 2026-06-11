@@ -110,7 +110,7 @@ export function AlertDetailPanel({
         </div>
 
         {numericBreakdown.length ? (
-          <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
+          <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
             {numericBreakdown.map(([key, value]) => {
               if (key === "final_score" || key === "deterministic_final_score") return null;
               const valNum = Number(value);

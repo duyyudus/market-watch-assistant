@@ -168,7 +168,7 @@ export function AlertsTable({
                   {alertDecisionLabel(row.decision)}
                 </StatusBadge>
               </td>
-              <td className="py-3 px-4 max-w-[460px] whitespace-normal text-sm font-semibold text-zinc-200">
+              <td className="py-3 px-4 max-w-[700px] whitespace-normal text-sm font-semibold text-zinc-200">
                 {row.event?.headline ?? row.reason}
               </td>
               {!compact ? (
@@ -176,12 +176,12 @@ export function AlertsTable({
                   {row.channel ?? "-"}
                 </td>
               ) : null}
-              <td className="py-3 px-4 text-zinc-500 font-normal text-xs">
+              <td className="py-3 px-4 text-zinc-500 font-normal text-xs whitespace-nowrap">
                 {formatTime(row.sent_at ?? row.created_at)}
               </td>
               {!compact ? (
                 <td className="py-3 px-4">
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-2 whitespace-nowrap">
                     <span className="text-xs text-zinc-500">
                       {row.suppression_reason === "dismissed"
                         ? "dismissed"
