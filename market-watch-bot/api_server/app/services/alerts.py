@@ -15,6 +15,7 @@ from api_server.app.schemas import (
     AlertSuppressionRuleUpdate,
     BotCommandRead,
 )
+from api_server.app.services.events import event_summary_payload, report_ranges_by_event_id
 from api_server.app.services.query import apply_pagination, count_for
 from common.db.models import (
     AlertChannel,
@@ -46,16 +47,12 @@ async def list_alerts(
         stmt = stmt.where(AlertDecision.decision == level)
     total = await count_for(session, stmt)
     rows = list((await session.execute(apply_pagination(stmt, limit=limit, offset=offset))).all())
+    report_ranges = await report_ranges_by_event_id(session, [event.id for _alert, event in rows])
     return (
         [
             AlertRead(
                 **alert.__dict__,
-                event={
-                    "id": event.id,
-                    "headline": event.canonical_headline,
-                    "final_score": event.final_score,
-                    "status": event.status,
-                },
+                event=event_summary_payload(event, report_ranges.get(event.id)),
             )
             for alert, event in rows
         ],
@@ -74,6 +71,7 @@ async def get_alert_detail(session: AsyncSession, alert_id: str) -> AlertRead | 
     if row is None:
         return None
     alert, event = row
+    report_ranges = await report_ranges_by_event_id(session, [event.id])
     delivery = await session.scalar(
         select(AlertDelivery)
         .where(AlertDelivery.alert_decision_id == alert.id)
@@ -82,11 +80,7 @@ async def get_alert_detail(session: AsyncSession, alert_id: str) -> AlertRead | 
     )
     return AlertRead(
         **alert.__dict__,
-        event={
-            "id": event.id,
-            "headline": event.canonical_headline,
-            "final_score": event.final_score,
-        },
+        event=event_summary_payload(event, report_ranges.get(event.id)),
         latest_delivery_status=delivery.status if delivery else None,
         latest_delivery_error=delivery.error_message if delivery else None,
     )

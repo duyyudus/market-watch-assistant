@@ -111,6 +111,8 @@ async def client():
             full_text_available=True,
             full_text_extraction_status="extracted",
             processing_status="clustered",
+            published_at=datetime(2026, 5, 29, 13, 0, tzinfo=UTC),
+            fetched_at=datetime(2026, 5, 29, 13, 1, tzinfo=UTC),
             title_hash="mock_title_hash",
             canonical_url_hash="mock_url_hash",
             normalized_text_hash="mock_text_hash",
@@ -133,6 +135,8 @@ async def client():
             is_paywalled=False,
             full_text_available=False,
             processing_status="new",
+            published_at=None,
+            fetched_at=datetime(2026, 5, 30, 9, 0, tzinfo=UTC),
             title_hash="mock_title_hash_2",
             normalized_text_hash="mock_text_hash_2",
             created_at=datetime(2026, 5, 29, 12, 30, tzinfo=UTC),
@@ -154,6 +158,8 @@ async def client():
             is_paywalled=False,
             full_text_available=False,
             processing_status="new",
+            published_at=datetime(2026, 5, 27, 8, 30, tzinfo=UTC),
+            fetched_at=datetime(2026, 5, 28, 12, 35, tzinfo=UTC),
             title_hash="mock_title_hash_3",
             normalized_text_hash="mock_text_hash_3",
             created_at=datetime(2026, 5, 28, 12, 30, tzinfo=UTC),
@@ -293,6 +299,20 @@ async def client():
             relation_type="seed",
             similarity_score=91,
             added_at=datetime(2026, 5, 29, 13, 1, tzinfo=UTC),
+        )
+        fallback_report_cluster_item = EventClusterItem(
+            event_cluster_id="evt_1",
+            news_item_id="news_2",
+            relation_type="related",
+            similarity_score=84,
+            added_at=datetime(2026, 5, 29, 13, 2, tzinfo=UTC),
+        )
+        older_report_cluster_item = EventClusterItem(
+            event_cluster_id="evt_1",
+            news_item_id="news_3",
+            relation_type="related",
+            similarity_score=78,
+            added_at=datetime(2026, 5, 29, 13, 3, tzinfo=UTC),
         )
         entity = NewsEntity(
             id="ent_1",
@@ -452,6 +472,8 @@ async def client():
                 presets,
                 fetch_log,
                 cluster_item,
+                fallback_report_cluster_item,
+                older_report_cluster_item,
                 entity,
                 score_history,
                 catalyst,
@@ -509,11 +531,17 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
     events = await client.get("/events")
     assert events.status_code == 200
-    assert events.json()["items"][0]["final_score"] == 84
+    event_item = events.json()["items"][0]
+    assert event_item["final_score"] == 84
+    assert event_item["report_start_at"] == "2026-05-27T08:30:00"
+    assert event_item["report_end_at"] == "2026-05-30T09:00:00"
 
     event = await client.get("/events/evt_1")
     assert event.status_code == 200
-    assert event.json()["latest_alert"]["id"] == "alert_1"
+    event_payload = event.json()
+    assert event_payload["latest_alert"]["id"] == "alert_1"
+    assert event_payload["report_start_at"] == "2026-05-27T08:30:00"
+    assert event_payload["report_end_at"] == "2026-05-30T09:00:00"
 
     news = await client.get("/news")
     assert news.status_code == 200
@@ -521,8 +549,16 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
     alerts = await client.get("/alerts")
     assert alerts.status_code == 200
-    assert alerts.json()["items"][0]["event"]["id"] == "evt_1"
-    assert alerts.json()["items"][0]["acknowledged_at"] is None
+    alert_item = alerts.json()["items"][0]
+    assert alert_item["event"]["id"] == "evt_1"
+    assert alert_item["event"]["report_start_at"] == "2026-05-27T08:30:00"
+    assert alert_item["event"]["report_end_at"] == "2026-05-30T09:00:00"
+    assert alert_item["acknowledged_at"] is None
+
+    alert_detail = await client.get("/alerts/alert_1")
+    assert alert_detail.status_code == 200
+    assert alert_detail.json()["event"]["report_start_at"] == "2026-05-27T08:30:00"
+    assert alert_detail.json()["event"]["report_end_at"] == "2026-05-30T09:00:00"
 
     channels = await client.get("/alert-channels")
     assert channels.status_code == 200

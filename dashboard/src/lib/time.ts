@@ -8,3 +8,9 @@ export function formatTime(value?: string | null) {
   }).format(new Date(value));
 }
 
+export function formatTimeRange(start?: string | null, end?: string | null) {
+  if (!start && !end) return "-";
+  if (!start) return formatTime(end);
+  if (!end || start === end) return formatTime(start);
+  return `${formatTime(start)} - ${formatTime(end)}`;
+}

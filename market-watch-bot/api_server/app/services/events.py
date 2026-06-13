@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import ColumnElement
 
 from api_server.app.schemas import AlertRead, EventDetailRead, EventRead
 from api_server.app.services.query import apply_pagination, count_for
@@ -31,20 +32,112 @@ async def list_events(
     offset: int,
     status_filter: str | None,
     q: str | None,
-) -> tuple[list[EventCluster], int]:
-    stmt = select(EventCluster).order_by(
+) -> tuple[list[dict[str, object]], int]:
+    report_ranges = _report_range_subquery()
+    stmt = (
+        select(
+            EventCluster,
+            report_ranges.c.report_start_at,
+            report_ranges.c.report_end_at,
+        )
+        .outerjoin(report_ranges, report_ranges.c.event_cluster_id == EventCluster.id)
+        .order_by(
         EventCluster.final_score.desc(), EventCluster.created_at.desc()
+        )
     )
     if status_filter:
         stmt = stmt.where(EventCluster.status == status_filter)
     if q:
         stmt = stmt.where(EventCluster.canonical_headline.ilike(f"%{q}%"))
     total = await count_for(session, stmt)
-    rows = list((await session.scalars(apply_pagination(stmt, limit=limit, offset=offset))).all())
-    return rows, total
+    rows = list((await session.execute(apply_pagination(stmt, limit=limit, offset=offset))).all())
+    return (
+        [
+            event_read_payload(
+                event,
+                report_start_at=report_start_at,
+                report_end_at=report_end_at,
+            )
+            for event, report_start_at, report_end_at in rows
+        ],
+        total,
+    )
+
+
+def _effective_report_time_expr() -> ColumnElement[datetime]:
+    return func.coalesce(
+        NormalizedNewsItem.published_at,
+        NormalizedNewsItem.fetched_at,
+        NormalizedNewsItem.created_at,
+    )
+
+
+def _report_range_subquery():
+    effective_report_time = _effective_report_time_expr()
+    return (
+        select(
+            EventClusterItem.event_cluster_id.label("event_cluster_id"),
+            func.min(effective_report_time).label("report_start_at"),
+            func.max(effective_report_time).label("report_end_at"),
+        )
+        .join(NormalizedNewsItem, NormalizedNewsItem.id == EventClusterItem.news_item_id)
+        .group_by(EventClusterItem.event_cluster_id)
+        .subquery()
+    )
+
+
+async def report_ranges_by_event_id(
+    session: AsyncSession,
+    event_ids: list[str],
+) -> dict[str, tuple[datetime | None, datetime | None]]:
+    if not event_ids:
+        return {}
+    report_ranges = _report_range_subquery()
+    rows = (
+        await session.execute(
+            select(
+                report_ranges.c.event_cluster_id,
+                report_ranges.c.report_start_at,
+                report_ranges.c.report_end_at,
+            ).where(report_ranges.c.event_cluster_id.in_(event_ids))
+        )
+    ).all()
+    return {
+        event_id: (report_start_at, report_end_at)
+        for event_id, report_start_at, report_end_at in rows
+    }
+
+
+def event_read_payload(
+    event: EventCluster,
+    *,
+    report_start_at: datetime | None,
+    report_end_at: datetime | None,
+) -> dict[str, object]:
+    payload = EventRead.model_validate(event).model_dump()
+    payload["report_start_at"] = report_start_at
+    payload["report_end_at"] = report_end_at
+    return payload
+
+
+def event_summary_payload(
+    event: EventCluster,
+    report_range: tuple[datetime | None, datetime | None] | None,
+) -> dict[str, object]:
+    report_start_at, report_end_at = report_range or (None, None)
+    return {
+        "id": event.id,
+        "headline": event.canonical_headline,
+        "final_score": event.final_score,
+        "status": event.status,
+        "report_start_at": report_start_at,
+        "report_end_at": report_end_at,
+    }
 
 
 async def get_event_detail(session: AsyncSession, event: EventCluster) -> dict[str, object]:
+    report_range = (await report_ranges_by_event_id(session, [event.id])).get(event.id)
+    report_start_at, report_end_at = report_range or (None, None)
     latest_alert = await session.scalar(
         select(AlertDecision)
         .where(AlertDecision.event_cluster_id == event.id)
@@ -117,11 +210,15 @@ async def get_event_detail(session: AsyncSession, event: EventCluster) -> dict[s
             ).all()
         )
     payload = {
-        **EventRead.model_validate(event).model_dump(),
+        **event_read_payload(
+            event,
+            report_start_at=report_start_at,
+            report_end_at=report_end_at,
+        ),
         "latest_alert": (
             AlertRead(
                 **latest_alert.__dict__,
-                event={"id": event.id, "headline": event.canonical_headline},
+                event=event_summary_payload(event, report_range),
             ).model_dump()
             if latest_alert
             else None

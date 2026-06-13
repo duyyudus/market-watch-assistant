@@ -137,6 +137,8 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         source_count: 2,
         final_score: 84,
         alert_level: "immediate_alert",
+        report_start_at: "2026-05-27T08:30:00Z",
+        report_end_at: "2026-05-30T09:00:00Z",
         last_updated_at: "2026-05-29T13:00:00Z",
       },
     ]),
@@ -162,6 +164,8 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         final_score: 61,
         alert_level: "digest_only",
         first_seen_at: "2026-05-29T14:00:00Z",
+        report_start_at: "2026-05-29T14:00:00Z",
+        report_end_at: "2026-05-29T14:00:00Z",
         last_updated_at: "2026-05-29T14:10:00Z",
         latest_alert: null,
         latest_investigation: null,
@@ -203,6 +207,8 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       final_score: 84,
       alert_level: "immediate_alert",
       first_seen_at: "2026-05-29T13:00:00Z",
+      report_start_at: "2026-05-27T08:30:00Z",
+      report_end_at: "2026-05-30T09:00:00Z",
       last_updated_at: "2026-05-29T13:10:00Z",
       latest_alert: null,
       latest_investigation: {
@@ -351,7 +357,13 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         channel: "log",
         sent_at: null,
         created_at: "2026-05-29T14:05:00Z",
-        event: { id: "evt_2", headline: "Treasury yields fall after jobs report", final_score: 61 },
+        event: {
+          id: "evt_2",
+          headline: "Treasury yields fall after jobs report",
+          final_score: 61,
+          report_start_at: "2026-05-29T14:00:00Z",
+          report_end_at: "2026-05-29T14:00:00Z",
+        },
         latest_delivery_status: "queued",
         latest_delivery_error: "waiting for digest window",
         acknowledged_at: null,
@@ -365,7 +377,13 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         channel: "telegram",
         sent_at: "2026-05-29T13:05:00Z",
         created_at: "2026-05-29T13:05:00Z",
-        event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
+        event: {
+          id: "evt_1",
+          headline: "Fed signals a slower rate path",
+          final_score: 84,
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+        },
         latest_delivery_status: "sent",
         acknowledged_at: null,
       },
@@ -387,6 +405,8 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
           headline: "Treasury yields fall after jobs report",
           final_score: 61,
           status: "reported",
+          report_start_at: "2026-05-29T14:00:00Z",
+          report_end_at: "2026-05-29T14:00:00Z",
         },
         latest_delivery_status: "queued",
         latest_delivery_error: "waiting for digest window",
@@ -407,6 +427,8 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         headline: "Fed signals a slower rate path",
         final_score: 84,
         status: "reported",
+        report_start_at: "2026-05-27T08:30:00Z",
+        report_end_at: "2026-05-30T09:00:00Z",
       },
       latest_delivery_status: "sent",
       latest_delivery_error: null,
@@ -715,7 +737,16 @@ describe("App data states", () => {
     await renderLoadedApp();
     switchTo("events");
 
-    fireEvent.click(await screen.findByTestId("event-card-evt_1"));
+    const eventCard = await screen.findByTestId("event-card-evt_1");
+    const eventRow = await screen.findByTestId("event-row-evt_1");
+
+    expect(eventCard).toHaveClass("bg-primary/5");
+    expect(eventRow).toHaveClass("bg-primary/5");
+
+    fireEvent.click(eventCard);
+
+    expect(eventCard).toHaveClass("bg-primary/5");
+    expect(eventRow).toHaveClass("bg-primary/5");
 
     expect(await screen.findByText("Timeline")).toBeInTheDocument();
     expect(screen.getByText("Scoring")).toBeInTheDocument();
@@ -727,6 +758,122 @@ describe("App data states", () => {
     expect(screen.getByText("Source")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /rescore/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /confirm/i })).toBeInTheDocument();
+  });
+
+  it("shows event report range separately from updated time", async () => {
+    await renderLoadedApp();
+    switchTo("events");
+
+    const eventPanel = (await screen.findByRole("heading", { name: "Event clusters" })).closest(
+      "section",
+    )!;
+    expect(within(eventPanel).getByText("Updated")).toBeInTheDocument();
+    expect(within(eventPanel).getByText("Report range")).toBeInTheDocument();
+    expect(
+      within(eventPanel).getAllByText(
+        `${formatTime("2026-05-27T08:30:00Z")} - ${formatTime("2026-05-30T09:00:00Z")}`,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("sorts event rows by report range end newest first by default", async () => {
+    apiMock.events.mockResolvedValue(
+      envelope([
+        {
+          id: "evt_1",
+          canonical_headline: "Older updated event with newer reports",
+          summary: "Older processing timestamp, newer source reports.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["Federal Reserve"],
+          affected_tickers: [],
+          source_count: 2,
+          final_score: 84,
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+          last_updated_at: "2026-05-29T13:00:00Z",
+        },
+        {
+          id: "evt_2",
+          canonical_headline: "Newer updated event with older reports",
+          summary: "Newer processing timestamp, older source reports.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["rates"],
+          affected_entities: ["Treasury"],
+          affected_tickers: [],
+          source_count: 1,
+          final_score: 61,
+          report_start_at: "2026-05-28T08:30:00Z",
+          report_end_at: "2026-05-28T09:00:00Z",
+          last_updated_at: "2026-05-29T14:00:00Z",
+        },
+      ]),
+    );
+    await renderLoadedApp();
+    switchTo("events");
+
+    expect((await screen.findAllByTestId(/^event-card-/))[0]).toHaveAttribute(
+      "data-testid",
+      "event-card-evt_1",
+    );
+  });
+
+  it("highlights selected event card and row and switches focus on selection", async () => {
+    apiMock.events.mockResolvedValue(
+      envelope([
+        {
+          id: "evt_1",
+          canonical_headline: "Fed signals a slower rate path",
+          summary: "Policy makers leaned less hawkish.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["Federal Reserve"],
+          affected_tickers: [],
+          source_count: 2,
+          final_score: 84,
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+          last_updated_at: "2026-05-29T13:00:00Z",
+        },
+        {
+          id: "evt_2",
+          canonical_headline: "Newer updated event with older reports",
+          summary: "Newer processing timestamp, older source reports.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["rates"],
+          affected_entities: ["Treasury"],
+          affected_tickers: [],
+          source_count: 1,
+          final_score: 61,
+          report_start_at: "2026-05-28T08:30:00Z",
+          report_end_at: "2026-05-28T09:00:00Z",
+          last_updated_at: "2026-05-29T14:00:00Z",
+        },
+      ]),
+    );
+    await renderLoadedApp();
+    switchTo("events");
+
+    const card1 = await screen.findByTestId("event-card-evt_1");
+    const row1 = await screen.findByTestId("event-row-evt_1");
+    const card2 = await screen.findByTestId("event-card-evt_2");
+    const row2 = await screen.findByTestId("event-row-evt_2");
+
+    expect(card1).toHaveClass("bg-primary/5");
+    expect(row1).toHaveClass("bg-primary/5");
+    expect(card2).not.toHaveClass("bg-primary/5");
+    expect(row2).not.toHaveClass("bg-primary/5");
+
+    fireEvent.click(card2);
+
+    expect(card1).not.toHaveClass("bg-primary/5");
+    expect(row1).not.toHaveClass("bg-primary/5");
+    expect(card2).toHaveClass("bg-primary/5");
+    expect(row2).toHaveClass("bg-primary/5");
   });
 
   it("renders source health subtab and queues source test fetch", async () => {
@@ -1410,6 +1557,22 @@ describe("App data states", () => {
     );
   });
 
+  it("shows alert report range separately from sent time", async () => {
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    const alertOverview = (await screen.findByRole("heading", { name: "Alert decisions" })).closest(
+      "section",
+    )!;
+    expect(within(alertOverview).getByText("Sent")).toBeInTheDocument();
+    expect(within(alertOverview).getByText("Report range")).toBeInTheDocument();
+    expect(
+      within(alertOverview).getAllByText(
+        `${formatTime("2026-05-27T08:30:00Z")} - ${formatTime("2026-05-30T09:00:00Z")}`,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("shows alert action errors", async () => {
     apiMock.acknowledgeAlert.mockRejectedValueOnce(new Error("alert update failed"));
     await renderLoadedApp();
@@ -1459,6 +1622,10 @@ describe("App data states", () => {
     ).toBeGreaterThan(0);
     expect(within(detailPanel).getByText("score_above_digest_threshold")).toBeInTheDocument();
     expect(within(detailPanel).getByText("waiting for digest window")).toBeInTheDocument();
+    expect(within(detailPanel).getByText("Report range")).toBeInTheDocument();
+    expect(
+      within(detailPanel).getAllByText(formatTime("2026-05-29T14:00:00Z")).length,
+    ).toBeGreaterThan(0);
     expect(within(detailPanel).getByText("Related news")).toBeInTheDocument();
     expect(within(detailPanel).getByText("BLS · seed · 88")).toBeInTheDocument();
     expect(within(detailPanel).getByText("final score")).toBeInTheDocument();
@@ -1470,6 +1637,11 @@ describe("App data states", () => {
 
     expect(
       await within(detailPanel).findByText("score_above_immediate_threshold"),
+    ).toBeInTheDocument();
+    expect(
+      within(detailPanel).getByText(
+        `${formatTime("2026-05-27T08:30:00Z")} - ${formatTime("2026-05-30T09:00:00Z")}`,
+      ),
     ).toBeInTheDocument();
     expect(within(detailPanel).getByText("Federal Reserve · seed · 91")).toBeInTheDocument();
     expect(apiMock.alert).toHaveBeenCalledWith("alert_1");

@@ -9,21 +9,23 @@ import { SortableHeader } from "../../components/SortableHeader";
 import { useSortableData } from "../../hooks/useSortableData";
 import { classNames } from "../../lib/classNames";
 import { scoreTone } from "../../lib/score";
-import { formatTime } from "../../lib/time";
+import { formatTime, formatTimeRange } from "../../lib/time";
 
 export function EventRows({
   events,
   onSelect,
+  selectedEventId,
   error,
   retry,
 }: {
   events: EventCluster[];
   onSelect?: (id: string) => void;
+  selectedEventId?: string;
   error?: string;
   retry: () => Promise<void>;
 }) {
   const { items: sortedEvents, requestSort, sortConfig } = useSortableData(events, {
-    key: "last_updated_at",
+    key: "report_end_at",
     direction: "desc",
   });
 
@@ -51,7 +53,11 @@ export function EventRows({
     <ResponsiveDataList
       cards={sortedEvents.map((event) => (
         <button
-          className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-left"
+          className={classNames(
+            "rounded-md border p-3 text-left transition-colors",
+            onSelect && "cursor-pointer hover:border-primary/40",
+            selectedEventId === event.id ? "border-primary/60 bg-primary/5" : "border-zinc-800 bg-zinc-950/30",
+          )}
           data-testid={`event-card-${event.id}`}
           key={event.id}
           onClick={() => onSelect?.(event.id)}
@@ -67,6 +73,9 @@ export function EventRows({
           <div className="mt-2 text-xs text-base-content/60">
             {event.status} · {event.source_count} sources
           </div>
+          <div className="mt-1 text-xs text-base-content/50">
+            Reports {formatTimeRange(event.report_start_at, event.report_end_at)}
+          </div>
         </button>
       ))}
       table={
@@ -79,6 +88,7 @@ export function EventRows({
               currentSortKey={sortConfig.key}
               direction={sortConfig.direction}
               onSort={requestSort}
+              className="w-1 whitespace-nowrap"
             />
             <SortableHeader
               label="Headline"
@@ -100,6 +110,15 @@ export function EventRows({
               currentSortKey={sortConfig.key}
               direction={sortConfig.direction}
               onSort={requestSort}
+              className="w-20 whitespace-nowrap"
+            />
+            <SortableHeader
+              label="Report range"
+              sortKey="report_end_at"
+              currentSortKey={sortConfig.key}
+              direction={sortConfig.direction}
+              onSort={requestSort}
+              className="w-48 whitespace-nowrap"
             />
             <SortableHeader
               label="Updated"
@@ -107,6 +126,7 @@ export function EventRows({
               currentSortKey={sortConfig.key}
               direction={sortConfig.direction}
               onSort={requestSort}
+              className="w-40 whitespace-nowrap"
             />
           </tr>
         </thead>
@@ -117,20 +137,25 @@ export function EventRows({
               className={classNames(
                 "group border-b border-zinc-800/30 transition-colors duration-150",
                 onSelect && "cursor-pointer hover:bg-zinc-800/20",
+                selectedEventId === event.id && "bg-primary/5 outline outline-1 outline-primary/30",
               )}
+              data-testid={`event-row-${event.id}`}
               onClick={() => onSelect?.(event.id)}
             >
-              <td className="py-3 px-4">
+              <td className="py-3 px-4 w-1 whitespace-nowrap">
                 <Badge tone={scoreTone(event.final_score)}>{event.final_score}</Badge>
               </td>
               <td className="py-3 px-4 max-w-[520px] whitespace-normal text-sm font-semibold text-zinc-200 group-hover:text-primary transition-colors duration-150">
                 {event.canonical_headline}
               </td>
               <td className="py-3 px-4 text-zinc-400 font-normal text-xs">{event.status}</td>
-              <td className="py-3 px-4 text-zinc-400 font-normal text-xs">
+              <td className="py-3 px-4 text-zinc-400 font-normal text-xs w-20 whitespace-nowrap">
                 {event.source_count}
               </td>
-              <td className="py-3 px-4 text-zinc-500 font-normal text-xs">
+              <td className="py-3 px-4 text-zinc-500 font-normal text-xs w-48 whitespace-nowrap">
+                {formatTimeRange(event.report_start_at, event.report_end_at)}
+              </td>
+              <td className="py-3 px-4 text-zinc-500 font-normal text-xs w-40 whitespace-nowrap">
                 {formatTime(event.last_updated_at)}
               </td>
             </tr>

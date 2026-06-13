@@ -37,11 +37,17 @@ export function Events(props: {
                 placeholder="Search events, tickers, entities"
               />
             </label>
-            <EventRows events={props.events} onSelect={props.setSelectedEventId} retry={props.retry} />
+            <EventRows
+              events={props.events}
+              onSelect={props.setSelectedEventId}
+              selectedEventId={props.selectedEvent?.id}
+              retry={props.retry}
+            />
           </>
         )}
       </Panel>
-      <Panel title="Event detail">
+      <div className="xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-100px)] xl:overflow-y-auto xl:overflow-x-hidden">
+        <Panel title="Event detail">
         {props.error ? (
           <EmptyState
             icon={Database}
@@ -213,7 +219,8 @@ export function Events(props: {
             body="Run the pipeline or wait for clustered news before event details appear here."
           />
         )}
-      </Panel>
+        </Panel>
+      </div>
     </div>
   );
 }

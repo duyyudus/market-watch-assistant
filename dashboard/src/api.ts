@@ -97,6 +97,8 @@ export type EventCluster = {
   source_count: number;
   final_score: number;
   alert_level?: string | null;
+  report_start_at?: string | null;
+  report_end_at?: string | null;
   last_updated_at?: string | null;
   latest_alert?: AlertDecision | null;
   latest_investigation?: { id: string; status: string; result?: unknown } | null;
@@ -255,7 +257,14 @@ export type AlertDecision = {
   acknowledged_at?: string | null;
   suppression_reason?: string | null;
   created_at?: string | null;
-  event?: { id: string; headline: string; final_score?: number; status?: string } | null;
+  event?: {
+    id: string;
+    headline: string;
+    final_score?: number;
+    status?: string;
+    report_start_at?: string | null;
+    report_end_at?: string | null;
+  } | null;
   latest_delivery_status?: string | null;
   latest_delivery_error?: string | null;
 };

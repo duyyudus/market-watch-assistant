@@ -8,7 +8,7 @@ import { SortableHeader } from "../../components/SortableHeader";
 import { StatusBadge, type StatusBadgeTone } from "../../components/StatusBadge";
 import { useSortableData } from "../../hooks/useSortableData";
 import { classNames } from "../../lib/classNames";
-import { formatTime } from "../../lib/time";
+import { formatTime, formatTimeRange } from "../../lib/time";
 
 function alertDecisionTone(decision: string): StatusBadgeTone {
   return decision === "immediate_alert" ? "error" : "neutral";
@@ -95,6 +95,9 @@ export function AlertsTable({
           <div className="mt-2 text-sm font-semibold text-zinc-100">
             {row.event?.headline ?? row.reason}
           </div>
+          <div className="mt-1 text-xs text-base-content/50">
+            Reports {formatTimeRange(row.event?.report_start_at, row.event?.report_end_at)}
+          </div>
           {!compact ? (
             <div className="mt-2 text-xs text-base-content/60">
               {row.channel ?? "-"} ·{" "}
@@ -141,6 +144,13 @@ export function AlertsTable({
               direction={sortConfig.direction}
               onSort={requestSort}
             />
+            <SortableHeader
+              label="Report range"
+              sortKey="event_report_range"
+              currentSortKey={sortConfig.key}
+              direction={sortConfig.direction}
+              onSort={requestSort}
+            />
             {!compact ? <th className="px-4 py-3 text-left">State</th> : null}
           </tr>
         </thead>
@@ -178,6 +188,9 @@ export function AlertsTable({
               ) : null}
               <td className="py-3 px-4 text-zinc-500 font-normal text-xs whitespace-nowrap">
                 {formatTime(row.sent_at ?? row.created_at)}
+              </td>
+              <td className="py-3 px-4 text-zinc-500 font-normal text-xs whitespace-nowrap">
+                {formatTimeRange(row.event?.report_start_at, row.event?.report_end_at)}
               </td>
               {!compact ? (
                 <td className="py-3 px-4">

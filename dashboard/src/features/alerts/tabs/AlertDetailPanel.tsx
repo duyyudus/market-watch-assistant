@@ -5,7 +5,7 @@ import { EmptyState } from "../../../components/EmptyState";
 import { MetadataRow } from "../../../components/MetadataRow";
 import { SectionError } from "../../../components/SectionError";
 import { StatusBadge, type StatusBadgeTone } from "../../../components/StatusBadge";
-import { formatTime } from "../../../lib/time";
+import { formatTime, formatTimeRange } from "../../../lib/time";
 
 function formatLabel(value: string) {
   return value.replace(/_/g, " ");
@@ -80,6 +80,10 @@ export function AlertDetailPanel({
           <MetadataRow label="Decision" value={formatLabel(alert.decision)} />
           <MetadataRow label="Channel" value={alert.channel} />
           <MetadataRow label="Sent" value={formatTime(alert.sent_at)} />
+          <MetadataRow
+            label="Report range"
+            value={formatTimeRange(alert.event?.report_start_at, alert.event?.report_end_at)}
+          />
           <MetadataRow label="Created" value={formatTime(alert.created_at)} />
           <MetadataRow label="Acknowledged" value={formatTime(alert.acknowledged_at)} />
           <MetadataRow label="Suppression" value={alert.suppression_reason} />

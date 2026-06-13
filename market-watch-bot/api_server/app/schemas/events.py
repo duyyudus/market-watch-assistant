@@ -27,6 +27,8 @@ class EventRead(BaseModel):
     final_score: int
     alert_level: str | None = None
     first_seen_at: datetime | None = None
+    report_start_at: datetime | None = None
+    report_end_at: datetime | None = None
     last_updated_at: datetime | None = None
 
 

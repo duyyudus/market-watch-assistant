@@ -43,15 +43,17 @@ export function AlertDecisionsTab({
           onSelectAlert={onSelectAlert}
         />
       </Panel>
-      <Panel title="Alert detail">
-        <AlertDetailPanel
-          alert={selectedAlertDetail}
-          eventDetail={selectedAlertEventDetail}
-          alertError={alertError}
-          eventError={eventError}
-          retry={retryDetail}
-        />
-      </Panel>
+      <div className="xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-100px)] xl:overflow-y-auto xl:overflow-x-hidden">
+        <Panel title="Alert detail">
+          <AlertDetailPanel
+            alert={selectedAlertDetail}
+            eventDetail={selectedAlertEventDetail}
+            alertError={alertError}
+            eventError={eventError}
+            retry={retryDetail}
+          />
+        </Panel>
+      </div>
     </div>
   );
 }

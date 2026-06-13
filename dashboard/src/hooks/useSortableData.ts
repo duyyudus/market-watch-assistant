@@ -23,6 +23,9 @@ export function useSortableData<T>(
         } else if (sortConfig.key === "sent") {
           aValue = left.sent_at ?? left.created_at;
           bValue = right.sent_at ?? right.created_at;
+        } else if (sortConfig.key === "event_report_range") {
+          aValue = (left.event as { report_end_at?: string | null } | undefined)?.report_end_at;
+          bValue = (right.event as { report_end_at?: string | null } | undefined)?.report_end_at;
         } else if (sortConfig.key === "event_headline") {
           aValue = (left.event as { headline?: string } | undefined)?.headline ?? left.reason;
           bValue = (right.event as { headline?: string } | undefined)?.headline ?? right.reason;
@@ -39,12 +42,26 @@ export function useSortableData<T>(
   }, [items, sortConfig]);
 
   const requestSort = (key: string) => {
-    let direction: "asc" | "desc" = "asc";
+    let direction: "asc" | "desc" = defaultDirectionForKey(key);
     if (sortConfig.key === key && sortConfig.direction === "asc") {
       direction = "desc";
+    } else if (sortConfig.key === key && sortConfig.direction === "desc") {
+      direction = "asc";
     }
     setSortConfig({ key, direction });
   };
 
   return { items: sortedItems, requestSort, sortConfig };
+}
+
+function defaultDirectionForKey(key: string): "asc" | "desc" {
+  if (
+    key === "time" ||
+    key === "sent" ||
+    key === "event_report_range" ||
+    key.endsWith("_at")
+  ) {
+    return "desc";
+  }
+  return "asc";
 }

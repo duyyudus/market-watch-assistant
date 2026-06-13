@@ -74,133 +74,133 @@ export function NewsTable({
   const canGoNext = offset + limit < total;
 
   return (
-    <Panel title="Normalized news">
-      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <label className="form-control w-full min-w-44">
-            <span className="label pb-1">
-              <span className="label-text text-xs font-semibold text-zinc-400">Source domain</span>
-            </span>
-            <select
-              aria-label="Source domain"
-              className="select select-bordered select-sm w-full bg-zinc-950"
-              onChange={(event) => setDomain(event.target.value)}
-              value={domain}
-            >
-              <option value="">All domains</option>
-              {domain && !domainOptions.includes(domain) ? (
-                <option value={domain}>{domain}</option>
-              ) : null}
-              {domainOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="form-control w-full min-w-44">
-            <span className="label pb-1">
-              <span className="label-text text-xs font-semibold text-zinc-400">Source</span>
-            </span>
-            <select
-              aria-label="Source"
-              className="select select-bordered select-sm w-full bg-zinc-950"
-              onChange={(event) => setSourceId(event.target.value)}
-              value={sourceId}
-            >
-              <option value="">All sources</option>
-              {sourceId && !sourceOptions.some((option) => option.id === sourceId) ? (
-                <option value={sourceId}>{sourceId}</option>
-              ) : null}
-              {sourceOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.name} · {option.source_type}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="form-control w-full min-w-36">
-            <span className="label pb-1">
-              <span className="label-text text-xs font-semibold text-zinc-400">Status</span>
-            </span>
-            <select
-              aria-label="Status"
-              className="select select-bordered select-sm w-full bg-zinc-950"
-              onChange={(event) => setStatus(event.target.value)}
-              value={status}
-            >
-              <option value="">All statuses</option>
-              {status && !statusOptions.includes(status) ? <option value={status}>{status}</option> : null}
-              {statusOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="form-control w-full min-w-36">
-            <span className="label pb-1">
-              <span className="label-text text-xs font-semibold text-zinc-400">Region</span>
-            </span>
-            <select
-              aria-label="Region"
-              className="select select-bordered select-sm w-full bg-zinc-950"
-              onChange={(event) => setRegion(event.target.value)}
-              value={region}
-            >
-              <option value="">All regions</option>
-              {region && !regionOptions.includes(region) ? <option value={region}>{region}</option> : null}
-              {regionOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="form-control w-full min-w-36">
-            <span className="label pb-1">
-              <span className="label-text text-xs font-semibold text-zinc-400">Items per page</span>
-            </span>
-            <select
-              aria-label="Items per page"
-              className="select select-bordered select-sm w-full bg-zinc-950"
-              onChange={(event) => setLimit(Number(event.target.value))}
-              value={limit}
-            >
-              {LIMIT_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_570px]">
+      <Panel title="Normalized news">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <label className="form-control w-full min-w-44">
+              <span className="label pb-1">
+                <span className="label-text text-xs font-semibold text-zinc-400">Source domain</span>
+              </span>
+              <select
+                aria-label="Source domain"
+                className="select select-bordered select-sm w-full bg-zinc-950"
+                onChange={(event) => setDomain(event.target.value)}
+                value={domain}
+              >
+                <option value="">All domains</option>
+                {domain && !domainOptions.includes(domain) ? (
+                  <option value={domain}>{domain}</option>
+                ) : null}
+                {domainOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form-control w-full min-w-44">
+              <span className="label pb-1">
+                <span className="label-text text-xs font-semibold text-zinc-400">Source</span>
+              </span>
+              <select
+                aria-label="Source"
+                className="select select-bordered select-sm w-full bg-zinc-950"
+                onChange={(event) => setSourceId(event.target.value)}
+                value={sourceId}
+              >
+                <option value="">All sources</option>
+                {sourceId && !sourceOptions.some((option) => option.id === sourceId) ? (
+                  <option value={sourceId}>{sourceId}</option>
+                ) : null}
+                {sourceOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.name} · {option.source_type}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form-control w-full min-w-36">
+              <span className="label pb-1">
+                <span className="label-text text-xs font-semibold text-zinc-400">Status</span>
+              </span>
+              <select
+                aria-label="Status"
+                className="select select-bordered select-sm w-full bg-zinc-950"
+                onChange={(event) => setStatus(event.target.value)}
+                value={status}
+              >
+                <option value="">All statuses</option>
+                {status && !statusOptions.includes(status) ? <option value={status}>{status}</option> : null}
+                {statusOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form-control w-full min-w-36">
+              <span className="label pb-1">
+                <span className="label-text text-xs font-semibold text-zinc-400">Region</span>
+              </span>
+              <select
+                aria-label="Region"
+                className="select select-bordered select-sm w-full bg-zinc-950"
+                onChange={(event) => setRegion(event.target.value)}
+                value={region}
+              >
+                <option value="">All regions</option>
+                {region && !regionOptions.includes(region) ? <option value={region}>{region}</option> : null}
+                {regionOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form-control w-full min-w-36">
+              <span className="label pb-1">
+                <span className="label-text text-xs font-semibold text-zinc-400">Items per page</span>
+              </span>
+              <select
+                aria-label="Items per page"
+                className="select select-bordered select-sm w-full bg-zinc-950"
+                onChange={(event) => setLimit(Number(event.target.value))}
+                value={limit}
+              >
+                {LIMIT_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            className="btn btn-sm btn-outline self-start lg:self-end"
+            onClick={() => void retry()}
+            type="button"
+          >
+            <RefreshCcw className="h-4 w-4" />
+            Refresh
+          </button>
         </div>
-        <button
-          className="btn btn-sm btn-outline self-start lg:self-end"
-          onClick={() => void retry()}
-          type="button"
-        >
-          <RefreshCcw className="h-4 w-4" />
-          Refresh
-        </button>
-      </div>
 
-      {error ? (
-        <SectionError title="Normalized news unavailable" message={error} retry={retry} />
-      ) : sortedRows.length === 0 ? (
-        <EmptyState
-          icon={Newspaper}
-          title="No normalized news yet"
-          body="Ingested news will appear here after source fetch and normalization jobs run."
-          action={
-            <button className="btn btn-sm btn-outline" onClick={() => void retry()} type="button">
-              <RefreshCcw className="h-4 w-4" />
-              Refresh
-            </button>
-          }
-        />
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_570px]">
+        {error ? (
+          <SectionError title="Normalized news unavailable" message={error} retry={retry} />
+        ) : sortedRows.length === 0 ? (
+          <EmptyState
+            icon={Newspaper}
+            title="No normalized news yet"
+            body="Ingested news will appear here after source fetch and normalization jobs run."
+            action={
+              <button className="btn btn-sm btn-outline" onClick={() => void retry()} type="button">
+                <RefreshCcw className="h-4 w-4" />
+                Refresh
+              </button>
+            }
+          />
+        ) : (
           <div className="min-w-0">
             <ResponsiveDataList
               cards={sortedRows.map((row) => (
@@ -324,14 +324,17 @@ export function NewsTable({
               </div>
             </div>
           </div>
-          <NewsDetailPanel
-            detail={selectedNewsDetail}
-            detailError={detailError}
-            isLoading={Boolean(selectedNewsId && !selectedNewsDetail && !detailError)}
-          />
-        </div>
-      )}
-    </Panel>
+        )}
+      </Panel>
+
+      <div className="xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-100px)] xl:overflow-y-auto xl:overflow-x-hidden">
+        <NewsDetailPanel
+          detail={selectedNewsDetail}
+          detailError={detailError}
+          isLoading={Boolean(selectedNewsId && !selectedNewsDetail && !detailError)}
+        />
+      </div>
+    </div>
   );
 }
 
