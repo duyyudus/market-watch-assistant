@@ -74,9 +74,14 @@ from bot_worker.services.llm import (
 )
 from bot_worker.services.market import (
     fetch_market_moves,
+    fetch_market_moves_with_stats,
     market_move_score_for_cluster,
     run_missed_catalyst_review,
     store_market_moves,
+)
+from common.market_symbol_resolver import (
+    resolve_watchlist_market_symbol,
+    watchlist_market_symbol_requests,
 )
 from bot_worker.services.pipeline import (
     CORE_JOBS,
@@ -134,6 +139,7 @@ __all__ = [
     "event_report_time_range",
     "extract_entities_with_llm",
     "fetch_market_moves",
+    "fetch_market_moves_with_stats",
     "fetch_source",
     "fetch_source_content",
     "format_report_time_range",
@@ -163,6 +169,7 @@ __all__ = [
     "raw_item_from_parsed",
     "record_alert_decisions",
     "record_job_run",
+    "resolve_watchlist_market_symbol",
     "recluster_recent_event_clusters",
     "refresh_source_quality_scores",
     "retention_preview",
@@ -190,4 +197,5 @@ __all__ = [
     "validate_embedding_dimensions",
     "vector_cluster_candidates_for_item",
     "watchlist_entries",
+    "watchlist_market_symbol_requests",
 ]

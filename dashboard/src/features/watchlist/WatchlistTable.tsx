@@ -216,8 +216,10 @@ function normalizePayload(form: WatchlistPayload): WatchlistPayload {
   return {
     ...form,
     symbol: form.symbol?.trim() || null,
-    region: form.region?.trim() || null,
-    asset_class: form.asset_class?.trim() || null,
+    // region/asset_class are required; keep them as strings so a blank value is
+    // rejected by the API instead of being coerced to null and nulling the column.
+    region: form.region?.trim() ?? "",
+    asset_class: form.asset_class?.trim() ?? "",
     tier: form.tier.toUpperCase(),
     aliases: form.aliases.map((alias) => alias.trim()).filter(Boolean),
   };

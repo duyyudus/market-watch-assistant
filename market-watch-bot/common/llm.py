@@ -602,16 +602,19 @@ def event_needs_llm_analysis(
     event: EventCluster,
     *,
     config: LLMConfig,
-    market_move_score: int,
+    market_move_score: int | None,
 ) -> bool:
     if not config.enabled:
         return False
+    # market_move_score is None when no market moves have been fetched yet for the
+    # cluster's symbols (e.g. enrichment runs before the market-moves stage).
+    move_score = market_move_score or 0
     if event.final_score >= config.high_score_threshold:
         return True
     if event.source_count == 1 and event.top_source_score >= config.single_source_score_threshold:
         return True
     if (
-        market_move_score >= config.market_move_score_threshold
+        move_score >= config.market_move_score_threshold
         and event.final_score >= config.analysis_min_score_threshold
     ):
         return True

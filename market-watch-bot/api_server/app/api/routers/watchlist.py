@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 
-from api_server.app.api.dependencies import SessionDep
+from api_server.app.api.dependencies import SessionDep, SettingsDep
 from api_server.app.schemas import ListEnvelope, WatchlistCreate, WatchlistRead, WatchlistUpdate
 from api_server.app.services import watchlist as watchlist_service
 from common.db.models import WatchlistEntity
@@ -22,8 +22,9 @@ async def list_watchlist(
 async def create_watchlist(
     payload: WatchlistCreate,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> WatchlistRead:
-    entry = await watchlist_service.create_watchlist(session, payload)
+    entry = await watchlist_service.create_watchlist(session, payload, settings=settings)
     return WatchlistRead.model_validate(entry)
 
 
@@ -32,11 +33,12 @@ async def update_watchlist(
     entry_id: str,
     payload: WatchlistUpdate,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> WatchlistRead:
     entry = await session.get(WatchlistEntity, entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Watchlist entry not found")
-    entry = await watchlist_service.update_watchlist(session, entry, payload)
+    entry = await watchlist_service.update_watchlist(session, entry, payload, settings=settings)
     return WatchlistRead.model_validate(entry)
 
 

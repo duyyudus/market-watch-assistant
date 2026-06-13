@@ -32,7 +32,13 @@ from bot_worker.normalize import (
     content_hash,
 )
 from bot_worker.rss import ParsedFeedItem, parse_rss_items
-from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
+from bot_worker.scoring import (
+    AlertThresholds,
+    ScoreInput,
+    decide_alert,
+    market_impact_score,
+    score_event,
+)
 from bot_worker.services.common import _json_safe, _published_to_string, _result_rowcount
 from bot_worker.services.external_providers import PROVIDER_RETRY_POLICIES, request_with_retry
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
@@ -255,7 +261,7 @@ async def _refresh_event_cluster_after_source_purge(session: AsyncSession, clust
     cluster.confirmation_score = score.confidence_score
     cluster.novelty_score = score.novelty_score
     cluster.urgency_score = score.urgency_score
-    cluster.market_impact_score = score.impact_score
+    cluster.market_impact_score = market_impact_score(score)
     cluster.relevance_score = score.relevance_score
     cluster.final_score = score.final_score
     cluster.alert_level = decide_alert(score.final_score, AlertThresholds()).decision

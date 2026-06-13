@@ -149,11 +149,11 @@ async def test_score_event_cluster_uses_watchlist_relevance_for_affected_entitie
 
     breakdown = await score_event_cluster(SimpleNamespace(), event)
 
-    assert breakdown.relevance_score == 95
+    assert breakdown.relevance_score == 90
 
 
 @pytest.mark.asyncio
-async def test_score_event_cluster_keeps_low_relevance_without_affected_entities(
+async def test_score_event_cluster_uses_d_tier_baseline_without_watchlist_tier(
     monkeypatch,
 ) -> None:
     event = EventCluster(
@@ -175,6 +175,8 @@ async def test_score_event_cluster_keeps_low_relevance_without_affected_entities
 
     breakdown = await score_event_cluster(SimpleNamespace(), event)
 
+    # An untiered / off-watchlist cluster falls back to the D-tier baseline (35),
+    # not the demoted 20 (see M6 regression fix in scoring.score_event).
     assert breakdown.relevance_score == 35
 
 
@@ -210,7 +212,7 @@ async def test_event_rescore_command_uses_shared_scoring_helper(monkeypatch) -> 
     )
 
     assert result == {"event_id": "evt_1", "final_score": event.final_score}
-    assert event.relevance_score == 95
+    assert event.relevance_score == 90
 
 
 @pytest.mark.asyncio
@@ -381,7 +383,8 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
             symbol_map={"BTC": "bitcoin"},
             crypto_provider="coingecko",
             crypto_fallback_provider="binance",
-        )
+        ),
+        coingecko_api_key="demo-key",
     )
 
     # Test market.fetch command
@@ -393,6 +396,7 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
     assert res_fetch == {"inserted": 1, "symbols": ["BTC"], "window": "1d"}
     assert fetch_kwargs["crypto_provider"] == "coingecko"
     assert fetch_kwargs["crypto_fallback_provider"] == "binance"
+    assert fetch_kwargs["coingecko_api_key"] == "demo-key"
 
     # Test catalyst.review command
     cmd_review = BotCommand(

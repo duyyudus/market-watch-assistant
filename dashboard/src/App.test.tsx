@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, compareValues } from "./App";
+import { formatTime } from "./lib/time";
 
 const apiMock = vi.hoisted(() => ({
   botStatus: vi.fn(),
@@ -718,10 +719,11 @@ describe("App data states", () => {
 
     expect(await screen.findByText("Timeline")).toBeInTheDocument();
     expect(screen.getByText("Scoring")).toBeInTheDocument();
-    expect(screen.getByText("Market moves")).toBeInTheDocument();
+    expect(screen.getByText("Latest price move snapshots")).toBeInTheDocument();
     expect(screen.getByText("Less hawkish Fed path.")).toBeInTheDocument();
     expect(screen.getByText("monitor duration exposure")).toBeInTheDocument();
     expect(screen.getByText("SPY")).toBeInTheDocument();
+    expect(screen.getByText(`Captured ${formatTime("2026-05-29T13:10:00Z")}`)).toBeInTheDocument();
     expect(screen.getByText("Source")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /rescore/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /confirm/i })).toBeInTheDocument();

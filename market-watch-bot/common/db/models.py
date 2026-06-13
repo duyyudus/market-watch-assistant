@@ -487,13 +487,41 @@ class WatchlistEntity(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     tier: Mapped[str] = mapped_column(String(1), nullable=False, default="D")
-    region: Mapped[str | None] = mapped_column(String(64))
-    asset_class: Mapped[str | None] = mapped_column(String(64))
+    region: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_class: Mapped[str] = mapped_column(String(64), nullable=False)
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MarketSymbolResolution(Base):
+    __tablename__ = "market_symbol_resolutions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("msr"))
+    watchlist_entity_id: Mapped[str] = mapped_column(
+        ForeignKey("watchlist_entities.id", ondelete="CASCADE"), nullable=False
+    )
+    symbol: Mapped[str | None] = mapped_column(String(64))
+    asset_class: Mapped[str | None] = mapped_column(String(64))
+    region: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str | None] = mapped_column(String(64))
+    provider_symbol: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    resolution_metadata: Mapped[dict[str, object]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("watchlist_entity_id", name="uq_market_symbol_resolution_watchlist"),
     )
 
 

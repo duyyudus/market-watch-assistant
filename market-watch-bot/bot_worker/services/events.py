@@ -23,6 +23,7 @@ from bot_worker.embeddings import (
 from bot_worker.events import (
     EventCandidate,
     EventClusterDraft,
+    SameEventDecision,
     SameEventDecisionKind,
     VectorClusterCandidate,
     classify_same_event,
@@ -30,7 +31,13 @@ from bot_worker.events import (
     vector_similarity_score,
 )
 from bot_worker.normalize import content_hash
-from bot_worker.scoring import AlertThresholds, ScoreInput, decide_alert, score_event
+from bot_worker.scoring import (
+    AlertThresholds,
+    ScoreInput,
+    decide_alert,
+    market_impact_score,
+    score_event,
+)
 from bot_worker.services.llm import resolve_llm_cluster_decision
 from bot_worker.services.watchlists import (
     news_item_entities,
@@ -162,7 +169,7 @@ def _rescore_cluster(
     cluster.confirmation_score = score.confidence_score
     cluster.novelty_score = score.novelty_score
     cluster.urgency_score = score.urgency_score
-    cluster.market_impact_score = score.impact_score
+    cluster.market_impact_score = market_impact_score(score)
     cluster.relevance_score = score.relevance_score
     cluster.final_score = score.final_score
     cluster.alert_level = decide_alert(score.final_score, AlertThresholds()).decision
@@ -255,7 +262,11 @@ async def _candidate_from_item(
     stored_entities = await news_item_entities(session, item.id)
     stored_tickers = await news_item_tickers(session, item.id)
     entities = stored_entities or [match.name for match in matches]
-    tickers = stored_tickers or [match.symbol for match in matches if match.symbol]
+    # Tickers come exclusively from LLM extraction. The watchlist matcher does
+    # naive substring matching (e.g. "BID" in "bidders", "GAS" in "oil and gas"),
+    # so using it to derive tickers attaches unrelated symbols. No LLM ticker
+    # means no ticker; watchlist matching is only for downstream tiering.
+    tickers = stored_tickers
     return EventCandidate(
         news_id=item.id,
         title=item.title,
@@ -344,56 +355,69 @@ async def _cluster_candidates_with_llm_arbitration(
     for candidate in candidates:
         target: EventClusterDraft | None = None
         metadata: dict[str, object] | None = None
+        target_decision: SameEventDecision | None = None
+        ambiguous_matches: list[tuple[EventClusterDraft, SameEventDecision]] = []
         for draft in drafts:
             decision = classify_same_event(candidate, _draft_candidate(draft))
             if decision.kind is SameEventDecisionKind.STRONG_SAME_EVENT:
-                target = draft
-                metadata = {
-                    "decision_source": "deterministic",
-                    "decision": decision.kind.value,
-                    "reason": decision.reason,
-                    "title_similarity": round(decision.title_similarity, 4),
-                    "entity_overlap": decision.entity_overlap,
-                    "ticker_overlap": decision.ticker_overlap,
-                }
-                break
+                if (
+                    target_decision is None
+                    or decision.title_similarity > target_decision.title_similarity
+                ):
+                    target = draft
+                    target_decision = decision
+                continue
             if decision.kind is not SameEventDecisionKind.AMBIGUOUS:
                 continue
-            if llm_config is None or not llm_config.enabled or not llm_config.api_key:
-                continue
-            attempted, should_attach = await resolve_llm_cluster_decision(
-                session=session,
-                item=NormalizedNewsItem(
-                    id=candidate.news_id,
-                    title=candidate.title,
-                    snippet=candidate.snippet,
-                    source_name=candidate.source_name,
-                    source_type=candidate.source_type,
-                    source_score=candidate.source_score,
-                    region=candidate.region,
-                    asset_classes=candidate.asset_classes,
-                ),
-                cluster=_draft_cluster(draft),
-                similarity=decision.title_similarity,
-                config=llm_config,
-                entities=candidate.entities,
-                tickers=candidate.tickers,
-            )
-            if attempted:
-                llm_decisions += 1
-            if should_attach:
-                llm_attaches += 1
-                target = draft
-                metadata = {
-                    "decision_source": "llm",
-                    "decision": "same_event",
-                    "reason": decision.reason,
-                    "title_similarity": round(decision.title_similarity, 4),
-                    "entity_overlap": decision.entity_overlap,
-                    "ticker_overlap": decision.ticker_overlap,
-                    "llm_attempted": attempted,
-                }
-                break
+            ambiguous_matches.append((draft, decision))
+        if target is not None and target_decision is not None:
+            metadata = {
+                "decision_source": "deterministic",
+                "decision": target_decision.kind.value,
+                "reason": target_decision.reason,
+                "title_similarity": round(target_decision.title_similarity, 4),
+                "entity_overlap": target_decision.entity_overlap,
+                "ticker_overlap": target_decision.ticker_overlap,
+            }
+        if target is None:
+            for draft, decision in ambiguous_matches:
+                if target is not None:
+                    break
+                if llm_config is None or not llm_config.enabled or not llm_config.api_key:
+                    continue
+                attempted, should_attach = await resolve_llm_cluster_decision(
+                    session=session,
+                    item=NormalizedNewsItem(
+                        id=candidate.news_id,
+                        title=candidate.title,
+                        snippet=candidate.snippet,
+                        source_name=candidate.source_name,
+                        source_type=candidate.source_type,
+                        source_score=candidate.source_score,
+                        region=candidate.region,
+                        asset_classes=candidate.asset_classes,
+                    ),
+                    cluster=_draft_cluster(draft),
+                    similarity=decision.title_similarity,
+                    config=llm_config,
+                    entities=candidate.entities,
+                    tickers=candidate.tickers,
+                )
+                if attempted:
+                    llm_decisions += 1
+                if should_attach:
+                    llm_attaches += 1
+                    target = draft
+                    metadata = {
+                        "decision_source": "llm",
+                        "decision": "same_event",
+                        "reason": decision.reason,
+                        "title_similarity": round(decision.title_similarity, 4),
+                        "entity_overlap": decision.entity_overlap,
+                        "ticker_overlap": decision.ticker_overlap,
+                        "llm_attempted": attempted,
+                    }
+                    break
         if target is None:
             target = EventClusterDraft(canonical_headline=candidate.title)
             drafts.append(target)
@@ -439,7 +463,7 @@ def _update_cluster_from_draft(
     cluster.confirmation_score = score.confidence_score
     cluster.novelty_score = score.novelty_score
     cluster.urgency_score = score.urgency_score
-    cluster.market_impact_score = score.impact_score
+    cluster.market_impact_score = market_impact_score(score)
     cluster.relevance_score = score.relevance_score
     cluster.final_score = score.final_score
     cluster.alert_level = decide_alert(score.final_score, AlertThresholds()).decision
@@ -736,7 +760,7 @@ async def build_event_clusters(
         cluster.confirmation_score = score.confidence_score
         cluster.novelty_score = score.novelty_score
         cluster.urgency_score = score.urgency_score
-        cluster.market_impact_score = score.impact_score
+        cluster.market_impact_score = market_impact_score(score)
         cluster.relevance_score = score.relevance_score
         cluster.final_score = score.final_score
         cluster.alert_level = decide_alert(score.final_score, AlertThresholds()).decision

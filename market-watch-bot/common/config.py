@@ -138,16 +138,36 @@ class MarketDataConfig(BaseModel):
     vn_base_url: str = "http://192.168.100.39:8020"
     crypto_provider: str = "binance"
     crypto_fallback_provider: str = "coingecko"
-    global_provider: str = "yahoo"
+    global_provider: str = "hyperliquid"
+    hyperliquid_base_url: str = "https://api.hyperliquid.xyz"
+    hyperliquid_dex: str = "xyz"
+    hyperliquid_min_day_notional_volume: float = 100000
     symbol_map: dict[str, str] = Field(
         default_factory=lambda: {
             "BTC": "bitcoin",
             "ETH": "ethereum",
             "SOL": "solana",
-            "SPY": "SPY",
-            "QQQ": "QQQ",
-            "GLD": "GLD",
-            "USO": "USO",
+            "XRP": "ripple",
+            "ADA": "cardano",
+            "DOGE": "dogecoin",
+            "SPX": "xyz:SP500",
+            "SP500": "xyz:SP500",
+            "NDX": "xyz:XYZ100",
+            "XYZ100": "xyz:XYZ100",
+            "GOLD": "xyz:GOLD",
+            "XAU": "xyz:GOLD",
+            "SILVER": "xyz:SILVER",
+            "XAG": "xyz:SILVER",
+            "WTI": "xyz:CL",
+            "CL": "xyz:CL",
+            "BRENT": "xyz:BRENTOIL",
+            "NVDA": "xyz:NVDA",
+            "AAPL": "xyz:AAPL",
+            "MSFT": "xyz:MSFT",
+            "TSLA": "xyz:TSLA",
+            "META": "xyz:META",
+            "GOOGL": "xyz:GOOGL",
+            "AMZN": "xyz:AMZN",
         }
     )
 
@@ -235,6 +255,7 @@ class Settings(BaseModel):
     api_auth_token: str | None = None
     openrouter_api_key: str | None = None
     brave_search_api_key: str | None = None
+    coingecko_api_key: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     api_base_url: str = "http://localhost:8000"
@@ -279,6 +300,7 @@ def _read_env(path: Path) -> dict[str, str]:
             "DATABASE_URL",
             "OPENROUTER_API_KEY",
             "BRAVE_SEARCH_API_KEY",
+            "COINGECKO_API_KEY",
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_CHAT_ID",
             "API_BASE_URL",
@@ -305,6 +327,7 @@ def load_settings(
         "api_auth_token": env_data.get("API_AUTH_TOKEN"),
         "openrouter_api_key": env_data.get("OPENROUTER_API_KEY"),
         "brave_search_api_key": env_data.get("BRAVE_SEARCH_API_KEY"),
+        "coingecko_api_key": env_data.get("COINGECKO_API_KEY"),
         "telegram_bot_token": env_data.get("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": env_data.get("TELEGRAM_CHAT_ID"),
         "api_base_url": env_data.get("API_BASE_URL", "http://localhost:8000"),

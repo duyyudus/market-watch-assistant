@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 
+from bot_worker.config import Settings
 from bot_worker.db.models import DigestRecord, EventCluster, NewsSource, NormalizedNewsItem
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.llm import LLMConfig
+from bot_worker.market_data import MarketSymbolRequest
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.digests import format_digest_message
 from bot_worker.services.events import validate_pgvector
@@ -21,7 +25,11 @@ from bot_worker.services.full_text import (
     build_full_text_backlog_stmt,
     extract_full_text_for_pending_items,
 )
-from bot_worker.services.market import fetch_market_moves_with_stats
+from bot_worker.services.market import (
+    MarketResolvedSymbolRequest,
+    _route_market_symbols,
+    fetch_market_moves_with_stats,
+)
 from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.pipeline_metrics import PipelineRunMetrics, slow_pipeline_stages
 from bot_worker.services.sources import (
@@ -47,6 +55,16 @@ class SequencedClient:
             raise response
         response.request = httpx.Request(method, url)
         return response
+
+
+def _load_starter_watchlist_rows() -> list[dict[str, object]]:
+    paths_to_try = [
+        Path("starter-watchlist.yml"),
+        Path(__file__).resolve().parent.parent / "starter-watchlist.yml",
+    ]
+    path = next(p for p in paths_to_try if p.exists())
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return data["watchlist"]
 
 
 class EmptyScalarResult:
@@ -745,22 +763,24 @@ async def test_market_fetch_continues_after_symbol_provider_failures() -> None:
         window="1d",
         vn_base_url="https://vn.example",
         symbol_map={"BTC": "bitcoin"},
+        coingecko_api_key="demo-key",
         client=MarketClient(),
     )
 
     assert [move.asset_symbol for move in result.moves] == ["BTC"]
     assert "binance" in result.degraded_providers
-    assert "vietnam_market" in result.failed_providers
+    assert result.failed_providers == []
+    assert result.unavailable_symbols == {"VIC": "No market data route for VIC"}
 
 
 @pytest.mark.asyncio
 async def test_market_fetch_uses_configured_crypto_provider_order() -> None:
     class MarketClient:
         def __init__(self) -> None:
-            self.urls: list[str] = []
+            self.requests: list[tuple[str, dict[str, object]]] = []
 
         async def get(self, url: str, **kwargs: object) -> httpx.Response:
-            self.urls.append(url)
+            self.requests.append((url, kwargs))
             if "binance" in url:
                 raise AssertionError("Binance should not be called when CoinGecko succeeds")
             response = httpx.Response(
@@ -778,12 +798,498 @@ async def test_market_fetch_uses_configured_crypto_provider_order() -> None:
         symbol_map={"BTC": "bitcoin"},
         crypto_provider="coingecko",
         crypto_fallback_provider="binance",
+        coingecko_api_key="demo-key",
         client=client,
     )
 
     assert [move.asset_symbol for move in result.moves] == ["BTC"]
-    assert len(client.urls) == 1
-    assert "coingecko" in client.urls[0]
+    assert len(client.requests) == 1
+    assert "coingecko" in client.requests[0][0]
+    assert client.requests[0][1]["headers"] == {"x-cg-demo-api-key": "demo-key"}
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_uses_resolved_provider_symbols_directly() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str, dict[str, object]]] = []
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            self.requests.append((method, url, kwargs))
+            if "coingecko" in url:
+                assert kwargs["params"]["ids"] == "ripple"
+                assert kwargs["headers"] == {"x-cg-demo-api-key": "demo-key"}
+                response = httpx.Response(
+                    200,
+                    json=[{"id": "ripple", "price_change_percentage_24h": 3.4}],
+                )
+            elif "hyperliquid" in url:
+                response = httpx.Response(
+                    200,
+                    json=[
+                        {"universe": [{"name": "xyz:SP500"}]},
+                        [{"markPx": "105.0", "prevDayPx": "100.0", "dayNtlVlm": "250000"}],
+                    ],
+                )
+            else:
+                raise AssertionError(f"unexpected provider request: {method} {url}")
+            response.request = httpx.Request(method, url)
+            return response
+
+    result = await fetch_market_moves_with_stats(
+        resolved_symbols=[
+            MarketResolvedSymbolRequest(
+                symbol="XRP",
+                asset_class="crypto",
+                region="crypto",
+                provider="coingecko",
+                provider_symbol="ripple",
+                fallback_provider="binance",
+            ),
+            MarketResolvedSymbolRequest(
+                symbol="SPX",
+                asset_class="index",
+                region="us",
+                provider="hyperliquid",
+                provider_symbol="xyz:SP500",
+                fallback_provider=None,
+            ),
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={},
+        crypto_provider="binance",
+        crypto_fallback_provider="coingecko",
+        coingecko_api_key="demo-key",
+        client=MarketClient(),
+    )
+
+    assert [move.asset_symbol for move in result.moves] == ["XRP", "SPX"]
+    assert result.unavailable_symbols == {}
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_missing_coingecko_key_falls_back_to_binance() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            self.urls.append(url)
+            if "coingecko" in url:
+                raise AssertionError("CoinGecko should not be called without COINGECKO_API_KEY")
+            if "binance" in url:
+                response = httpx.Response(
+                    200,
+                    json={"symbol": "BTCUSDT", "priceChangePercent": "4.2"},
+                )
+                response.request = httpx.Request(method, url)
+                return response
+            raise AssertionError(f"unexpected provider request: {method} {url}")
+
+    client = MarketClient()
+    result = await fetch_market_moves_with_stats(
+        symbols=["BTC"],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={"BTC": "bitcoin"},
+        crypto_provider="coingecko",
+        crypto_fallback_provider="binance",
+        client=client,
+    )
+
+    assert [move.asset_symbol for move in result.moves] == ["BTC"]
+    assert result.degraded_providers == ["coingecko"]
+    assert result.failed_providers == []
+    assert result.errors == {"coingecko": "COINGECKO_API_KEY is required for CoinGecko market data"}
+    assert all("coingecko" not in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_missing_coingecko_key_fails_when_no_fallback() -> None:
+    class MarketClient:
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            raise AssertionError(f"CoinGecko should not be called without key: {method} {url}")
+
+    result = await fetch_market_moves_with_stats(
+        symbols=["BTC"],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={"BTC": "bitcoin"},
+        crypto_provider="coingecko",
+        crypto_fallback_provider="",
+        client=MarketClient(),
+    )
+
+    assert result.moves == []
+    assert result.degraded_providers == []
+    assert result.failed_providers == ["coingecko"]
+    assert result.errors == {"coingecko": "COINGECKO_API_KEY is required for CoinGecko market data"}
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_resolved_crypto_uses_configured_fallback() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            self.urls.append(url)
+            if "coingecko" in url:
+                raise AssertionError("CoinGecko should not be called without COINGECKO_API_KEY")
+            if "binance" in url:
+                assert kwargs["params"] == {"symbol": "BTCUSDT"}
+                response = httpx.Response(
+                    200,
+                    json={"symbol": "BTCUSDT", "priceChangePercent": "4.2"},
+                )
+                response.request = httpx.Request(method, url)
+                return response
+            raise AssertionError(f"unexpected provider request: {method} {url}")
+
+    client = MarketClient()
+    result = await fetch_market_moves_with_stats(
+        resolved_symbols=[
+            MarketResolvedSymbolRequest(
+                symbol="BTC",
+                asset_class="crypto",
+                region="crypto",
+                provider="coingecko",
+                provider_symbol="bitcoin",
+                fallback_provider="binance",
+            )
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={},
+        client=client,
+    )
+
+    assert [move.asset_symbol for move in result.moves] == ["BTC"]
+    assert result.degraded_providers == ["coingecko"]
+    assert result.failed_providers == []
+    assert all("coingecko" not in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_surfaces_unresolved_resolution_without_guessing() -> None:
+    class MarketClient:
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            raise AssertionError(f"unresolved symbols should not call providers: {method} {url}")
+
+    result = await fetch_market_moves_with_stats(
+        resolved_symbols=[
+            MarketResolvedSymbolRequest(
+                symbol="ABCD",
+                asset_class="us_equity",
+                region="us",
+                provider="hyperliquid",
+                provider_symbol=None,
+                status="unresolved",
+                reason="No Hyperliquid instrument matched ABCD",
+                fallback_provider=None,
+            )
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={"ABCD": "xyz:ABCD"},
+        client=MarketClient(),
+    )
+
+    assert result.moves == []
+    assert result.unavailable_symbols == {
+        "ABCD": "No Hyperliquid instrument matched ABCD",
+    }
+
+
+def test_enabled_starter_watchlist_entries_are_market_data_routable() -> None:
+    rows = [row for row in _load_starter_watchlist_rows() if row["enabled"]]
+    settings = Settings()
+    requests = [
+        MarketSymbolRequest(
+            symbol=str(row["symbol"]),
+            asset_class=str(row["asset_class"]),
+            region=str(row["region"]),
+        )
+        for row in rows
+    ]
+
+    crypto, hyperliquid, vietnam, unrouted = _route_market_symbols(
+        requests,
+        settings.market_data.symbol_map,
+    )
+
+    assert rows
+    assert crypto
+    assert hyperliquid
+    assert vietnam
+    assert unrouted == []
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_routes_watchlist_metadata_without_vn_catchall() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.posted_urls: list[str] = []
+            self.posted_json: list[dict[str, object]] = []
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            if method == "POST":
+                self.posted_urls.append(url)
+                payload = kwargs.get("json")
+                if isinstance(payload, dict):
+                    self.posted_json.append(payload)
+            if "hyperliquid" in url:
+                response = httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "universe": [
+                                {"name": "xyz:SP500"},
+                                {"name": "xyz:GOLD"},
+                                {"name": "xyz:CL"},
+                            ]
+                        },
+                        [
+                            {"markPx": "105.0", "prevDayPx": "100.0", "dayNtlVlm": "250000"},
+                            {"markPx": "2040.0", "prevDayPx": "2000.0", "dayNtlVlm": "500000"},
+                            {"markPx": "89.0", "prevDayPx": "90.0", "dayNtlVlm": "700000"},
+                        ],
+                    ],
+                )
+            elif "coingecko" in url:
+                response = httpx.Response(
+                    200,
+                    json=[{"id": "ripple", "price_change_percentage_24h": 3.4}],
+                )
+            else:
+                raise AssertionError(f"unexpected provider request: {method} {url}")
+            response.request = httpx.Request(method, url)
+            return response
+
+    client = MarketClient()
+    result = await fetch_market_moves_with_stats(
+        market_symbols=[
+            MarketSymbolRequest(symbol="SPX", asset_class="index", region="us"),
+            MarketSymbolRequest(symbol="GOLD", asset_class="commodity", region="global"),
+            MarketSymbolRequest(symbol="CL", asset_class="commodity", region="global"),
+            MarketSymbolRequest(symbol="XRP", asset_class="crypto", region="crypto"),
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={
+            "SPX": "xyz:SP500",
+            "GOLD": "xyz:GOLD",
+            "CL": "xyz:CL",
+            "XRP": "ripple",
+        },
+        crypto_provider="coingecko",
+        crypto_fallback_provider="binance",
+        coingecko_api_key="demo-key",
+        client=client,
+    )
+
+    assert [move.asset_symbol for move in result.moves] == ["XRP", "SPX", "GOLD", "CL"]
+    assert all("vn.example" not in url for url in client.posted_urls)
+    assert result.failed_providers == []
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_thin_hyperliquid_market_is_skipped_not_failed() -> None:
+    class MarketClient:
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            if "hyperliquid" not in url:
+                raise AssertionError(f"unexpected provider request: {method} {url}")
+            response = httpx.Response(
+                200,
+                json=[
+                    {"universe": [{"name": "xyz:SP500"}, {"name": "xyz:VIX"}]},
+                    [
+                        {"markPx": "105.0", "prevDayPx": "100.0", "dayNtlVlm": "500000"},
+                        {"markPx": "20.0", "prevDayPx": "20.0", "dayNtlVlm": "0"},
+                    ],
+                ],
+            )
+            response.request = httpx.Request(method, url)
+            return response
+
+    result = await fetch_market_moves_with_stats(
+        market_symbols=[
+            MarketSymbolRequest(symbol="SPX", asset_class="index", region="us"),
+            MarketSymbolRequest(symbol="VIX", asset_class="index", region="us"),
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={"SPX": "xyz:SP500", "VIX": "xyz:VIX"},
+        hyperliquid_min_day_notional_volume=100000,
+        client=MarketClient(),
+    )
+
+    # The thin market is a deliberate quality-gate skip: surfaced, but not "unavailable"
+    # and not degrading provider health.
+    assert [move.asset_symbol for move in result.moves] == ["SPX"]
+    assert result.failed_providers == []
+    assert result.degraded_providers == []
+    assert result.unavailable_symbols == {}
+    assert "VIX" in result.skipped_symbols
+    assert "below 100000" in result.skipped_symbols["VIX"]
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_legacy_symbols_route_mapped_crypto_and_unrouted_safely() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            self.urls.append(url)
+            if "coingecko" not in url:
+                raise AssertionError(f"unexpected provider request: {method} {url}")
+            response = httpx.Response(
+                200,
+                json=[{"id": "ripple", "price_change_percentage_24h": 3.4}],
+            )
+            response.request = httpx.Request(method, url)
+            return response
+
+    client = MarketClient()
+    result = await fetch_market_moves_with_stats(
+        symbols=["XRP", "UNKNOWN"],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={"XRP": "ripple"},
+        crypto_provider="coingecko",
+        crypto_fallback_provider="binance",
+        coingecko_api_key="demo-key",
+        client=client,
+    )
+
+    assert [move.asset_symbol for move in result.moves] == ["XRP"]
+    assert result.failed_providers == []
+    assert result.unavailable_symbols == {"UNKNOWN": "No market data route for UNKNOWN"}
+    assert all("vn.example" not in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_emits_one_move_per_hyperliquid_alias() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.hyperliquid_calls = 0
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            if "hyperliquid" not in url:
+                raise AssertionError(f"unexpected provider request: {method} {url}")
+            self.hyperliquid_calls += 1
+            response = httpx.Response(
+                200,
+                json=[
+                    {"universe": [{"name": "xyz:SP500"}]},
+                    [{"markPx": "105.0", "prevDayPx": "100.0", "dayNtlVlm": "250000"}],
+                ],
+            )
+            response.request = httpx.Request(method, url)
+            return response
+
+    client = MarketClient()
+    result = await fetch_market_moves_with_stats(
+        market_symbols=[
+            MarketSymbolRequest(symbol="SPX", asset_class="index", region="us"),
+            MarketSymbolRequest(symbol="SP500", asset_class="index", region="us"),
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={"SPX": "xyz:SP500", "SP500": "xyz:SP500"},
+        client=client,
+    )
+
+    assert client.hyperliquid_calls == 1
+    assert [move.asset_symbol for move in result.moves] == ["SPX", "SP500"]
+    assert [move.price_change_pct for move in result.moves] == [5.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_rejects_hyperliquid_non_1d_windows() -> None:
+    class MarketClient:
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            raise AssertionError(
+                f"non-1d Hyperliquid fetch should not call providers: {method} {url}"
+            )
+
+    result = await fetch_market_moves_with_stats(
+        market_symbols=[MarketSymbolRequest(symbol="SPX", asset_class="index", region="us")],
+        window="1w",
+        vn_base_url="https://vn.example",
+        symbol_map={"SPX": "xyz:SP500"},
+        client=MarketClient(),
+    )
+
+    assert result.moves == []
+    assert result.failed_providers == ["hyperliquid"]
+    assert result.errors == {"hyperliquid": "Hyperliquid provider only supports window='1d'"}
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_uses_vietnam_only_for_explicit_vietnam_assets() -> None:
+    class MarketClient:
+        def __init__(self) -> None:
+            self.vn_payloads: list[dict[str, object]] = []
+
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            if "vn.example" not in url:
+                raise AssertionError(f"unexpected non-Vietnam request: {method} {url}")
+            payload = kwargs.get("json")
+            if isinstance(payload, dict):
+                self.vn_payloads.append(payload)
+            response = httpx.Response(
+                200,
+                json={
+                    "stocks": [
+                        {
+                            "ticker": "VIC",
+                            "exchange": "HOSE",
+                            "price_change_24h": 1.5,
+                            "price_change_1w": None,
+                        }
+                    ]
+                },
+            )
+            response.request = httpx.Request(method, url)
+            return response
+
+    client = MarketClient()
+    result = await fetch_market_moves_with_stats(
+        market_symbols=[
+            MarketSymbolRequest(symbol="VIC", asset_class="vietnam_equity", region="vietnam"),
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={},
+        client=client,
+    )
+
+    assert client.vn_payloads == [{"symbols": ["vic"]}]
+    assert [move.asset_symbol for move in result.moves] == ["VIC"]
+
+
+@pytest.mark.asyncio
+async def test_market_fetch_records_unrouted_symbols_instead_of_vn_fallback() -> None:
+    class MarketClient:
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            raise AssertionError(f"unrouted symbol should not call providers: {method} {url}")
+
+    result = await fetch_market_moves_with_stats(
+        market_symbols=[
+            MarketSymbolRequest(symbol="UNKNOWN", asset_class="macro_theme", region="global"),
+        ],
+        window="1d",
+        vn_base_url="https://vn.example",
+        symbol_map={},
+        client=MarketClient(),
+    )
+
+    assert result.moves == []
+    assert result.failed_providers == []
+    assert result.unavailable_symbols == {"UNKNOWN": "No market data route for UNKNOWN"}
 
 
 def test_normalized_news_item_supports_raw_content_for_full_text_extraction() -> None:
@@ -1244,7 +1750,10 @@ async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> Non
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
-    monkeypatch.setattr("bot_worker.services.pipeline.watchlist_entries", return_empty_list)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.watchlist_market_symbol_requests",
+        return_empty_list,
+    )
 
     result = await run_pipeline(EmptyPipelineSession())
 
@@ -1314,7 +1823,10 @@ async def test_run_pipeline_isolates_entity_extraction_failure_from_later_stages
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
-    monkeypatch.setattr("bot_worker.services.pipeline.watchlist_entries", return_empty_list)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.watchlist_market_symbol_requests",
+        return_empty_list,
+    )
 
     result = await run_pipeline(
         session,
@@ -1366,7 +1878,10 @@ async def test_run_pipeline_keeps_full_text_stage_success_for_terminal_fallbacks
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
-    monkeypatch.setattr("bot_worker.services.pipeline.watchlist_entries", return_empty_list)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.watchlist_market_symbol_requests",
+        return_empty_list,
+    )
 
     result = await run_pipeline(EmptyPipelineSession())
 
@@ -1434,7 +1949,10 @@ async def test_run_pipeline_keeps_poll_sources_success_for_interval_skips(monkey
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
-    monkeypatch.setattr("bot_worker.services.pipeline.watchlist_entries", return_empty_list)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.watchlist_market_symbol_requests",
+        return_empty_list,
+    )
 
     result = await run_pipeline(ListPipelineSession([source]))
 

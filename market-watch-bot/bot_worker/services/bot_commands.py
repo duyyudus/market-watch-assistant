@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot_worker.db.models import AlertChannel, BotCommand, EventCluster, NewsSource
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.scoring import ScoreInput, score_event
+from bot_worker.scoring import ScoreInput, market_impact_score, score_event
 from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
     dispatch_pending_alerts,
@@ -25,10 +25,12 @@ from bot_worker.services.investigation import run_event_investigation
 from bot_worker.services.jobs import record_job_run
 from bot_worker.services.market import (
     fetch_market_moves,
+    fetch_market_moves_with_stats,
     market_move_score_for_cluster,
     run_missed_catalyst_review,
     store_market_moves,
 )
+from common.market_symbol_resolver import watchlist_market_symbol_requests
 from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
 from bot_worker.services.sources import fetch_source, refresh_source_quality_scores
@@ -128,7 +130,7 @@ async def score_event_cluster(session: AsyncSession, event: EventCluster):
 
 
 def apply_event_score(event: EventCluster, breakdown) -> None:
-    event.market_impact_score = breakdown.market_move_score
+    event.market_impact_score = market_impact_score(breakdown)
     event.confirmation_score = breakdown.confidence_score
     event.novelty_score = breakdown.novelty_score
     event.urgency_score = breakdown.urgency_score
@@ -308,25 +310,62 @@ async def execute_bot_command(
     if command_type == "market.fetch":
         custom_symbols = payload.get("symbols")
         window = str(payload.get("window", "1d"))
+        market_symbols = None
         if custom_symbols:
             if isinstance(custom_symbols, str):
                 symbols = [s.strip() for s in custom_symbols.split(",") if s.strip()]
             else:
                 symbols = list(custom_symbols)
         else:
-            from bot_worker.services.watchlists import watchlist_entries
-            watchlist = await watchlist_entries(session)
-            symbols = list({entry.symbol for entry in watchlist if entry.symbol})
+            market_symbols = await watchlist_market_symbol_requests(session, settings=settings)
+            symbols = sorted({request.symbol for request in market_symbols})
         
         if symbols:
-            moves = await fetch_market_moves(
-                symbols=symbols,
-                window=window,
-                vn_base_url=settings.market_data.vn_base_url,
-                symbol_map=settings.market_data.symbol_map,
-                crypto_provider=settings.market_data.crypto_provider,
-                crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
-            )
+            if market_symbols is None:
+                moves = await fetch_market_moves(
+                    symbols=symbols,
+                    window=window,
+                    vn_base_url=settings.market_data.vn_base_url,
+                    symbol_map=settings.market_data.symbol_map,
+                    crypto_provider=settings.market_data.crypto_provider,
+                    crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
+                    coingecko_api_key=settings.coingecko_api_key,
+                    global_provider=getattr(settings.market_data, "global_provider", "hyperliquid"),
+                    hyperliquid_base_url=getattr(
+                        settings.market_data,
+                        "hyperliquid_base_url",
+                        "https://api.hyperliquid.xyz",
+                    ),
+                    hyperliquid_dex=getattr(settings.market_data, "hyperliquid_dex", "xyz"),
+                    hyperliquid_min_day_notional_volume=getattr(
+                        settings.market_data,
+                        "hyperliquid_min_day_notional_volume",
+                        100000,
+                    ),
+                )
+            else:
+                market_result = await fetch_market_moves_with_stats(
+                    resolved_symbols=market_symbols,
+                    window=window,
+                    vn_base_url=settings.market_data.vn_base_url,
+                    symbol_map=settings.market_data.symbol_map,
+                    crypto_provider=settings.market_data.crypto_provider,
+                    crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
+                    coingecko_api_key=settings.coingecko_api_key,
+                    global_provider=getattr(settings.market_data, "global_provider", "hyperliquid"),
+                    hyperliquid_base_url=getattr(
+                        settings.market_data,
+                        "hyperliquid_base_url",
+                        "https://api.hyperliquid.xyz",
+                    ),
+                    hyperliquid_dex=getattr(settings.market_data, "hyperliquid_dex", "xyz"),
+                    hyperliquid_min_day_notional_volume=getattr(
+                        settings.market_data,
+                        "hyperliquid_min_day_notional_volume",
+                        100000,
+                    ),
+                )
+                moves = market_result.moves
             inserted = await store_market_moves(session, moves)
             return {"inserted": inserted, "symbols": symbols, "window": window}
         return {"inserted": 0, "symbols": [], "window": window}

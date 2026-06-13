@@ -206,6 +206,72 @@ def test_same_event_decision_uses_vietnamese_title_tokens() -> None:
     assert decision.reason == "strong_title_topic_overlap"
 
 
+def test_same_ticker_different_topic_with_weak_title_support_is_not_strong_event() -> None:
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Apple supplier warns on iPhone demand report",
+        source_score=75,
+        entities=[],
+        tickers=["AAPL"],
+        region="us",
+        asset_classes=["equity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="Apple faces EU antitrust fine over App Store",
+        source_score=75,
+        entities=[],
+        tickers=["AAPL"],
+        region="us",
+        asset_classes=["equity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is not SameEventDecisionKind.STRONG_SAME_EVENT
+
+
+def test_cluster_candidates_uses_best_strong_match_not_first_match() -> None:
+    candidates = [
+        EventCandidate(
+            news_id="news_oil",
+            title="Oil jumps after tanker incident near Hormuz",
+            source_score=70,
+            entities=["Hormuz"],
+            region="global",
+            asset_classes=["commodity"],
+            published_at=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+        EventCandidate(
+            news_id="news_copper",
+            title="Copper rises after China demand surprise",
+            source_score=70,
+            entities=["China demand"],
+            region="global",
+            asset_classes=["commodity"],
+            published_at=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+        EventCandidate(
+            news_id="news_follow",
+            title="Oil rises after China demand surprise",
+            source_score=70,
+            entities=["Hormuz", "China demand"],
+            region="global",
+            asset_classes=["commodity"],
+            published_at=datetime(2026, 6, 2, tzinfo=UTC),
+        ),
+    ]
+
+    clusters = cluster_candidates(candidates)
+
+    assert [cluster.news_ids for cluster in clusters] == [
+        ["news_oil"],
+        ["news_copper", "news_follow"],
+    ]
+
+
 def test_vector_cluster_attach_policy_accepts_strict_compatible_match() -> None:
     candidate = VectorClusterCandidate(
         cluster_id="evt_1",

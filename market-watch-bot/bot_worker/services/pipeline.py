@@ -31,9 +31,9 @@ from bot_worker.services.market import (
     run_missed_catalyst_review,
     store_market_moves,
 )
+from common.market_symbol_resolver import watchlist_market_symbol_requests
 from bot_worker.services.pipeline_metrics import PipelineRunMetrics
 from bot_worker.services.sources import fetch_source
-from bot_worker.services.watchlists import watchlist_entries
 from common.llm import (
     LLMConfig,
 )
@@ -104,7 +104,7 @@ async def run_pipeline(
     rate_limit_skips: dict[str, int] = {}
     provider_retries: dict[str, object] = {}
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 1/11] Polling News Sources ───")
+    logger.info("─── [Stage 1/12] Polling News Sources ───")
     logger.info("  Found %d enabled news sources to poll", len(sources))
     for source in sources:
         logger.info("  → Polling source: %s (%s)", source.name, source.url)
@@ -145,7 +145,7 @@ async def run_pipeline(
     )
 
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 2/11] Normalizing Raw Items ───")
+    logger.info("─── [Stage 2/12] Normalizing Raw Items ───")
     normalized = await normalize_pending_raw_items(
         session, freshness_hours=freshness_hours, tracking_params=tracking_params
     )
@@ -158,7 +158,7 @@ async def run_pipeline(
     )
 
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 3/11] Deduplicating News Items ───")
+    logger.info("─── [Stage 3/12] Deduplicating News Items ───")
     duplicates = await mark_exact_duplicates(session)
     logger.info("  ✓ Marked %d duplicate news items", duplicates)
     metrics.record_stage(
@@ -175,6 +175,7 @@ async def run_pipeline(
     full_text_retryable_failed = 0
     full_text_failed = 0
     stage_start = datetime.now(UTC)
+    logger.info("─── [Stage 4/12] Extracting Full Text ───")
     stage_status = "success"
     try:
         full_text_stats = await _run_stage_savepoint(
@@ -187,6 +188,13 @@ async def run_pipeline(
         full_text_skipped = getattr(full_text_stats, "skipped", 0)
         full_text_retryable_failed = getattr(full_text_stats, "retryable_failed", 0)
         full_text_failed = getattr(full_text_stats, "failed", full_text_retryable_failed)
+        logger.info(
+            "  ✓ Extracted full text for %d news items (attempted=%d, fallback=%d, skipped=%d)",
+            full_text_extracted,
+            full_text_attempted,
+            full_text_fallback_used,
+            full_text_skipped,
+        )
         if full_text_retryable_failed:
             degraded_stages.append("full_text_extraction")
             stage_status = "degraded"
@@ -205,7 +213,7 @@ async def run_pipeline(
     news_embeddings = 0
     entities_extracted = 0
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 4/11] Extracting News Entities ───")
+    logger.info("─── [Stage 5/12] Extracting News Entities ───")
     stage_status = "success"
     if llm_config is not None and llm_config.enabled:
         try:
@@ -230,7 +238,7 @@ async def run_pipeline(
     )
 
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 5/11] Generating News Embeddings ───")
+    logger.info("─── [Stage 6/12] Generating News Embeddings ───")
     stage_status = "success"
     if embedding_config is not None:
         try:
@@ -255,7 +263,7 @@ async def run_pipeline(
     )
 
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 6/11] Building Event Clusters ───")
+    logger.info("─── [Stage 7/12] Building Event Clusters ───")
     stage_status = "success"
     try:
         cluster_stats: ClusterBuildStats = await _run_stage_savepoint(
@@ -288,7 +296,7 @@ async def run_pipeline(
 
     event_embeddings = 0
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 7/11] Generating Event Embeddings ───")
+    logger.info("─── [Stage 8/12] Generating Event Embeddings ───")
     stage_status = "success"
     if embedding_config is not None:
         try:
@@ -316,7 +324,7 @@ async def run_pipeline(
 
     llm_enriched = 0
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 8/11] LLM Event Enrichment ───")
+    logger.info("─── [Stage 9/12] LLM Event Enrichment ───")
     stage_status = "success"
     if llm_config is not None and llm_config.enabled:
         try:
@@ -342,13 +350,13 @@ async def run_pipeline(
 
     market_moves_fetched = 0
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 9/11] Fetching Market Moves ───")
+    logger.info("─── [Stage 10/12] Fetching Market Moves ───")
     stage_status = "success"
     try:
         from common.config import load_settings
         settings = load_settings()
-        watchlist = await watchlist_entries(session)
-        symbols = list({entry.symbol for entry in watchlist if entry.symbol})
+        market_symbols = await watchlist_market_symbol_requests(session, settings=settings)
+        symbols = sorted({request.symbol for request in market_symbols})
         if symbols:
             logger.info(
                 "  Fetching market moves for %d watchlisted assets: %s",
@@ -356,22 +364,50 @@ async def run_pipeline(
                 ", ".join(symbols),
             )
             market_result = await fetch_market_moves_with_stats(
-                symbols=symbols,
+                resolved_symbols=market_symbols,
                 window="1d",
                 vn_base_url=settings.market_data.vn_base_url,
                 symbol_map=settings.market_data.symbol_map,
                 crypto_provider=settings.market_data.crypto_provider,
                 crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
+                coingecko_api_key=settings.coingecko_api_key,
+                global_provider=settings.market_data.global_provider,
+                hyperliquid_base_url=settings.market_data.hyperliquid_base_url,
+                hyperliquid_dex=settings.market_data.hyperliquid_dex,
+                hyperliquid_min_day_notional_volume=(
+                    settings.market_data.hyperliquid_min_day_notional_volume
+                ),
             )
             provider_retries["market_data"] = {
                 "degraded_providers": market_result.degraded_providers,
                 "failed_providers": market_result.failed_providers,
                 "errors": market_result.errors,
+                "skipped_symbols": market_result.skipped_symbols,
+                "unavailable_symbols": market_result.unavailable_symbols,
             }
-            if market_result.degraded_providers:
-                degraded_stages.append("fetch_market_moves")
-                stage_status = "degraded"
-            if market_result.failed_providers:
+            if market_result.skipped_symbols:
+                logger.warning(
+                    "  ⚠ Skipped %d watchlisted assets by quality gate: %s",
+                    len(market_result.skipped_symbols),
+                    "; ".join(
+                        f"{symbol} ({reason})"
+                        for symbol, reason in market_result.skipped_symbols.items()
+                    ),
+                )
+            if market_result.unavailable_symbols:
+                logger.warning(
+                    "  ⚠ No market data for %d watchlisted assets: %s",
+                    len(market_result.unavailable_symbols),
+                    "; ".join(
+                        f"{symbol} ({reason})"
+                        for symbol, reason in market_result.unavailable_symbols.items()
+                    ),
+                )
+            if (
+                market_result.degraded_providers
+                or market_result.failed_providers
+                or market_result.unavailable_symbols
+            ):
                 degraded_stages.append("fetch_market_moves")
                 stage_status = "degraded"
             market_moves_fetched = await _run_stage_savepoint(
@@ -395,7 +431,7 @@ async def run_pipeline(
     )
 
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 10/11] Recording Alert Decisions ───")
+    logger.info("─── [Stage 11/12] Recording Alert Decisions ───")
     stage_status = "success"
     queued_investigations = 0
     completed_investigations = 0
@@ -469,7 +505,7 @@ async def run_pipeline(
 
     missed_catalysts_created = 0
     stage_start = datetime.now(UTC)
-    logger.info("─── [Stage 11/11] Missed Catalyst Review ───")
+    logger.info("─── [Stage 12/12] Missed Catalyst Review ───")
     stage_status = "success"
     try:
         missed_catalysts_created = await _run_stage_savepoint(

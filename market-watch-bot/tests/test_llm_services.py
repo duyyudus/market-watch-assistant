@@ -39,6 +39,9 @@ class ExecuteRows:
     def all(self) -> list[object]:
         return self.rows
 
+    def scalar_one_or_none(self) -> object | None:
+        return None
+
 
 class FakeLLMSession:
     def __init__(
@@ -78,6 +81,11 @@ class FakeAlertSession:
 
     async def scalar(self, _stmt):
         return self.run
+
+    async def execute(self, stmt):
+        if "llm_analysis_runs" in str(stmt) and self.run is not None:
+            return ExecuteRows([self.run])
+        return ExecuteRows([])
 
     def add(self, value: object) -> None:
         self.added.append(value)
@@ -661,6 +669,7 @@ async def test_alert_decision_includes_llm_modifier_in_score_breakdown(monkeypat
         alert_services,
         "market_move_score_for_cluster",
         fake_market_move_score_for_cluster,
+        raising=False,
     )
 
     count = await services.record_alert_decisions(session)

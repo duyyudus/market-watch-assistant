@@ -1,0 +1,257 @@
+# Starter watchlist guide
+#
+# Import with:
+#   uv run market-watch watchlist import starter-watchlist.yml
+#
+# Entries use the same top-level `watchlist:` payload accepted by
+# `market-watch watchlist import` and emitted by `market-watch watchlist export`.
+# Enabled entries below are intentionally limited to symbols routed by the default
+# market-data configuration or by explicit Vietnam equity metadata.
+# Disabled examples are useful templates for news/entity matching, but should only
+# be enabled after a market-data route is configured.
+
+watchlist:
+- name: S&P 500 Index
+  symbol: SPX
+  entity_type: index
+  tier: S
+  region: us
+  asset_class: us_equity
+  aliases: [S&P 500, SP500, S&P 500 futures, US benchmark, US large caps]
+  enabled: true
+- name: Nasdaq 100 Index
+  symbol: NDX
+  entity_type: index
+  tier: S
+  region: us
+  asset_class: us_equity
+  aliases: [Nasdaq 100, US tech index]
+  enabled: true
+
+- name: NVIDIA
+  symbol: NVDA
+  entity_type: equity
+  tier: S
+  region: us
+  asset_class: us_equity
+  aliases: [Nvidia, NVIDIA Corporation, AI chips]
+  enabled: true
+- name: Apple
+  symbol: AAPL
+  entity_type: equity
+  tier: S
+  region: us
+  asset_class: us_equity
+  aliases: [Apple Inc, iPhone maker]
+  enabled: true
+- name: Microsoft
+  symbol: MSFT
+  entity_type: equity
+  tier: S
+  region: us
+  asset_class: us_equity
+  aliases: [Microsoft Corp, Azure]
+  enabled: true
+- name: Tesla
+  symbol: TSLA
+  entity_type: equity
+  tier: A
+  region: us
+  asset_class: us_equity
+  aliases: [Tesla Inc, EV maker]
+  enabled: true
+- name: Meta Platforms
+  symbol: META
+  entity_type: equity
+  tier: A
+  region: us
+  asset_class: us_equity
+  aliases: [Meta, Facebook parent]
+  enabled: true
+- name: Alphabet
+  symbol: GOOGL
+  entity_type: equity
+  tier: A
+  region: us
+  asset_class: us_equity
+  aliases: [Google, Alphabet Inc]
+  enabled: true
+- name: Amazon
+  symbol: AMZN
+  entity_type: equity
+  tier: A
+  region: us
+  asset_class: us_equity
+  aliases: [Amazon.com, AWS]
+  enabled: true
+
+- name: Bitcoin
+  symbol: BTC
+  entity_type: crypto
+  tier: S
+  region: crypto
+  asset_class: crypto
+  aliases: [Bitcoin, BTCUSDT, digital gold]
+  enabled: true
+- name: Ethereum
+  symbol: ETH
+  entity_type: crypto
+  tier: S
+  region: crypto
+  asset_class: crypto
+  aliases: [Ether, ETHUSDT]
+  enabled: true
+- name: Solana
+  symbol: SOL
+  entity_type: crypto
+  tier: A
+  region: crypto
+  asset_class: crypto
+  aliases: [Solana, SOLUSDT]
+  enabled: true
+- name: BinanceCoin
+  symbol: BNB
+  entity_type: crypto
+  tier: A
+  region: crypto
+  asset_class: crypto
+  aliases: [BinanceCoin, BNBUSDT]
+  enabled: true
+
+- name: Gold
+  symbol: GOLD
+  entity_type: commodity
+  tier: S
+  region: global
+  asset_class: commodity
+  aliases: [Gold, XAU, XAUUSD, spot gold, bullion, precious metals]
+  enabled: true
+- name: Silver
+  symbol: SILVER
+  entity_type: commodity
+  tier: B
+  region: global
+  asset_class: commodity
+  aliases: [Silver, XAG, XAGUSD, spot silver, precious metals]
+  enabled: true
+- name: WTI Crude Oil
+  symbol: WTI
+  entity_type: commodity
+  tier: S
+  region: global
+  asset_class: commodity
+  aliases: [WTI, CL, West Texas Intermediate, crude oil, crude futures, NYMEX crude]
+  enabled: true
+- name: Brent Crude Oil
+  symbol: BRENT
+  entity_type: commodity
+  tier: A
+  region: global
+  asset_class: commodity
+  aliases: [Brent, Brent crude, oil benchmark]
+  enabled: true
+
+- name: Vingroup
+  symbol: VIC
+  entity_type: equity
+  tier: S
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Vingroup, Tap doan Vingroup]
+  enabled: true
+- name: Vinhomes
+  symbol: VHM
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Vinhomes]
+  enabled: true
+- name: Vinamilk
+  symbol: VNM
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Vinamilk, Vietnam Dairy Products]
+  enabled: true
+- name: FPT Corporation
+  symbol: FPT
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [FPT, FPT Corp]
+  enabled: true
+- name: Hoa Phat Group
+  symbol: HPG
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Hoa Phat, Hoa Phat Group]
+  enabled: true
+- name: Vietcombank
+  symbol: VCB
+  entity_type: equity
+  tier: S
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Vietcombank, Bank for Foreign Trade of Vietnam]
+  enabled: true
+- name: BIDV
+  symbol: BID
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [BIDV, Bank for Investment and Development of Vietnam]
+  enabled: true
+- name: VietinBank
+  symbol: CTG
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [VietinBank, Vietnam Joint Stock Commercial Bank for Industry and Trade]
+  enabled: true
+- name: Masan Group
+  symbol: MSN
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Masan, Masan Group]
+  enabled: true
+- name: Mobile World Investment
+  symbol: MWG
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Mobile World, The Gioi Di Dong]
+  enabled: true
+- name: SSI Securities
+  symbol: SSI
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [SSI, SSI Securities Corporation]
+  enabled: true
+- name: PV Gas
+  symbol: GAS
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [PV Gas, PetroVietnam Gas]
+  enabled: true
+- name: Petrolimex
+  symbol: PLX
+  entity_type: equity
+  tier: A
+  region: vietnam
+  asset_class: vietnam_equity
+  aliases: [Petrolimex]
+  enabled: true

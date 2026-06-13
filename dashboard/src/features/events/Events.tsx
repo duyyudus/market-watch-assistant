@@ -6,6 +6,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { Panel } from "../../components/Panel";
 import { SectionError } from "../../components/SectionError";
 import { scoreTone } from "../../lib/score";
+import { formatTime } from "../../lib/time";
 import type { QueueCommand } from "../../types/dashboard";
 import { Detail } from "./Detail";
 import { EventRows } from "./EventRows";
@@ -139,7 +140,9 @@ export function Events(props: {
                   </div>
                 </section>
                 <section>
-                  <h3 className="mb-2 text-sm font-bold text-zinc-100">Market moves</h3>
+                  <h3 className="mb-2 text-sm font-bold text-zinc-100">
+                    Latest price move snapshots
+                  </h3>
                   {props.selectedEventDetail.market_moves.length ? (
                     <div className="grid gap-2 sm:grid-cols-2">
                       {props.selectedEventDetail.market_moves.map((move) => (
@@ -147,16 +150,26 @@ export function Events(props: {
                           className="rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-sm"
                           key={move.id}
                         >
-                          <div className="font-bold text-zinc-100">{move.asset_symbol}</div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-bold text-zinc-100">{move.asset_symbol}</div>
+                            {move.exchange ? (
+                              <div className="text-xs font-semibold text-base-content/50">
+                                {move.exchange}
+                              </div>
+                            ) : null}
+                          </div>
                           <div className="text-base-content/70">
                             {move.window}: {move.price_change_pct.toFixed(1)}%
+                          </div>
+                          <div className="mt-1 text-xs text-base-content/50">
+                            Captured {formatTime(move.timestamp)}
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <div className="text-sm text-base-content/50 italic">
-                      No market moves detected for this event.
+                      No latest price move snapshots detected for this event.
                     </div>
                   )}
                 </section>

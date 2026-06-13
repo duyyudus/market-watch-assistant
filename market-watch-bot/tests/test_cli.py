@@ -28,6 +28,7 @@ from bot_worker.db.models import (
     JobRun,
     LLMAnalysisRun,
     MarketMove,
+    MarketSymbolResolution,
     MissedCatalystReview,
     NewsEntity,
     NewsItemEmbedding,
@@ -40,6 +41,27 @@ from bot_worker.db.models import (
 runner = CliRunner()
 
 
+def _resolution(
+    *,
+    status: str = "resolved",
+    provider: str | None = "binance",
+    provider_symbol: str | None = "BTCUSDT",
+    reason: str | None = None,
+) -> MarketSymbolResolution:
+    return MarketSymbolResolution(
+        id="msr_1",
+        watchlist_entity_id="watch_1",
+        symbol="BTC",
+        asset_class="crypto",
+        region="crypto",
+        provider=provider,
+        provider_symbol=provider_symbol,
+        status=status,
+        reason=reason,
+        resolution_metadata={},
+    )
+
+
 def test_cli_init_creates_templates(tmp_path) -> None:
     result = runner.invoke(app, ["init", "--project-dir", str(tmp_path)])
 
@@ -47,6 +69,7 @@ def test_cli_init_creates_templates(tmp_path) -> None:
     assert (tmp_path / ".env").exists()
     assert (tmp_path / ".env.example").exists()
     assert (tmp_path / "settings.yml").exists()
+    assert "COINGECKO_API_KEY=" in (tmp_path / ".env.example").read_text(encoding="utf-8")
     assert "Initialized" in result.output
 
 
@@ -1482,9 +1505,13 @@ def test_cli_watchlist_show_and_remove(monkeypatch) -> None:
         tier="A",
         aliases=["BTCUSDT"],
     )
+    resolution = _resolution()
     deleted = []
 
     class WatchSession:
+        async def scalar(self, _stmt):
+            return resolution
+
         async def get(self, model, key):
             assert model is WatchlistEntity
             assert key == "watch_1"
@@ -1503,8 +1530,138 @@ def test_cli_watchlist_show_and_remove(monkeypatch) -> None:
 
     assert show.exit_code == 0
     assert '"name": "Bitcoin"' in show.output
+    assert '"market_data_resolution": {' in show.output
+    assert '"provider_symbol": "BTCUSDT"' in show.output
     assert remove.exit_code == 0
     assert deleted == ["watch_1"]
+
+
+def test_cli_watchlist_add_reports_resolution(monkeypatch) -> None:
+    entry = WatchlistEntity(
+        id="watch_1",
+        symbol="BTC",
+        name="Bitcoin",
+        entity_type="crypto",
+        tier="A",
+        region="crypto",
+        asset_class="crypto",
+        aliases=[],
+    )
+    resolved = _resolution()
+
+    async def fake_add_watchlist_entry(session, **kwargs):
+        assert kwargs["symbol"] == "BTC"
+        return entry
+
+    async def fake_resolve(session, watch_entry):
+        assert watch_entry is entry
+        return resolved
+
+    async def fake_with_session(fn):
+        return await fn(object())
+
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(watchlist_cli, "add_watchlist_entry", fake_add_watchlist_entry)
+    monkeypatch.setattr(watchlist_cli, "resolve_watchlist_market_symbol", fake_resolve)
+
+    result = runner.invoke(
+        app,
+        [
+            "watchlist",
+            "add",
+            "--name",
+            "Bitcoin",
+            "--symbol",
+            "BTC",
+            "--type",
+            "crypto",
+            "--region",
+            "crypto",
+            "--asset-class",
+            "crypto",
+            "--tier",
+            "A",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Added watchlist entry watch_1: Bitcoin" in result.output
+    assert "market data: resolved binance BTCUSDT" in result.output
+
+
+def test_cli_watchlist_add_requires_market_metadata() -> None:
+    missing_region = runner.invoke(
+        app,
+        [
+            "watchlist",
+            "add",
+            "--name",
+            "Bitcoin",
+            "--symbol",
+            "BTC",
+            "--type",
+            "crypto",
+        ],
+    )
+    missing_asset_class = runner.invoke(
+        app,
+        [
+            "watchlist",
+            "add",
+            "--name",
+            "Bitcoin",
+            "--symbol",
+            "BTC",
+            "--type",
+            "crypto",
+            "--region",
+            "crypto",
+        ],
+    )
+
+    assert missing_region.exit_code != 0
+    assert "Missing option" in missing_region.output
+    assert "--region" in missing_region.output
+    assert missing_asset_class.exit_code != 0
+    assert "Missing option" in missing_asset_class.output
+    assert "--asset-class" in missing_asset_class.output
+
+
+def test_cli_watchlist_reset_requires_confirmation() -> None:
+    result = runner.invoke(app, ["watchlist", "reset"])
+
+    assert result.exit_code == 1
+    assert "Refusing to reset watchlist without --yes" in result.output
+
+
+def test_cli_watchlist_reset_deletes_all_entries(monkeypatch) -> None:
+    entries = [
+        WatchlistEntity(id="watch_1", symbol="BTC", name="Bitcoin", entity_type="crypto"),
+        WatchlistEntity(id="watch_2", symbol="SPX", name="S&P 500", entity_type="index"),
+    ]
+    deleted = []
+
+    class ScalarResult:
+        def all(self):
+            return entries
+
+    class WatchSession:
+        async def scalars(self, _stmt):
+            return ScalarResult()
+
+        async def delete(self, obj):
+            deleted.append(obj.id)
+
+    async def fake_with_session(fn):
+        return await fn(WatchSession())
+
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["watchlist", "reset", "--yes"])
+
+    assert result.exit_code == 0
+    assert deleted == ["watch_1", "watch_2"]
+    assert "Removed 2 watchlist entries" in result.output
 
 
 def test_cli_source_import_skips_existing_url_after_normalization(monkeypatch, tmp_path) -> None:
@@ -1665,9 +1822,13 @@ watchlist:
     symbol: " btc "
     type: crypto
     tier: A
+    region: crypto
+    asset_class: crypto
   - name: " bitcoin "
     type: crypto
     tier: A
+    region: crypto
+    asset_class: crypto
 """,
         encoding="utf-8",
     )
@@ -1691,9 +1852,149 @@ watchlist:
     result = runner.invoke(app, ["watchlist", "import", str(path)])
 
     assert result.exit_code == 0
+    assert "Skipped Bitcoin (BTC): existing watchlist entry matched symbol" in result.output
+    assert "Skipped bitcoin (-): existing watchlist entry matched name" in result.output
     assert '"imported": 0' in result.output
     assert '"skipped": 2' in result.output
     assert added == []
+
+
+def test_cli_watchlist_import_skips_rows_missing_market_metadata(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        """
+watchlist:
+  - name: Bitcoin
+    symbol: BTC
+    type: crypto
+    tier: A
+""",
+        encoding="utf-8",
+    )
+    added = []
+
+    class WatchlistSession:
+        async def scalar(self, _stmt):
+            return None
+
+        def add(self, obj):
+            added.append(obj)
+
+    async def fake_with_session(fn):
+        return await fn(WatchlistSession())
+
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(app, ["watchlist", "import", str(path)])
+
+    assert result.exit_code == 0
+    assert "Skipped row 1: missing region or asset_class" in result.output
+    assert '"imported": 0' in result.output
+    assert added == []
+
+
+def test_cli_watchlist_import_defaults_to_starter_watchlist(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "starter-watchlist.yml"
+    path.write_text(
+        """
+watchlist:
+  - name: Bitcoin
+    symbol: BTC
+    type: crypto
+    tier: A
+    region: crypto
+    asset_class: crypto
+""",
+        encoding="utf-8",
+    )
+    added = []
+
+    class WatchlistSession:
+        async def scalar(self, _stmt):
+            return None
+
+        def add(self, obj):
+            added.append(obj)
+
+        async def flush(self):
+            for index, obj in enumerate(added, start=1):
+                obj.id = f"watch_{index}"
+
+    async def fake_with_session(fn):
+        return await fn(WatchlistSession())
+
+    async def fake_resolve(_session, entry):
+        return _resolution(
+            provider="binance",
+            provider_symbol=f"{entry.symbol}USDT",
+        )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(watchlist_cli, "resolve_watchlist_market_symbol", fake_resolve)
+
+    result = runner.invoke(app, ["watchlist", "import"])
+
+    assert result.exit_code == 0
+    assert '"imported": 1' in result.output
+    assert added[0].symbol == "BTC"
+
+
+def test_cli_watchlist_import_reports_unresolved_entries(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        """
+watchlist:
+  - name: Unknown US Equity
+    symbol: ABCD
+    type: equity
+    tier: C
+    region: us
+    asset_class: us_equity
+""",
+        encoding="utf-8",
+    )
+    added = []
+
+    class WatchlistSession:
+        async def scalar(self, _stmt):
+            return None
+
+        def add(self, obj):
+            added.append(obj)
+
+        async def flush(self):
+            for index, obj in enumerate(added, start=1):
+                obj.id = f"watch_{index}"
+
+    async def fake_with_session(fn):
+        return await fn(WatchlistSession())
+
+    async def fake_resolve(_session, _entry):
+        return _resolution(
+            status="unresolved",
+            provider="hyperliquid",
+            provider_symbol=None,
+            reason="No Hyperliquid instrument matched ABCD",
+        )
+
+    monkeypatch.setattr(watchlist_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(watchlist_cli, "resolve_watchlist_market_symbol", fake_resolve)
+
+    result = runner.invoke(app, ["watchlist", "import", str(path)])
+
+    assert result.exit_code == 0
+    assert (
+        "Imported Unknown US Equity (ABCD): market data unresolved hyperliquid "
+        "(No Hyperliquid instrument matched ABCD)"
+    ) in result.output
+    assert "Unresolved Unknown US Equity (ABCD): No Hyperliquid instrument matched ABCD" in (
+        result.output
+    )
+    assert '"unresolved": 1' in result.output
 
 
 def test_cli_event_mark_updates_status(monkeypatch) -> None:
@@ -1749,6 +2050,75 @@ def test_cli_market_movers_lists_stored_moves(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "move_1" in result.output
     assert "BTCUSDT" in result.output
+
+
+def test_cli_market_fetch_without_symbols_uses_watchlist_resolutions(monkeypatch) -> None:
+    resolved_request = SimpleNamespace(
+        symbol="BTC",
+        asset_class="crypto",
+        region="crypto",
+        provider="binance",
+        provider_symbol="BTCUSDT",
+        status="resolved",
+        reason=None,
+    )
+    fetched_move = SimpleNamespace(asset_symbol="BTC", price_change_pct=4.2)
+
+    async def fake_watchlist_requests(session, *, settings):
+        return [resolved_request]
+
+    async def fake_fetch_market_moves_with_stats(**kwargs):
+        assert kwargs["resolved_symbols"] == [resolved_request]
+        assert kwargs["window"] == "1d"
+        assert kwargs["coingecko_api_key"] == "demo-key"
+        return SimpleNamespace(
+            moves=[fetched_move],
+            degraded_providers=[],
+            failed_providers=[],
+            errors={},
+            skipped_symbols={},
+            unavailable_symbols={},
+        )
+
+    async def fake_store_market_moves(session, moves):
+        assert moves == [fetched_move]
+        return 1
+
+    async def fake_with_session(fn):
+        return await fn(object())
+
+    monkeypatch.setattr(
+        market_cli,
+        "_settings",
+        lambda: SimpleNamespace(
+            coingecko_api_key="demo-key",
+            market_data=SimpleNamespace(
+                vn_base_url="https://vn.example",
+                symbol_map={},
+                crypto_provider="binance",
+                crypto_fallback_provider="coingecko",
+                global_provider="hyperliquid",
+                hyperliquid_base_url="https://api.hyperliquid.xyz",
+                hyperliquid_dex="xyz",
+                hyperliquid_min_day_notional_volume=100000,
+            )
+        ),
+    )
+    monkeypatch.setattr(market_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(market_cli, "watchlist_market_symbol_requests", fake_watchlist_requests)
+    monkeypatch.setattr(
+        market_cli,
+        "fetch_market_moves_with_stats",
+        fake_fetch_market_moves_with_stats,
+    )
+    monkeypatch.setattr(market_cli, "store_market_moves", fake_store_market_moves)
+
+    result = runner.invoke(app, ["market", "fetch"])
+
+    assert result.exit_code == 0
+    assert '"inserted": 1' in result.output
+    assert '"symbols": [' in result.output
+    assert '"BTC"' in result.output
 
 
 def test_cli_embedding_status_reports_counts(monkeypatch) -> None:

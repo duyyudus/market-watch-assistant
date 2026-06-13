@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import api_server.app.services.watchlist as watchlist_service
 from api_server.app.db import Base, get_session
 from api_server.app.main import app
 from common.config import Settings
@@ -23,6 +24,7 @@ from common.db.models import (
     JobRun,
     LLMAnalysisRun,
     MarketMove,
+    MarketSymbolResolution,
     MissedCatalystReview,
     NewsEntity,
     NewsItemEmbedding,
@@ -35,6 +37,7 @@ from common.db.models import (
 from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
+from common.external_providers import ProviderRetryPolicy
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
@@ -398,6 +401,36 @@ async def client():
             price_change_pct=1.7,
             volume_change_pct=22.5,
         )
+        older_market_move = MarketMove(
+            id="move_older",
+            asset_symbol="SPY",
+            asset_class="equity",
+            exchange="NYSE",
+            timestamp=datetime(2026, 5, 29, 13, 5, tzinfo=UTC),
+            window="1h",
+            price_change_pct=1.1,
+            volume_change_pct=18.0,
+        )
+        alternate_exchange_market_move = MarketMove(
+            id="move_alt_exchange",
+            asset_symbol="SPY",
+            asset_class="equity",
+            exchange="ARCA",
+            timestamp=datetime(2026, 5, 29, 13, 7, tzinfo=UTC),
+            window="1h",
+            price_change_pct=1.4,
+            volume_change_pct=20.0,
+        )
+        unrelated_market_move = MarketMove(
+            id="move_unrelated",
+            asset_symbol="QQQ",
+            asset_class="equity",
+            exchange="NASDAQ",
+            timestamp=datetime(2026, 5, 29, 13, 10, tzinfo=UTC),
+            window="1h",
+            price_change_pct=2.2,
+            volume_change_pct=30.0,
+        )
         retention = RetentionJob(
             id="retention_1",
             status="completed",
@@ -429,6 +462,9 @@ async def client():
                 llm_run,
                 investigation,
                 market_move,
+                older_market_move,
+                alternate_exchange_market_move,
+                unrelated_market_move,
                 retention,
             ]
         )
@@ -594,8 +630,19 @@ async def test_event_detail_includes_timeline_analysis_investigation_and_market_
     assert payload["latest_investigation"]["result"]["suggested_action"] == (
         "monitor duration exposure"
     )
-    assert payload["market_moves"][0]["asset_symbol"] == "SPY"
-    assert payload["market_moves"][0]["price_change_pct"] == 1.7
+    assert [
+        (
+            move["id"],
+            move["asset_symbol"],
+            move["exchange"],
+            move["timestamp"],
+            move["price_change_pct"],
+        )
+        for move in payload["market_moves"]
+    ] == [
+        ("move_1", "SPY", "NYSE", "2026-05-29T13:10:00", 1.7),
+        ("move_alt_exchange", "SPY", "ARCA", "2026-05-29T13:07:00", 1.4),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1046,23 +1093,105 @@ async def test_safe_configuration_mutations_normalize_tier_and_delete_watchlist(
 
     assert created_watch.status_code == 201
     assert created_watch.json()["tier"] == "S"
+    assert created_watch.json()["market_data_resolution"] == {
+        "status": "resolved",
+        "provider": "binance",
+        "provider_symbol": "BTCUSDT",
+        "reason": None,
+        "resolved_at": created_watch.json()["market_data_resolution"]["resolved_at"],
+    }
     watch_id = created_watch.json()["id"]
 
     updated_watch = await client.patch(
         f"/watchlist/{watch_id}",
         headers=AUTH_HEADERS,
-        json={"tier": "a", "aliases": ["BTC"]},
+        json={"symbol": "eth", "tier": "a", "aliases": ["BTC"]},
     )
 
     assert updated_watch.status_code == 200
     assert updated_watch.json()["tier"] == "A"
+    assert updated_watch.json()["symbol"] == "eth"
     assert updated_watch.json()["aliases"] == ["BTC"]
+    assert updated_watch.json()["market_data_resolution"]["status"] == "resolved"
+    assert updated_watch.json()["market_data_resolution"]["provider_symbol"] == "ETHUSDT"
 
     deleted_watch = await client.delete(f"/watchlist/{watch_id}", headers=AUTH_HEADERS)
     assert deleted_watch.status_code == 204
 
     missing_watch = await client.get("/watchlist")
     assert all(row["id"] != watch_id for row in missing_watch.json()["items"])
+
+
+@pytest.mark.asyncio
+async def test_watchlist_create_requires_region_and_asset_class(client: AsyncClient) -> None:
+    missing_region = await client.post(
+        "/watchlist",
+        headers=AUTH_HEADERS,
+        json={
+            "symbol": "btc",
+            "name": "Bitcoin",
+            "entity_type": "crypto",
+            "tier": "S",
+            "asset_class": "crypto",
+        },
+    )
+    missing_asset_class = await client.post(
+        "/watchlist",
+        headers=AUTH_HEADERS,
+        json={
+            "symbol": "btc",
+            "name": "Bitcoin",
+            "entity_type": "crypto",
+            "tier": "S",
+            "region": "crypto",
+        },
+    )
+
+    assert missing_region.status_code == 422
+    assert missing_asset_class.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_watchlist_create_uses_fast_fail_resolver_policy(
+    client: AsyncClient,
+    monkeypatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_resolve(session, entry, *, settings=None, client=None, retry_policy=None):
+        observed["retry_policy"] = retry_policy
+        observed["client"] = client
+        return MarketSymbolResolution(
+            watchlist_entity_id=entry.id,
+            symbol=entry.symbol.upper(),
+            asset_class=entry.asset_class,
+            region=entry.region,
+            provider="hyperliquid",
+            provider_symbol="xyz:NVDA",
+            status="resolved",
+            reason=None,
+            resolution_metadata={},
+        )
+
+    monkeypatch.setattr(watchlist_service, "resolve_watchlist_market_symbol", fake_resolve)
+
+    response = await client.post(
+        "/watchlist",
+        headers=AUTH_HEADERS,
+        json={
+            "symbol": "NVDA",
+            "name": "Nvidia",
+            "entity_type": "equity",
+            "tier": "A",
+            "region": "us",
+            "asset_class": "us_equity",
+        },
+    )
+
+    assert response.status_code == 201
+    assert observed["retry_policy"] == ProviderRetryPolicy(max_retries=0, delays=())
+    assert observed["client"] is not None
+    assert observed["client"].timeout.connect == 5
 
 
 @pytest.mark.asyncio

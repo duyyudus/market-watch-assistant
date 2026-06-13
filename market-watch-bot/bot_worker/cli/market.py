@@ -11,7 +11,9 @@ from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
 from bot_worker.db.models import EventCluster, MarketMove
 from bot_worker.services import (
     fetch_market_moves,
+    fetch_market_moves_with_stats,
     store_market_moves,
+    watchlist_market_symbol_requests,
 )
 
 
@@ -41,29 +43,92 @@ def _move_payload(move: MarketMove) -> dict[str, object]:
     }
 
 
+def _move_draft_payload(move) -> dict[str, object]:
+    return {
+        "asset_symbol": move.asset_symbol,
+        "asset_class": getattr(move, "asset_class", None),
+        "exchange": getattr(move, "exchange", None),
+        "timestamp": getattr(move, "timestamp", None),
+        "window": getattr(move, "window", None),
+        "price_change_pct": move.price_change_pct,
+        "volume_change_pct": getattr(move, "volume_change_pct", None),
+        "value_traded_change_pct": getattr(move, "value_traded_change_pct", None),
+        "z_score": getattr(move, "z_score", None),
+    }
+
+
 @market_app.command("fetch")
 def market_fetch(
-    symbols: Annotated[str, typer.Option("--symbols")],
+    symbols: Annotated[str | None, typer.Option("--symbols")] = None,
     window: Annotated[str, typer.Option("--window")] = "1d",
 ) -> None:
-    """Fetch recent market moves for watchlisted assets and store them in the database."""
+    """Fetch recent market moves and store them in the database."""
     settings = _settings()
-    parsed_symbols = [symbol.strip() for symbol in symbols.split(",") if symbol.strip()]
+    requested_symbols = (
+        [symbol.strip() for symbol in symbols.split(",") if symbol.strip()] if symbols else []
+    )
 
     async def action(session):
-        moves = await fetch_market_moves(
-            symbols=parsed_symbols,
-            window=window,
-            vn_base_url=settings.market_data.vn_base_url,
-            symbol_map=settings.market_data.symbol_map,
-            crypto_provider=settings.market_data.crypto_provider,
-            crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
-        )
+        if requested_symbols:
+            mode = "symbols"
+            moves = await fetch_market_moves(
+                symbols=requested_symbols,
+                window=window,
+                vn_base_url=settings.market_data.vn_base_url,
+                symbol_map=settings.market_data.symbol_map,
+                crypto_provider=settings.market_data.crypto_provider,
+                crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
+                coingecko_api_key=settings.coingecko_api_key,
+                global_provider=settings.market_data.global_provider,
+                hyperliquid_base_url=settings.market_data.hyperliquid_base_url,
+                hyperliquid_dex=settings.market_data.hyperliquid_dex,
+                hyperliquid_min_day_notional_volume=(
+                    settings.market_data.hyperliquid_min_day_notional_volume
+                ),
+            )
+            skipped_symbols = {}
+            unavailable_symbols = {}
+            degraded_providers = []
+            failed_providers = []
+            errors = {}
+            output_symbols = requested_symbols
+        else:
+            mode = "watchlist"
+            resolved_symbols = await watchlist_market_symbol_requests(session, settings=settings)
+            output_symbols = sorted({request.symbol for request in resolved_symbols})
+            market_result = await fetch_market_moves_with_stats(
+                resolved_symbols=resolved_symbols,
+                window=window,
+                vn_base_url=settings.market_data.vn_base_url,
+                symbol_map=settings.market_data.symbol_map,
+                crypto_provider=settings.market_data.crypto_provider,
+                crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
+                coingecko_api_key=settings.coingecko_api_key,
+                global_provider=settings.market_data.global_provider,
+                hyperliquid_base_url=settings.market_data.hyperliquid_base_url,
+                hyperliquid_dex=settings.market_data.hyperliquid_dex,
+                hyperliquid_min_day_notional_volume=(
+                    settings.market_data.hyperliquid_min_day_notional_volume
+                ),
+            )
+            moves = market_result.moves
+            skipped_symbols = market_result.skipped_symbols
+            unavailable_symbols = market_result.unavailable_symbols
+            degraded_providers = market_result.degraded_providers
+            failed_providers = market_result.failed_providers
+            errors = market_result.errors
         inserted = await store_market_moves(session, moves)
         _echo_json(
             {
+                "mode": mode,
                 "inserted": inserted,
-                "symbols": parsed_symbols,
+                "symbols": output_symbols,
+                "moves": [_move_draft_payload(move) for move in moves],
+                "skipped_symbols": skipped_symbols,
+                "unavailable_symbols": unavailable_symbols,
+                "degraded_providers": degraded_providers,
+                "failed_providers": failed_providers,
+                "errors": errors,
             }
         )
 

@@ -45,7 +45,7 @@ llm:
   provider: openrouter
   api_base_url: https://openrouter.ai/api/v1
   model: google/gemini-3.1-flash-lite
-  service_tier: flex
+  service_tier: 
   api_key_env: OPENROUTER_API_KEY
   prompt_version: event-v2
   temperature: 0.1
@@ -98,15 +98,33 @@ market_data:
   vn_base_url: http://192.168.100.39:8020
   crypto_provider: coingecko
   crypto_fallback_provider: binance
-  global_provider: yahoo
+  global_provider: hyperliquid
+  hyperliquid_base_url: https://api.hyperliquid.xyz
+  hyperliquid_dex: xyz
+  hyperliquid_min_day_notional_volume: 100000
   symbol_map:
     BTC: bitcoin
     ETH: ethereum
     SOL: solana
-    SPY: SPY
-    QQQ: QQQ
-    GLD: GLD
-    USO: USO
+    BNB: binancecoin
+    SPX: xyz:SP500
+    SP500: xyz:SP500
+    NDX: xyz:XYZ100
+    XYZ100: xyz:XYZ100
+    GOLD: xyz:GOLD
+    XAU: xyz:GOLD
+    SILVER: xyz:SILVER
+    XAG: xyz:SILVER
+    WTI: xyz:CL
+    CL: xyz:CL
+    BRENT: xyz:BRENTOIL
+    NVDA: xyz:NVDA
+    AAPL: xyz:AAPL
+    MSFT: xyz:MSFT
+    TSLA: xyz:TSLA
+    META: xyz:META
+    GOOGL: xyz:GOOGL
+    AMZN: xyz:AMZN
 
 configuration_presets:
   sources:

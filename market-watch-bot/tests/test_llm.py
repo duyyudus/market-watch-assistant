@@ -65,6 +65,10 @@ def test_llm_trigger_policy_selects_high_value_events() -> None:
     assert event_needs_llm_analysis(single_source_official, config=config, market_move_score=0)
     assert not event_needs_llm_analysis(ordinary, config=config, market_move_score=0)
 
+    # market_move_score is None before the market-moves stage runs; it must not raise.
+    assert event_needs_llm_analysis(high_score, config=config, market_move_score=None)
+    assert not event_needs_llm_analysis(ordinary, config=config, market_move_score=None)
+
 
 def test_llm_trigger_policy_uses_configured_analysis_min_score() -> None:
     market_move = EventCluster(

@@ -31,6 +31,17 @@ class ScalarRows:
         return self.rows
 
 
+class ExecuteRows:
+    def __init__(self, rows: list[object]) -> None:
+        self.rows = rows
+
+    def all(self) -> list[object]:
+        return self.rows
+
+    def scalar_one_or_none(self) -> object | None:
+        return None
+
+
 class FakeInvestigationSession:
     def __init__(self, target: object, existing: AgentInvestigation | None = None) -> None:
         self.target = target
@@ -77,6 +88,11 @@ class FakeAlertSession:
         if self.scalar_calls == 1:
             return None
         return self.investigation
+
+    async def execute(self, stmt):
+        if "agent_investigations" in str(stmt) and self.investigation is not None:
+            return ExecuteRows([self.investigation])
+        return ExecuteRows([])
 
     def add(self, value: object) -> None:
         self.added.append(value)

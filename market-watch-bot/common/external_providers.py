@@ -38,6 +38,7 @@ PROVIDER_RETRY_POLICIES: dict[str, ProviderRetryPolicy] = {
     "crawler": ProviderRetryPolicy(max_retries=2, delays=(5, 15), timeout_seconds=20),
     "binance": ProviderRetryPolicy(max_retries=2, delays=(5, 15), timeout_seconds=20),
     "coingecko": ProviderRetryPolicy(max_retries=2, delays=(5, 15), timeout_seconds=20),
+    "hyperliquid": ProviderRetryPolicy(max_retries=2, delays=(5, 15), timeout_seconds=20),
     "yahoo_finance": ProviderRetryPolicy(max_retries=2, delays=(5, 15), timeout_seconds=20),
     "vietnam_market": ProviderRetryPolicy(max_retries=2, delays=(5, 15), timeout_seconds=20),
     "brave_search": ProviderRetryPolicy(max_retries=1, delays=(10,), timeout_seconds=20),

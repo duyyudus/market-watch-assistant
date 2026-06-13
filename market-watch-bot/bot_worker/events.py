@@ -177,23 +177,32 @@ def classify_same_event(candidate: EventCandidate, existing: EventCandidate) -> 
     existing_tokens = _title_tokens(existing.title)
     title_token_overlap = candidate_tokens & existing_tokens
     compatible = _compatible_context(candidate, existing)
-
-    ticker_overlap = sorted(_normalized_set(candidate.tickers) & _normalized_set(existing.tickers))
-    if ticker_overlap and compatible and title_similarity >= 0.38:
-        return SameEventDecision(
-            kind=SameEventDecisionKind.STRONG_SAME_EVENT,
-            title_similarity=title_similarity,
-            entity_overlap=[],
-            ticker_overlap=ticker_overlap,
-            reason="ticker_overlap_with_title_support",
-        )
-
     entity_overlap = sorted(
         _specific_entity_set(candidate.entities) & _specific_entity_set(existing.entities)
     )
     weak_entity_overlap = sorted(
         _weak_entity_set(candidate.entities) & _weak_entity_set(existing.entities)
     )
+
+    ticker_overlap = sorted(_normalized_set(candidate.tickers) & _normalized_set(existing.tickers))
+    if (
+        ticker_overlap
+        and compatible
+        and (
+            title_similarity >= 0.55
+            or (
+                title_similarity >= 0.38
+                and (bool(entity_overlap) or len(title_token_overlap) >= 2)
+            )
+        )
+    ):
+        return SameEventDecision(
+            kind=SameEventDecisionKind.STRONG_SAME_EVENT,
+            title_similarity=title_similarity,
+            entity_overlap=entity_overlap,
+            ticker_overlap=ticker_overlap,
+            reason="ticker_overlap_with_title_support",
+        )
 
     if title_similarity >= 0.45 and len(title_token_overlap) >= 2:
         return SameEventDecision(
@@ -298,10 +307,12 @@ def cluster_candidates(candidates: list[EventCandidate]) -> list[EventClusterDra
         target_decision: SameEventDecision | None = None
         for cluster in clusters:
             decision = classify_same_event(candidate, _candidate_from_cluster_draft(cluster))
-            if decision.kind is SameEventDecisionKind.STRONG_SAME_EVENT:
+            if decision.kind is SameEventDecisionKind.STRONG_SAME_EVENT and (
+                target_decision is None
+                or decision.title_similarity > target_decision.title_similarity
+            ):
                 target = cluster
                 target_decision = decision
-                break
         if target is None:
             target = EventClusterDraft(canonical_headline=candidate.title)
             clusters.append(target)

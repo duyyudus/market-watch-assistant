@@ -23,14 +23,54 @@ def test_event_matches_market_move_by_ticker_and_window() -> None:
         affected_entities=[],
         event_time=datetime(2026, 5, 25, 8, tzinfo=UTC),
         move=move,
-        tolerance=timedelta(hours=12),
+        post_event_window=timedelta(hours=12),
     )
     assert not event_matches_market_move(
         affected_tickers=["ETH"],
         affected_entities=[],
         event_time=datetime(2026, 5, 23, 8, tzinfo=UTC),
         move=move,
-        tolerance=timedelta(hours=12),
+        post_event_window=timedelta(hours=12),
+    )
+
+
+def test_event_matches_market_move_rejects_pre_event_moves() -> None:
+    move = MarketMoveDraft(
+        asset_symbol="BTC",
+        asset_class="crypto",
+        exchange=None,
+        timestamp=datetime(2026, 5, 25, 7, 59, tzinfo=UTC),
+        window="1d",
+        price_change_pct=7.0,
+    )
+
+    assert event_matches_market_move(
+        affected_tickers=["BTC"],
+        affected_entities=[],
+        event_time=datetime(2026, 5, 25, 8, tzinfo=UTC),
+        move=move,
+        pre_event_window=timedelta(hours=1),
+        post_event_window=timedelta(hours=4),
+    )
+
+
+def test_event_matches_market_move_rejects_moves_before_pre_event_window() -> None:
+    move = MarketMoveDraft(
+        asset_symbol="BTC",
+        asset_class="crypto",
+        exchange=None,
+        timestamp=datetime(2026, 5, 25, 6, 59, tzinfo=UTC),
+        window="1d",
+        price_change_pct=7.0,
+    )
+
+    assert not event_matches_market_move(
+        affected_tickers=["BTC"],
+        affected_entities=[],
+        event_time=datetime(2026, 5, 25, 8, tzinfo=UTC),
+        move=move,
+        pre_event_window=timedelta(hours=1),
+        post_event_window=timedelta(hours=4),
     )
 
 
@@ -67,7 +107,8 @@ def test_best_market_move_score_for_event_uses_matching_symbol_only() -> None:
             affected_entities=[],
             event_time=event_time,
             moves=moves,
-            tolerance=timedelta(hours=1),
+            pre_event_window=timedelta(hours=1),
+            post_event_window=timedelta(hours=1),
         )
         >= 70
     )

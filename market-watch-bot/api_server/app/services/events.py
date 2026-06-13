@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.app.schemas import AlertRead, EventDetailRead, EventRead
@@ -82,13 +82,35 @@ async def get_event_detail(session: AsyncSession, event: EventCluster) -> dict[s
     if event.affected_tickers:
         start_at = (event.first_seen_at or event.created_at) - timedelta(hours=24)
         end_at = (event.last_updated_at or event.updated_at) + timedelta(hours=24)
+        ranked_market_moves = (
+            select(
+                MarketMove.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=(
+                        MarketMove.asset_symbol,
+                        MarketMove.window,
+                        MarketMove.exchange,
+                    ),
+                    order_by=(
+                        MarketMove.timestamp.desc(),
+                        MarketMove.created_at.desc(),
+                        MarketMove.id.desc(),
+                    ),
+                )
+                .label("snapshot_rank"),
+            )
+            .where(MarketMove.asset_symbol.in_(event.affected_tickers))
+            .where(MarketMove.timestamp >= start_at)
+            .where(MarketMove.timestamp <= end_at)
+            .subquery()
+        )
         market_moves = list(
             (
                 await session.scalars(
                     select(MarketMove)
-                    .where(MarketMove.asset_symbol.in_(event.affected_tickers))
-                    .where(MarketMove.timestamp >= start_at)
-                    .where(MarketMove.timestamp <= end_at)
+                    .join(ranked_market_moves, MarketMove.id == ranked_market_moves.c.id)
+                    .where(ranked_market_moves.c.snapshot_rank == 1)
                     .order_by(MarketMove.timestamp.desc())
                     .limit(20)
                 )
