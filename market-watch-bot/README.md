@@ -1,50 +1,50 @@
-# Market Watch Assistant - Core Services
+# Market Watch Backend Services
 
-This repository houses the core Python backend services for the Personal Market Watch Assistant, organized into three parallel packages under a single virtual environment:
-
-1. **`common/`**: The shared core layer, including database schemas (`common.db.models`), session management (`common.db.session`), central logging (`common.logging`), and application configuration parsing (`common.config`).
-2. **`bot_worker/`**: The background worker service CLI, event pipelines, scoring engines, investigation utilities, and Alert/Digest delivery channels.
-3. **`api_server/`**: The FastAPI control and data access layer, implementing schemas, services, and route endpoints to serve dashboard requests.
+The core Python backend for the Market Watch Assistant, containing the ingestion pipelines, event clustering engine, FastAPI server, database schema, and agentic investigations.
 
 ---
 
-## Quick start
+## 📖 Component Documentation
+Refer to these dedicated guides for detailed class boundaries, stage logs, and execution setups:
+- **[Bot Worker & Ingestion Pipeline](../docs/bot_worker.md)**
+- **[FastAPI API Server](../docs/api_server.md)**
+- **[Database & Shared Common Layer](../docs/common.md)**
+- **[Main System Overview](../docs/overview.md)**
 
-### Database and Configuration Setup
+---
+
+## 📁 Package Layout
+- **`common/`**: Databases session helper (`common.db.session`), configuration setups (`common.config`), logging layouts, LLM wraps (`common.llm`), and rss parsers.
+- **`bot_worker/`**: Background worker loop, CLI command routers (`bot_worker.cli`), and service logic layer (ingestion, vector clustering, scoring, and investigations).
+- **`api_server/`**: FastAPI routers, request schemas, authentication tokens middleware, and maintenance statistics.
+
+---
+
+## 🚀 CLI Reference & Scripts
+
+Execution commands require the `uv` tool under the `market-watch-bot/` directory.
+
+### Setup and Health
 ```bash
-# Initialize environments and copy settings.yml
-uv run market-watch init
-
-# Verify system doctor status
-uv run market-watch doctor
-
-# Run database migrations
-uv run market-watch migrate
+uv run market-watch init    # Setup .env and settings.yml
+uv run market-watch migrate # Run alembic database upgrades
+uv run market-watch doctor  # Verify connections and key scopes
 ```
 
-### Ingestion & Pipeline Jobs
+### Run Pipelines
 ```bash
-# List loaded sources
-uv run market-watch source list
-
-# Trigger a dry-run ingestion & clustering pipeline run
-uv run market-watch pipeline run --dry-run
+uv run market-watch pipeline run --dry-run # Dry run ingestion
+uv run market-watch source list             # List configured news feeds
 ```
 
-### Running the Background Worker
-The background worker executes scheduled ingestion, clustering, and alert delivery pipelines. To start the worker process:
+### Start Processes
 ```bash
-# Start the worker loop in the foreground
-uv run market-watch worker start
+uv run market-watch worker start # Start the worker run loop
+uv run market-watch server start # Start the FastAPI server (port 8000)
 ```
 
-### Running the API Server
-The API server is fully integrated into the main CLI. To start the FastAPI application:
+### Run Tests & Checks
 ```bash
-# Start the API server on default port 8000
-uv run market-watch server start
-
-# Start the API server with auto-reload (for development)
-uv run market-watch server start --port 8000 --reload
+uv run pytest        # Run test suites
+uv run ruff check .  # Lint python packages
 ```
-
