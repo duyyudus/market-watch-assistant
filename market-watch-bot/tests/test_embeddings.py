@@ -144,7 +144,9 @@ def test_embedding_config_reads_api_key_from_env(monkeypatch) -> None:
     config = EmbeddingConfig.from_settings(load_settings())
 
     assert config.api_key == "from-env"
-    assert config.max_concurrency == 3
+    # max_concurrency is operator-tunable in settings.yml; default coverage lives in
+    # test_load_settings_uses_openrouter_embedding_defaults, so this test (about the
+    # api key) does not pin a value that changes with config.
 
 
 def test_validate_embedding_dimensions_rejects_unsupported_vector_column_size() -> None:

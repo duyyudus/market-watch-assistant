@@ -14,6 +14,7 @@ from bot_worker.db.models import (
 from bot_worker.normalize import (
     canonicalize_url,
     content_hash,
+    is_disclosure_noise_title,
     normalize_datetime,
     normalize_text,
     title_hash,
@@ -78,6 +79,7 @@ async def normalize_pending_raw_items(
     limit: int = 500,
     freshness_hours: int = 72,
     tracking_params: list[str] | set[str] | None = None,
+    disclosure_noise_patterns: list[str] | None = None,
 ) -> int:
     stmt = (
         select(RawNewsItem, NewsSource)
@@ -169,11 +171,14 @@ async def normalize_pending_raw_items(
             title_hash=candidate.title_hash,
             normalized_text_hash=candidate.normalized_text_hash,
         )
-        processing_status = (
-            "deduped"
-            if key in existing_keys or key in batch_active_keys
-            else "normalized"
-        )
+        if is_disclosure_noise_title(candidate.title, disclosure_noise_patterns):
+            # Routine NAV/disclosure boilerplate: keep the row for provenance but mark it
+            # ignored so it never reaches clustering, embedding, or alerts.
+            processing_status = "ignored"
+        elif key in existing_keys or key in batch_active_keys:
+            processing_status = "deduped"
+        else:
+            processing_status = "normalized"
         if processing_status == "normalized":
             batch_active_keys.add(key)
 

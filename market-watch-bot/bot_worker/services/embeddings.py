@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Callable
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.db.models import (
@@ -109,6 +110,83 @@ async def embed_pending_news_items(
     return len(vectors)
 
 
+def _event_cluster_embedding_text(cluster: EventCluster) -> str:
+    return build_embedding_text(
+        title=cluster.canonical_headline,
+        snippet=cluster.summary,
+        source_name="event_cluster",
+        entities=cluster.affected_entities,
+        region=",".join(cluster.regions),
+        asset_classes=cluster.asset_classes,
+    )
+
+
+async def embed_event_clusters(
+    session: AsyncSession,
+    clusters: list[EventCluster],
+    *,
+    config: EmbeddingConfig,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> int:
+    """Recompute embeddings for several clusters in place using compute-then-swap.
+
+    Texts are embedded in concurrent batches (``config.max_concurrency``), then the new
+    vectors are written and the stale rows removed only after every vector is computed, so
+    no cluster is left without an embedding (which would make it invisible to live vector
+    attach). When the provider cannot embed (missing API key) the stale rows are dropped
+    instead, since a vector built from now-outdated cluster text would match the wrong
+    items. Returns the number of fresh vectors written.
+    """
+    validate_embedding_dimensions(config)
+    cluster_ids = [cluster.id for cluster in clusters]
+    if not cluster_ids:
+        return 0
+    if config.provider != "local" and not config.api_key:
+        await session.execute(
+            delete(EventClusterEmbedding).where(
+                EventClusterEmbedding.event_cluster_id.in_(cluster_ids)
+            )
+        )
+        return 0
+    work_items = [(cluster, _event_cluster_embedding_text(cluster)) for cluster in clusters]
+    batches = _batch_work_items(work_items, max_concurrency=config.max_concurrency)
+    vectors = await _embed_text_batches(
+        [[text for _cluster, text in batch] for batch in batches],
+        config=config,
+    )
+    await session.execute(
+        delete(EventClusterEmbedding).where(
+            EventClusterEmbedding.event_cluster_id.in_(cluster_ids)
+        )
+    )
+    for (cluster, text), vector in zip(work_items, vectors, strict=True):
+        session.add(
+            EventClusterEmbedding(
+                event_cluster_id=cluster.id,
+                provider=config.provider,
+                embedding_model=config.model,
+                embedding_version=config.version,
+                dimensions=config.dimensions,
+                embedding_text_hash=embedding_text_hash(text),
+                vector=vector,
+            )
+        )
+    if progress is not None:
+        progress("embedding", len(work_items), len(work_items))
+    return len(work_items)
+
+
+async def embed_event_cluster(
+    session: AsyncSession, cluster: EventCluster, *, config: EmbeddingConfig
+) -> bool:
+    """Recompute one cluster's embedding in place (compute-then-swap).
+
+    Thin wrapper over :func:`embed_event_clusters` for the single-cluster live-attach
+    path. Returns True when a fresh vector was written.
+    """
+    return await embed_event_clusters(session, [cluster], config=config) > 0
+
+
 async def embed_pending_event_clusters(
     session: AsyncSession, *, config: EmbeddingConfig, limit: int | None = None
 ) -> int:
@@ -126,20 +204,7 @@ async def embed_pending_event_clusters(
         return 0
     if config.provider != "local" and not config.api_key:
         return 0
-    work_items = [
-        (
-            cluster,
-            build_embedding_text(
-                title=cluster.canonical_headline,
-                snippet=cluster.summary,
-                source_name="event_cluster",
-                entities=cluster.affected_entities,
-                region=",".join(cluster.regions),
-                asset_classes=cluster.asset_classes,
-            ),
-        )
-        for cluster in clusters
-    ]
+    work_items = [(cluster, _event_cluster_embedding_text(cluster)) for cluster in clusters]
     batches = _batch_work_items(work_items, max_concurrency=config.max_concurrency)
     vectors = await _embed_text_batches(
         [[text for _cluster, text in batch] for batch in batches],

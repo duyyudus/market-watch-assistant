@@ -83,11 +83,57 @@ BROAD_ENTITIES = {
     "us dollar",
     "us dollar (usd)",
 }
+# Trailing publisher attribution (" - Reuters", " – Financial Times", "| Bloomberg.com").
+# Stripped before comparison so two unrelated articles from the same outlet do not
+# share publisher tokens or gain inflated character similarity from the common suffix.
 TITLE_SOURCE_SUFFIX_RE = re.compile(
-    r"\s*[-|]\s*(reuters|ap|associated press|bloomberg)\s*$",
+    r"\s*[-|–—]\s*"
+    r"(reuters|ap|associated press|"
+    r"bloomberg(?:\.com)?|bloomberg news|"
+    r"financial times|ft\.com|"
+    r"cnbc|cnn|"
+    r"the wall street journal|wsj|"
+    r"the new york times|new york times|nytimes|"
+    r"the economist|nikkei asia|nikkei|"
+    r"business live)"
+    r"\s*$",
     re.IGNORECASE,
 )
 TITLE_TOKEN_RE = re.compile(r"[^\W_]+")
+# Publisher names that may survive when not in trailing position; never topical.
+PUBLISHER_TITLE_STOPWORDS = {
+    "bloomberg",
+    "reuters",
+    "cnbc",
+    "nikkei",
+    "nytimes",
+}
+# High-frequency Vietnamese function and quantity words (>=4 chars, so the length
+# filter does not already drop them). They carry no topical signal, so without this
+# unrelated Vietnamese headlines merge on shared filler such as "triệu"/"trong".
+VIETNAMESE_TITLE_STOPWORDS = {
+    "trong",
+    "triệu",
+    "đồng",
+    "nghìn",
+    "ngày",
+    "được",
+    "không",
+    "những",
+    "người",
+    "cũng",
+    "việc",
+    "theo",
+    "tăng",
+    "giảm",
+    "thấp",
+    "nhất",
+    "cùng",
+    "trên",
+    "dưới",
+    "trước",
+    "khoảng",
+}
 TITLE_STOPWORDS = {
     "after",
     "again",
@@ -113,6 +159,8 @@ TITLE_STOPWORDS = {
     "that",
     "their",
     "with",
+    *PUBLISHER_TITLE_STOPWORDS,
+    *VIETNAMESE_TITLE_STOPWORDS,
 }
 
 

@@ -20,6 +20,17 @@ ingestion:
     - fbclid
     - gclid
     - ref
+  # Title substrings (case-insensitive) marking routine regulatory/fund disclosures
+  # republished in bulk by aggregator feeds; matched items are dropped before
+  # clustering. These are exact filing-type markers from the RNS taxonomy that do not
+  # appear in genuine market headlines. Empty list disables the filter.
+  disclosure_noise_patterns:
+    - net asset value
+    - total voting rights
+    - transaction in own shares
+    - holding(s) in company
+    - director/pdmr shareholding
+    - form 8.3
 
 alerts:
   immediate_threshold: 80
@@ -38,7 +49,7 @@ embeddings:
   cluster_attach_lookback_days: 7
   cluster_attach_min_similarity: 0.88
   cluster_attach_candidate_limit: 20
-  max_concurrency: 3
+  max_concurrency: 8
 
 llm:
   enabled: true
@@ -49,9 +60,9 @@ llm:
   api_key_env: OPENROUTER_API_KEY
   prompt_version: event-v2
   temperature: 0.1
-  max_tokens: 1200
+  max_tokens: 2000
   timeout_seconds: 45
-  max_concurrency: 3
+  max_concurrency: 8
   high_score_threshold: 80
   single_source_score_threshold: 90
   market_move_score_threshold: 70

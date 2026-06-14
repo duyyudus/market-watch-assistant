@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import asdict
 
 from sqlalchemy import delete, select
@@ -17,6 +18,7 @@ from bot_worker.db.models import (
 from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services.market import market_move_score_for_cluster
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
+from bot_worker.watchlist import WatchlistEntry, symbols_for_entities
 from common.llm import (
     CLASSIFY_PROMPT_VERSION,
     CLUSTER_DECISION_PROMPT_VERSION,
@@ -284,7 +286,10 @@ async def classify_news_item_with_llm(
     )
     if run is not None and run.status == "succeeded" and not force:
         return run
-    prompt = build_news_classification_prompt(item)
+    watch_entries = await watchlist_entries(session)
+    prompt = build_news_classification_prompt(
+        item, watchlist_hint=_watchlist_classification_hint(watch_entries)
+    )
     run = await _prepare_llm_run(
         session,
         existing_run=run,
@@ -310,36 +315,82 @@ async def classify_news_item_with_llm(
     return run
 
 
+def _watchlist_classification_hint(entries: list[WatchlistEntry]) -> str | None:
+    lines: list[str] = []
+    for entry in entries:
+        if not entry.enabled or not entry.symbol:
+            continue
+        names = [entry.name, *(entry.aliases or [])]
+        label = " / ".join(dict.fromkeys(name for name in names if name))
+        region = f" ({entry.region})" if entry.region else ""
+        lines.append(f"- {label} -> {entry.symbol}{region}")
+    return "\n".join(lines) if lines else None
+
+
+def _entity_mention_name(value: object) -> str:
+    if isinstance(value, dict):
+        return _entity_text(value.get("name") or "")
+    return _entity_text(value)
+
+
+def _entity_mention_ticker(value: object) -> str | None:
+    if isinstance(value, dict) and value.get("ticker"):
+        return _ticker_text(value.get("ticker"))
+    return None
+
+
+def _entity_mention_exchange(value: object) -> str | None:
+    if isinstance(value, dict) and value.get("exchange"):
+        exchange = str(value.get("exchange")).strip().upper()
+        if exchange and len(exchange) <= NEWS_ENTITY_CODE_MAX_LENGTH:
+            return exchange
+    return None
+
+
 def _classification_entities(
     *,
     item_id: str,
     result: dict[str, object],
+    watch_entries: list[WatchlistEntry] | None = None,
 ) -> list[NewsEntity]:
     confidence = int(result.get("confidence") or 0)
+    watch_entries = watch_entries or []
     entities: list[NewsEntity] = []
     seen: set[tuple[str, str | None]] = set()
     for value in result.get("entities") or []:
-        name = _entity_text(value)
+        name = _entity_mention_name(value)
         if not name:
             continue
-        key = (name.casefold(), None)
+        # Ticker precedence: the watchlist mapping is authoritative for names it
+        # knows (guards against an LLM hallucinating a different code); otherwise
+        # trust the LLM-attached ticker after regex validation.
+        watch_ticker = next(iter(symbols_for_entities([name], watch_entries)), None)
+        ticker = watch_ticker or _entity_mention_ticker(value)
+        key = (name.casefold(), ticker)
         if key in seen:
             continue
         seen.add(key)
         entities.append(
             NewsEntity(
                 news_item_id=item_id,
-                entity_type="market_entity",
+                entity_type="ticker" if ticker else "market_entity",
                 raw_text=name,
                 normalized_name=name,
+                ticker=ticker,
+                exchange=None if watch_ticker else _entity_mention_exchange(value),
                 confidence=confidence,
             )
         )
+    attached_tickers = {entity.ticker for entity in entities if entity.ticker}
     for value in result.get("tickers") or []:
         raw_text = _entity_text(value)
         if not raw_text:
             continue
         ticker = _ticker_text(value)
+        # Skip codes already carried by a named entity above so the same ticker does
+        # not also appear as a bare code-named entity.
+        if ticker is not None and ticker in attached_tickers:
+            continue
         key = (raw_text.casefold(), ticker)
         if key in seen:
             continue
@@ -368,26 +419,34 @@ def _classification_entities(
     return entities
 
 
-async def extract_entities_with_llm(
-    session: AsyncSession,
-    *,
-    config: LLMConfig,
-    limit: int = 500,
-    force: bool = False,
-) -> int:
-    if not config.enabled or not config.api_key:
-        return 0
+def _extractable_news_items_stmt(limit: int | None):
     stmt = (
         select(NormalizedNewsItem)
         .where(NormalizedNewsItem.processing_status.in_(["normalized", "deduped"]))
         .order_by(NormalizedNewsItem.created_at.desc())
-        .limit(limit)
     )
-    items = list((await session.scalars(stmt)).all())
+    return stmt.limit(limit) if limit is not None else stmt
+
+
+async def extract_entities_with_llm(
+    session: AsyncSession,
+    *,
+    config: LLMConfig,
+    limit: int | None = 500,
+    force: bool = False,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> int:
+    if not config.enabled or not config.api_key:
+        return 0
+    items = list((await session.scalars(_extractable_news_items_stmt(limit))).all())
     provider = llm_provider(config)
+    watch_entries = await watchlist_entries(session)
+    watchlist_hint = _watchlist_classification_hint(watch_entries)
     completed_runs: list[tuple[str, LLMAnalysisRun]] = []
     work_items: list[tuple[str, LLMAnalysisRun, str]] = []
-    for item in items:
+    for index, item in enumerate(items, start=1):
+        if progress is not None:
+            progress("preparing", index, len(items))
         existing_entities = list(
             (
                 await session.scalars(
@@ -411,7 +470,7 @@ async def extract_entities_with_llm(
             completed_runs.append((item.id, run))
             continue
 
-        prompt = build_news_classification_prompt(item)
+        prompt = build_news_classification_prompt(item, watchlist_hint=watchlist_hint)
         run = await _prepare_llm_run(
             session,
             existing_run=run,
@@ -426,6 +485,14 @@ async def extract_entities_with_llm(
         work_items.append((item.id, run, prompt))
 
     semaphore = asyncio.Semaphore(max(1, config.max_concurrency))
+    total = len(work_items)
+    done = 0
+
+    def _tick() -> None:
+        nonlocal done
+        done += 1
+        if progress is not None:
+            progress("classifying", done, total)
 
     async def classify_with_limit(
         item_id: str,
@@ -443,6 +510,8 @@ async def extract_entities_with_llm(
                 result, usage = await provider.classify_news_item(prompt)
             except Exception as exc:  # noqa: BLE001 - LLM failures must not block extraction
                 return item_id, run, None, None, exc
+            finally:
+                _tick()
             return item_id, run, result, usage, None
 
     results = await asyncio.gather(
@@ -453,7 +522,9 @@ async def extract_entities_with_llm(
     for item_id, run in completed_runs:
         if not run.result:
             continue
-        entities = _classification_entities(item_id=item_id, result=run.result)
+        entities = _classification_entities(
+            item_id=item_id, result=run.result, watch_entries=watch_entries
+        )
         if not entities:
             continue
         for entity in entities:
@@ -474,7 +545,9 @@ async def extract_entities_with_llm(
         run.result = result.model_dump()
         run.usage = usage
         run.updated_at = utcnow()
-        entities = _classification_entities(item_id=item_id, result=run.result)
+        entities = _classification_entities(
+            item_id=item_id, result=run.result, watch_entries=watch_entries
+        )
         if not entities:
             continue
         for entity in entities:
@@ -482,6 +555,53 @@ async def extract_entities_with_llm(
         extracted += 1
     await session.flush()
     return extracted
+
+
+async def preview_entity_extraction(
+    session: AsyncSession,
+    *,
+    config: LLMConfig,
+    limit: int | None = 500,
+    force: bool = False,
+) -> dict[str, int]:
+    """Report how many items `extract_entities_with_llm` would process.
+
+    Read-only: makes no LLM calls and mutates nothing. `would_extract` is the
+    number of fresh LLM classification calls that would run.
+    """
+    preview = {
+        "candidates": 0,
+        "would_extract": 0,
+        "would_reuse_cached": 0,
+        "skipped_existing": 0,
+    }
+    if not config.enabled or not config.api_key:
+        return preview
+    items = list((await session.scalars(_extractable_news_items_stmt(limit))).all())
+    preview["candidates"] = len(items)
+    for item in items:
+        has_entities = bool(
+            (
+                await session.scalars(
+                    select(NewsEntity).where(NewsEntity.news_item_id == item.id).limit(1)
+                )
+            ).first()
+        )
+        if has_entities and not force:
+            preview["skipped_existing"] += 1
+            continue
+        run = await _existing_llm_run(
+            session,
+            target_type="news_item",
+            target_id=item.id,
+            config=config,
+            prompt_version=CLASSIFY_PROMPT_VERSION,
+        )
+        if run is not None and run.status == "succeeded" and not force:
+            preview["would_reuse_cached"] += 1
+            continue
+        preview["would_extract"] += 1
+    return preview
 
 
 async def summarize_event_with_llm(

@@ -18,8 +18,10 @@ from bot_worker.scoring import ScoreInput, score_event
 from bot_worker.services import (
     classify_news_item_with_llm,
     enrich_event_clusters_with_llm,
+    extract_entities_with_llm,
     latest_llm_analysis,
     latest_successful_llm_analysis,
+    preview_entity_extraction,
     score_event_with_llm,
     summarize_event_with_llm,
 )
@@ -107,6 +109,62 @@ def llm_classify(item_id: Annotated[str, typer.Option("--item")]) -> None:
         _echo_llm_run(task="classify", run=run, target_id=item_id)
 
     _run(_with_session(action))
+
+
+@llm_app.command("extract-entities")
+def llm_extract_entities(
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    concurrency: Annotated[int | None, typer.Option("--concurrency")] = None,
+) -> None:
+    """Extract entities/tickers from normalized news items via LLM classification.
+
+    Processes all eligible items by default; pass --limit to cap the batch. By
+    default items that already have entities are skipped; use --force to
+    re-extract them (e.g. to backfill tickers after a classification change).
+    Use --dry-run to preview how many items would be processed (no LLM calls).
+    Pass --concurrency to override the configured LLM concurrency for this run.
+    """
+    config = _enabled_llm_config()
+    if concurrency is not None:
+        config = replace(config, max_concurrency=max(1, concurrency))
+
+    async def action(session):
+        if dry_run:
+            preview = await preview_entity_extraction(
+                session,
+                config=config,
+                limit=limit,
+                force=force,
+            )
+            _echo_json({"task": "extract-entities", "dry_run": True, "force": force, **preview})
+            return
+
+        def _progress(phase: str, done: int, total: int) -> None:
+            typer.echo(f"\r  {phase} {done}/{total}…", nl=False, err=True)
+            if done == total:
+                typer.echo("", err=True)
+
+        extracted = await extract_entities_with_llm(
+            session,
+            config=config,
+            limit=limit,
+            force=force,
+            progress=_progress,
+        )
+        _echo_json(
+            {
+                "task": "extract-entities",
+                "force": force,
+                "limit": limit,
+                "extracted": extracted,
+            }
+        )
+
+    _run(_with_session(action))
+
+
 @llm_app.command("enrich")
 def llm_enrich(event_id: Annotated[str, typer.Option("--event")]) -> None:
     """Trigger manual LLM enrichment (entity extraction, region mapping) for an event cluster."""

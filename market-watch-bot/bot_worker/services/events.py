@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -26,6 +27,8 @@ from bot_worker.events import (
     SameEventDecision,
     SameEventDecisionKind,
     VectorClusterCandidate,
+    _compatible_context,
+    _specific_entity_set,
     classify_same_event,
     is_vector_cluster_attachable,
     vector_similarity_score,
@@ -38,6 +41,7 @@ from bot_worker.scoring import (
     market_impact_score,
     score_event,
 )
+from bot_worker.services.embeddings import embed_event_cluster, embed_event_clusters
 from bot_worker.services.llm import resolve_llm_cluster_decision
 from bot_worker.services.watchlists import (
     news_item_entities,
@@ -45,7 +49,7 @@ from bot_worker.services.watchlists import (
     tier_for_entities,
     watchlist_entries,
 )
-from bot_worker.watchlist import WatchlistEntry, match_watchlist
+from bot_worker.watchlist import WatchlistEntry, match_watchlist, symbols_for_entities
 from common.llm import LLMConfig
 
 
@@ -133,6 +137,72 @@ async def vector_cluster_candidates_for_item(
             )
         )
     return candidates
+
+
+# Item<->item vector grouping uses a higher cosine floor than the live item<->cluster
+# attach: there is no cluster-level entity context to lean on here, so we demand near
+# duplicates to avoid false merges. Matches the spirit of is_vector_cluster_attachable's
+# 0.94 no-entity floor while staying configurable from the operator's attach threshold.
+RECLUSTER_VECTOR_MIN_SIMILARITY = 0.9
+
+
+async def vector_item_neighbors(
+    session: AsyncSession,
+    item_ids: list[str],
+    *,
+    config: EmbeddingConfig,
+    min_similarity: float,
+) -> dict[str, set[str]]:
+    """Build an item<->item similarity graph among ``item_ids`` using pgvector.
+
+    Returns a symmetric adjacency map ``news_id -> {similar news_id, ...}`` containing
+    only pairs whose cosine similarity is at least ``min_similarity``. Items without an
+    embedding (or below threshold) simply have no edges. A single self-join lets
+    Postgres compute the distances in C rather than shipping vectors to Python.
+    """
+    neighbors: dict[str, set[str]] = {}
+    if not item_ids:
+        return neighbors
+    max_distance = 1.0 - min_similarity
+    stmt = sql_text(
+        """
+        SELECT a.news_item_id AS a_id, b.news_item_id AS b_id
+        FROM news_item_embeddings a
+        JOIN news_item_embeddings b
+          ON b.news_item_id <> a.news_item_id
+         AND b.news_item_id = ANY(:item_ids)
+         AND b.provider = a.provider
+         AND b.embedding_model = a.embedding_model
+         AND b.embedding_version = a.embedding_version
+         AND b.dimensions = a.dimensions
+        WHERE a.news_item_id = ANY(:item_ids)
+          AND a.provider = :provider
+          AND a.embedding_model = :model
+          AND a.embedding_version = :version
+          AND a.dimensions = :dimensions
+          AND (a.vector <=> b.vector) <= :max_distance
+        """
+    )
+    rows = (
+        await session.execute(
+            stmt,
+            {
+                "item_ids": item_ids,
+                "provider": config.provider,
+                "model": config.model,
+                "version": config.version,
+                "dimensions": config.dimensions,
+                "max_distance": max_distance,
+            },
+        )
+    ).all()
+    for row in rows:
+        values = row._mapping
+        left = values["a_id"]
+        right = values["b_id"]
+        neighbors.setdefault(left, set()).add(right)
+        neighbors.setdefault(right, set()).add(left)
+    return neighbors
 
 
 def _effective_news_time() -> object:
@@ -224,6 +294,7 @@ async def _attach_news_item_to_cluster(
     similarity: float,
     watch_entries: list[WatchlistEntry],
     decision_metadata: dict[str, object] | None = None,
+    embedding_config: EmbeddingConfig | None = None,
 ) -> None:
     session.add(
         EventClusterItem(
@@ -248,9 +319,20 @@ async def _attach_news_item_to_cluster(
         cluster.high_quality_source_count = int(cluster.high_quality_source_count or 0) + 1
     cluster.top_source_score = max(cluster.top_source_score, item.source_score)
     _rescore_cluster(cluster, watch_entries)
-    await session.execute(
-        delete(EventClusterEmbedding).where(EventClusterEmbedding.event_cluster_id == cluster.id)
-    )
+    # The cluster's text (headline/entities/regions) just changed, so its embedding is
+    # stale. Recompute it in place (compute-then-swap) rather than deleting and waiting
+    # for the next pipeline embed pass: a cluster with no embedding row is invisible to
+    # vector attach, so a later item in this same batch could miss it and spawn a
+    # duplicate cluster. When no embedding provider is configured, fall back to dropping
+    # the stale row.
+    if embedding_config is not None:
+        await embed_event_cluster(session, cluster, config=embedding_config)
+    else:
+        await session.execute(
+            delete(EventClusterEmbedding).where(
+                EventClusterEmbedding.event_cluster_id == cluster.id
+            )
+        )
 
 
 async def _candidate_from_item(
@@ -262,11 +344,14 @@ async def _candidate_from_item(
     stored_entities = await news_item_entities(session, item.id)
     stored_tickers = await news_item_tickers(session, item.id)
     entities = stored_entities or [match.name for match in matches]
-    # Tickers come exclusively from LLM extraction. The watchlist matcher does
-    # naive substring matching (e.g. "BID" in "bidders", "GAS" in "oil and gas"),
-    # so using it to derive tickers attaches unrelated symbols. No LLM ticker
-    # means no ticker; watchlist matching is only for downstream tiering.
-    tickers = stored_tickers
+    # Tickers come from two safe sources: tickers the LLM attached to entities, and
+    # watchlist symbols resolved from the LLM-recognized entity names (e.g.
+    # "Vingroup" -> VIC). Only genuine LLM entities feed the watchlist mapping;
+    # the title-substring fallback names are excluded so we never attach a symbol
+    # from a naive word match.
+    tickers = sorted(
+        set(stored_tickers) | set(symbols_for_entities(stored_entities, watch_entries))
+    )
     return EventCandidate(
         news_id=item.id,
         title=item.title,
@@ -348,6 +433,7 @@ async def _cluster_candidates_with_llm_arbitration(
     candidates: list[EventCandidate],
     *,
     llm_config: LLMConfig | None,
+    vector_neighbors: dict[str, set[str]] | None = None,
 ) -> tuple[list[EventClusterDraft], int, int]:
     drafts: list[EventClusterDraft] = []
     llm_decisions = 0
@@ -426,7 +512,81 @@ async def _cluster_candidates_with_llm_arbitration(
             candidate,
             metadata=metadata or {"decision_source": "seed", "decision": "seed"},
         )
+    if vector_neighbors:
+        drafts = _merge_drafts_by_vector(drafts, vector_neighbors)
     return drafts, llm_decisions, llm_attaches
+
+
+def _combine_drafts(members: list[EventClusterDraft]) -> EventClusterDraft:
+    """Fold several drafts into one, keeping the largest as the headline/base."""
+    members = sorted(
+        members,
+        key=lambda draft: (len(draft.news_ids), draft.top_source_score),
+        reverse=True,
+    )
+    base = members[0]
+    ranks = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1}
+    for other in members[1:]:
+        base.news_ids.extend(other.news_ids)
+        base.item_decision_metadata.update(other.item_decision_metadata)
+        base.entities |= other.entities
+        base.tickers |= other.tickers
+        base.regions |= other.regions
+        base.asset_classes |= other.asset_classes
+        base.source_count += other.source_count
+        base.high_quality_source_count += other.high_quality_source_count
+        base.top_source_score = max(base.top_source_score, other.top_source_score)
+        if other.watchlist_tier is not None and ranks.get(other.watchlist_tier, 0) > ranks.get(
+            base.watchlist_tier or "", 0
+        ):
+            base.watchlist_tier = other.watchlist_tier
+    return base
+
+
+def _merge_drafts_by_vector(
+    drafts: list[EventClusterDraft],
+    vector_neighbors: dict[str, set[str]],
+) -> list[EventClusterDraft]:
+    """Union drafts whose members are near-duplicates by embedding.
+
+    Item-level lexical matching already gives every item a home in its own draft, so a
+    cross-cluster paraphrase can only be caught by merging the *drafts* those two items
+    landed in. Two drafts are merged when some vector edge links a member of one to a
+    member of the other, their region/asset context is compatible, AND they share a
+    specific entity. The entity requirement is what keeps near-duplicate *boilerplate*
+    (e.g. templated "Net Asset Value" filings for different funds, which score >0.95
+    cosine) from collapsing into one event: same template, but different fund names.
+    """
+    if len(drafts) < 2:
+        return drafts
+    parent = list(range(len(drafts)))
+    entity_sets = [_specific_entity_set(list(draft.entities)) for draft in drafts]
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    draft_of = {news_id: index for index, draft in enumerate(drafts) for news_id in draft.news_ids}
+    for news_id, neighbors in vector_neighbors.items():
+        left = draft_of.get(news_id)
+        if left is None:
+            continue
+        for other in neighbors:
+            right = draft_of.get(other)
+            if right is None or find(left) == find(right):
+                continue
+            if not (entity_sets[left] & entity_sets[right]):
+                continue
+            if _compatible_context(
+                _draft_candidate(drafts[left]), _draft_candidate(drafts[right])
+            ):
+                parent[find(right)] = find(left)
+    groups: dict[int, list[EventClusterDraft]] = {}
+    for index, draft in enumerate(drafts):
+        groups.setdefault(find(index), []).append(draft)
+    return [_combine_drafts(members) for members in groups.values()]
 
 
 def _update_cluster_from_draft(
@@ -485,32 +645,88 @@ def _mark_cluster_stale(cluster: EventCluster) -> None:
     cluster.alert_level = None
 
 
+def _match_drafts_to_clusters(
+    drafts: list[EventClusterDraft],
+    clusters: list[EventCluster],
+    news_origin: dict[str, str],
+) -> tuple[list[tuple[EventCluster | None, EventClusterDraft]], set[str]]:
+    """Pair each regrouped draft with the existing cluster it shares the most news
+    items with, so cluster identity (id, first_seen_at, score/alert history) follows
+    content instead of list position.
+
+    Greedy: larger drafts choose first, each existing cluster is claimed at most once,
+    ties broken toward the more recently updated cluster. A draft that matches no
+    available cluster pairs with ``None`` so a fresh cluster is created on apply -- this
+    is what lets a split produce more clusters than it started with without orphaning
+    any news item.
+    """
+    cluster_by_id = {cluster.id: cluster for cluster in clusters}
+    cluster_rank = {cluster.id: index for index, cluster in enumerate(clusters)}
+    assignments: list[tuple[EventCluster | None, EventClusterDraft]] = []
+    claimed: set[str] = set()
+    ordered = sorted(
+        drafts,
+        key=lambda draft: (len(draft.news_ids), draft.source_count),
+        reverse=True,
+    )
+    for draft in ordered:
+        overlap: dict[str, int] = {}
+        for news_id in draft.news_ids:
+            origin = news_origin.get(news_id)
+            if origin is not None and origin not in claimed:
+                overlap[origin] = overlap.get(origin, 0) + 1
+        if overlap:
+            best = min(
+                overlap,
+                key=lambda cid: (-overlap[cid], cluster_rank.get(cid, len(clusters))),
+            )
+            claimed.add(best)
+            assignments.append((cluster_by_id[best], draft))
+        else:
+            assignments.append((None, draft))
+    return assignments, claimed
+
+
 async def recluster_recent_event_clusters(
     session: AsyncSession,
     *,
     since: datetime,
     dry_run: bool = True,
-    limit: int = 500,
+    limit: int | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    llm_config: LLMConfig | None = None,
+    embedding_config: EmbeddingConfig | None = None,
+    use_vector_signal: bool = False,
 ) -> dict[str, int | str]:
-    cluster_ids = list(
-        (
-            await session.scalars(
-                select(EventCluster.id)
-                .where(EventCluster.last_updated_at >= since)
-                .order_by(EventCluster.last_updated_at.desc())
-                .limit(limit)
-            )
-        ).all()
+    # ``embedding_config`` being set means embeddings are usable, which is enough to
+    # regenerate the cluster embeddings recluster invalidates on apply (lifecycle hygiene,
+    # always done). ``use_vector_signal`` is the separate opt-in for *also* using stored
+    # vectors as a grouping signal during the regroup.
+    # Exclude already-stale clusters: they are emptied husks whose last_updated_at is
+    # re-bumped each time they are re-staled, which would otherwise keep them in every
+    # window forever, inflating affected/stale counts with no real work. --since scopes the
+    # run; --limit is an optional cap (unbounded by default).
+    cluster_stmt = (
+        select(EventCluster.id)
+        .where(EventCluster.last_updated_at >= since)
+        .where(EventCluster.status != "stale")
+        .order_by(EventCluster.last_updated_at.desc())
     )
+    if limit is not None:
+        cluster_stmt = cluster_stmt.limit(limit)
+    cluster_ids = list((await session.scalars(cluster_stmt)).all())
     if not cluster_ids:
         return {
             "status": "dry_run" if dry_run else "reclustered",
             "affected_clusters": 0,
             "news_items": 0,
             "new_clusters": 0,
+            "created_clusters": 0,
+            "reused_clusters": 0,
             "stale_clusters": 0,
             "event_cluster_items_deleted": 0,
             "event_cluster_embeddings_deleted": 0,
+            "event_cluster_embeddings_written": 0,
         }
 
     clusters = list(
@@ -538,31 +754,63 @@ async def recluster_recent_event_clusters(
             "affected_clusters": len(cluster_ids),
             "news_items": 0,
             "new_clusters": 0,
+            "created_clusters": 0,
+            "reused_clusters": 0,
             "stale_clusters": 0,
             "event_cluster_items_deleted": 0,
             "event_cluster_embeddings_deleted": 0,
+            "event_cluster_embeddings_written": 0,
         }
 
     watch_entries = await watchlist_entries(session)
-    candidates = [
-        await _candidate_from_item(session, item, watch_entries)
-        for item in items
-    ]
+    candidates = []
+    for index, item in enumerate(items, start=1):
+        candidates.append(await _candidate_from_item(session, item, watch_entries))
+        if progress is not None:
+            progress("scanning", index, len(items))
+    vector_neighbors: dict[str, set[str]] | None = None
+    if embedding_config is not None and use_vector_signal:
+        vector_neighbors = await vector_item_neighbors(
+            session,
+            [candidate.news_id for candidate in candidates],
+            config=embedding_config,
+            min_similarity=max(
+                embedding_config.cluster_attach_min_similarity,
+                RECLUSTER_VECTOR_MIN_SIMILARITY,
+            ),
+        )
     drafts, _, _ = await _cluster_candidates_with_llm_arbitration(
         session,
         candidates,
-        llm_config=None,
+        llm_config=llm_config,
+        vector_neighbors=vector_neighbors,
     )
-    stale_clusters = max(0, len(clusters) - len(drafts))
+    membership = list(
+        (
+            await session.scalars(
+                select(EventClusterItem).where(
+                    EventClusterItem.event_cluster_id.in_(cluster_ids)
+                )
+            )
+        ).all()
+    )
+    news_origin = {row.news_item_id: row.event_cluster_id for row in membership}
+    assignments, claimed_cluster_ids = _match_drafts_to_clusters(drafts, clusters, news_origin)
+    created_clusters = sum(1 for cluster, _ in assignments if cluster is None)
+    reused_clusters = len(claimed_cluster_ids)
+    stale_clusters = len(clusters) - reused_clusters
     if dry_run:
         return {
             "status": "dry_run",
             "affected_clusters": len(cluster_ids),
             "news_items": len(items),
             "new_clusters": len(drafts),
+            "created_clusters": created_clusters,
+            "reused_clusters": reused_clusters,
             "stale_clusters": stale_clusters,
             "event_cluster_items_deleted": 0,
             "event_cluster_embeddings_deleted": 0,
+            "event_cluster_embeddings_written": 0,
         }
 
     items_deleted = _result_rowcount(
@@ -577,8 +825,13 @@ async def recluster_recent_event_clusters(
             )
         )
     )
-    for cluster, draft in zip(clusters, drafts, strict=False):
+    touched_clusters: list[EventCluster] = []
+    for cluster, draft in assignments:
+        if cluster is None:
+            cluster = EventCluster(canonical_headline=draft.canonical_headline)
+            session.add(cluster)
         _update_cluster_from_draft(cluster, draft, watch_entries)
+        await session.flush()
         for news_id in draft.news_ids:
             session.add(
                 EventClusterItem(
@@ -587,17 +840,33 @@ async def recluster_recent_event_clusters(
                     decision_metadata=draft.item_decision_metadata.get(news_id),
                 )
             )
-    for cluster in clusters[len(drafts) :]:
-        _mark_cluster_stale(cluster)
+        touched_clusters.append(cluster)
+    for cluster in clusters:
+        if cluster.id not in claimed_cluster_ids:
+            _mark_cluster_stale(cluster)
+
+    # Recluster just rewrote membership and headlines, so the bulk delete above left the
+    # surviving clusters with no embedding. Regenerate them now (when an embedding
+    # provider is configured) instead of leaving a gap until the next pipeline embed pass:
+    # an un-embedded cluster is invisible to live vector attach, so newly ingested items
+    # could miss it and spawn duplicates before the lazy re-embed catches up.
+    embeddings_written = 0
+    if embedding_config is not None:
+        embeddings_written = await embed_event_clusters(
+            session, touched_clusters, config=embedding_config, progress=progress
+        )
 
     return {
         "status": "reclustered",
         "affected_clusters": len(cluster_ids),
         "news_items": len(items),
         "new_clusters": len(drafts),
+        "created_clusters": created_clusters,
+        "reused_clusters": reused_clusters,
         "stale_clusters": stale_clusters,
         "event_cluster_items_deleted": items_deleted,
         "event_cluster_embeddings_deleted": embeddings_deleted,
+        "event_cluster_embeddings_written": embeddings_written,
     }
 
 
@@ -661,6 +930,7 @@ async def build_event_clusters(
                         "decision": "strong_same_event",
                         "similarity": round(vector_candidate.similarity, 4),
                     },
+                    embedding_config=embedding_config,
                 )
                 attached_existing += 1
                 attached = True
@@ -708,6 +978,7 @@ async def build_event_clusters(
                         "similarity": round(vector_candidate.similarity, 4),
                         "llm_attempted": attempted,
                     },
+                    embedding_config=embedding_config,
                 )
                 attached_existing += 1
                 llm_cluster_attaches += 1

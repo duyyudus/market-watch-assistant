@@ -49,6 +49,10 @@ class IngestionConfig(BaseModel):
             "ref",
         ]
     )
+    # Title substrings that mark routine regulatory/fund disclosures to drop from
+    # clustering (see settings.ingestion.disclosure_noise_patterns). None or [] disables
+    # the filter; the operator-facing default list lives in settings.yml.
+    disclosure_noise_patterns: list[str] | None = None
 
 
 class AlertConfig(BaseModel):

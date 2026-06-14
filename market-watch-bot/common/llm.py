@@ -16,12 +16,16 @@ if TYPE_CHECKING:
 
 
 PROMPT_VERSION = "event-v2"
-CLASSIFY_PROMPT_VERSION = "classify-v1"
+CLASSIFY_PROMPT_VERSION = "classify-v2"
 SCORE_PROMPT_VERSION = "score-v1"
 SUMMARY_PROMPT_VERSION = "summarize-v1"
 CLUSTER_DECISION_PROMPT_VERSION = "cluster-decision-v1"
 INVESTIGATION_PROMPT_VERSION = "investigation-v1"
 MAX_CLASSIFICATION_RAW_CONTENT_CHARS = 8_000
+# Cap on extracted entities per item. Structured entity objects are token-heavy,
+# so unbounded lists can truncate the response past max_tokens; bounding the count
+# keeps responses parseable and drops low-signal contextual mentions.
+CLASSIFY_MAX_ENTITIES = 12
 
 # ── Prompt vocabulary constants ──────────────────────────────────────────────
 
@@ -170,6 +174,28 @@ class LLMAnalysis(BaseModel):
         return normalize_text(value)
 
 
+class LLMEntityMention(BaseModel):
+    name: str = Field(min_length=1, description="Company or organization name.")
+    ticker: str | None = Field(
+        default=None,
+        description="Exchange ticker symbol for this entity if it is publicly listed "
+        "(e.g. VIC, AAPL, 9988.HK). Null if not listed or unknown.",
+    )
+    exchange: str | None = Field(
+        default=None,
+        description="Exchange/market code for the ticker (e.g. HOSE, NASDAQ). Null if unknown.",
+    )
+    is_primary: bool = Field(
+        default=False,
+        description="True only if this entity is the primary subject of the news item.",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return normalize_text(value)
+
+
 class LLMClassification(BaseModel):
     item_type: str = Field(
         min_length=1,
@@ -186,10 +212,19 @@ class LLMClassification(BaseModel):
     )
     region: str = Field(min_length=1)
     asset_classes: list[str] = Field(default_factory=list)
-    entities: list[str] = Field(default_factory=list)
+    entities: list[LLMEntityMention] = Field(default_factory=list)
     tickers: list[str] = Field(default_factory=list)
     confidence: int = Field(ge=0, le=100)
     rationale: str = Field(min_length=1)
+
+    @field_validator("entities", mode="before")
+    @classmethod
+    def coerce_entities(cls, value: object) -> object:
+        # Tolerate the legacy shape (a bare list of name strings) so older callers
+        # and fixtures keep working while the model emits structured mentions.
+        if isinstance(value, list):
+            return [{"name": item} if isinstance(item, str) else item for item in value]
+        return value
 
     @field_validator("rationale")
     @classmethod
@@ -252,8 +287,24 @@ class LLMInvestigationResult(BaseModel):
         return normalize_text(value)
 
 
+def _strictify_object_schemas(node: object) -> None:
+    # OpenAI strict json_schema mode requires every object node (including nested
+    # models reachable via $defs) to declare additionalProperties=false and list all
+    # of its properties as required. Walk the schema and enforce that everywhere.
+    if isinstance(node, dict):
+        if node.get("type") == "object" and "properties" in node:
+            node["additionalProperties"] = False
+            node["required"] = list(node["properties"].keys())
+        for value in node.values():
+            _strictify_object_schemas(value)
+    elif isinstance(node, list):
+        for value in node:
+            _strictify_object_schemas(value)
+
+
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     schema = model.model_json_schema()
+    _strictify_object_schemas(schema)
     schema["additionalProperties"] = False
     schema["required"] = list(schema.get("properties", {}).keys())
     return schema
@@ -408,17 +459,29 @@ def build_event_analysis_prompt(
     )
 
 
-def build_news_classification_prompt(item: NormalizedNewsItem) -> str:
+def build_news_classification_prompt(
+    item: NormalizedNewsItem,
+    watchlist_hint: str | None = None,
+) -> str:
     full_text = capped_prompt_text(
         getattr(item, "raw_content", None),
         max_chars=MAX_CLASSIFICATION_RAW_CONTENT_CHARS,
     )
     language_guidance = (
-        "Vietnamese-language guidance: preserve Vietnamese company/entity names, "
-        "map common Vietnamese market terms to tickers only when explicit, and treat "
-        "VN-Index/HOSE/HNX/UPCoM as market entities."
+        "Vietnamese-language guidance: preserve Vietnamese company/entity names and "
+        "treat VN-Index/HOSE/HNX/UPCoM as market entities."
         if item.language.lower().startswith("vi")
         else "Use the source language as context for entity extraction."
+    )
+    grounding = (
+        [
+            "",
+            "Watchlist reference (authoritative entity -> ticker mapping; use these "
+            "exact tickers when the entity appears, do not guess a different code):",
+            watchlist_hint,
+        ]
+        if watchlist_hint
+        else []
     )
     return "\n".join(
         [
@@ -427,6 +490,7 @@ def build_news_classification_prompt(item: NormalizedNewsItem) -> str:
             "Focus on market type, actionability, actual region/assets, affected "
             "entities, and ambiguity.",
             language_guidance,
+            *grounding,
             "",
             "Field definitions:",
             f"- item_type: one of {', '.join(repr(v) for v in CLASSIFY_ITEM_TYPES)}. "
@@ -445,14 +509,21 @@ def build_news_classification_prompt(item: NormalizedNewsItem) -> str:
             f"- asset_classes: use only values from this set: "
             f"{', '.join(repr(v) for v in ASSET_CLASS_VOCABULARY)}. "
             "Do not invent labels like 'technology' or 'ai'.",
-            "- entities: company and organization names only. Do not include "
-            "people, product names, news agencies, or generic terms.",
-            "- tickers: only include tickers for companies that are the PRIMARY "
-            "SUBJECT of this news (e.g. the company making an announcement, "
-            "reporting earnings, or being acquired). Do not include tickers of "
-            "investors, partners, supply-chain peers, or companies mentioned "
-            "for context or comparison. If the primary subject is not publicly "
-            "listed, return an empty list.",
+            "- entities: list of company and organization mentions. Do not include "
+            "people, product names, news agencies, or generic terms. List at most "
+            f"{CLASSIFY_MAX_ENTITIES} entities, prioritizing the primary subject(s) "
+            "and the most material names; omit minor or contextual mentions. For "
+            "each entity set: 'name'; 'ticker' = the exchange ticker symbol if the "
+            "company is publicly listed (prefer the Watchlist reference above when "
+            "the entity is listed there; otherwise use the well-known symbol, or "
+            "null if not listed/unknown — never invent a code); 'exchange' = the "
+            "market code if known (e.g. HOSE, NASDAQ) else null; 'is_primary' = "
+            "true only for the company that is the PRIMARY SUBJECT of the news "
+            "(making an announcement, reporting earnings, being acquired), false "
+            "for investors, partners, peers, or context mentions.",
+            "- tickers: optional flat list of the primary-subject ticker symbols, "
+            "for backward compatibility. May be left empty when entity tickers are "
+            "populated.",
             "",
             CLASSIFY_CONFIDENCE_SCALE_GUIDANCE,
             "",

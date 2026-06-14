@@ -25,6 +25,8 @@ from bot_worker.services.digests import (
     send_digest_record,
 )
 from bot_worker.services.embeddings import (
+    embed_event_cluster,
+    embed_event_clusters,
     embed_pending_event_clusters,
     embed_pending_news_items,
     validate_embedding_dimensions,
@@ -69,6 +71,7 @@ from bot_worker.services.llm import (
     extract_entities_with_llm,
     latest_llm_analysis,
     latest_successful_llm_analysis,
+    preview_entity_extraction,
     score_event_with_llm,
     summarize_event_with_llm,
 )
@@ -78,10 +81,6 @@ from bot_worker.services.market import (
     market_move_score_for_cluster,
     run_missed_catalyst_review,
     store_market_moves,
-)
-from common.market_symbol_resolver import (
-    resolve_watchlist_market_symbol,
-    watchlist_market_symbol_requests,
 )
 from bot_worker.services.pipeline import (
     CORE_JOBS,
@@ -114,6 +113,10 @@ from bot_worker.services.watchlists import (
     news_item_tickers,
     watchlist_entries,
 )
+from common.market_symbol_resolver import (
+    resolve_watchlist_market_symbol,
+    watchlist_market_symbol_requests,
+)
 
 __all__ = [
     "AlertDeliveryConfig",
@@ -132,6 +135,8 @@ __all__ = [
     "digest_preview",
     "digest_time_in_window",
     "dispatch_pending_alerts",
+    "embed_event_cluster",
+    "embed_event_clusters",
     "embed_pending_event_clusters",
     "embed_pending_news_items",
     "effective_source_score",
@@ -182,6 +187,7 @@ __all__ = [
     "run_investigations_concurrently",
     "run_pipeline",
     "run_retention",
+    "preview_entity_extraction",
     "score_event_with_llm",
     "seed_configuration_presets",
     "seed_starter_sources",

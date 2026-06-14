@@ -31,12 +31,12 @@ from bot_worker.services.market import (
     run_missed_catalyst_review,
     store_market_moves,
 )
-from common.market_symbol_resolver import watchlist_market_symbol_requests
 from bot_worker.services.pipeline_metrics import PipelineRunMetrics
 from bot_worker.services.sources import fetch_source
 from common.llm import (
     LLMConfig,
 )
+from common.market_symbol_resolver import watchlist_market_symbol_requests
 
 logger = logging.getLogger("bot_worker")
 CORE_JOBS = [
@@ -78,6 +78,7 @@ async def run_pipeline(
     investigation_config: InvestigationConfig | None = None,
     alert_delivery_config: AlertDeliveryConfig | None = None,
     tracking_params: list[str] | None = None,
+    disclosure_noise_patterns: list[str] | None = None,
 ) -> dict[str, object]:
     if dry_run:
         return {"status": "dry_run", "jobs": len(CORE_JOBS)}
@@ -147,7 +148,10 @@ async def run_pipeline(
     stage_start = datetime.now(UTC)
     logger.info("─── [Stage 2/12] Normalizing Raw Items ───")
     normalized = await normalize_pending_raw_items(
-        session, freshness_hours=freshness_hours, tracking_params=tracking_params
+        session,
+        freshness_hours=freshness_hours,
+        tracking_params=tracking_params,
+        disclosure_noise_patterns=disclosure_noise_patterns,
     )
     logger.info("  ✓ Normalized %d news items", normalized)
     metrics.record_stage(

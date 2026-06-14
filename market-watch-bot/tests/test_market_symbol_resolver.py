@@ -8,13 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from bot_worker.services.external_providers import ProviderRetryPolicy
+from common.config import Settings
+from common.db.models import Base, MarketSymbolResolution, WatchlistEntity
 from common.market_symbol_resolver import (
     resolution_to_market_request,
     resolve_watchlist_market_symbol,
     watchlist_market_symbol_requests,
 )
-from common.config import Settings
-from common.db.models import Base, MarketSymbolResolution, WatchlistEntity
 
 
 @pytest.fixture()

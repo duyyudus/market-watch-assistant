@@ -6,13 +6,14 @@ import bot_worker.services as services
 import bot_worker.services.events as event_services
 from bot_worker.db.models import (
     EventCluster,
+    EventClusterEmbedding,
     EventClusterItem,
     LLMAnalysisRun,
     NewsItemEmbedding,
     NormalizedNewsItem,
 )
 from bot_worker.embeddings import EmbeddingConfig
-from bot_worker.events import VectorClusterCandidate
+from bot_worker.events import EventCandidate, VectorClusterCandidate
 from bot_worker.llm import LLMConfig
 
 
@@ -108,6 +109,10 @@ class FakeReclusterSession:
             [self.cluster_1, self.cluster_2],
             [self.item_1, self.item_2],
             [],
+            [
+                EventClusterItem(event_cluster_id="evt_1", news_item_id="news_1"),
+                EventClusterItem(event_cluster_id="evt_2", news_item_id="news_2"),
+            ],
         ]
         self.added: list[object] = []
         self.executed: list[object] = []
@@ -286,7 +291,13 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
     assert cluster.top_source_score == 80
     assert cluster.affected_entities == ["brent", "hormuz"]
     assert cluster.final_score > 0
+    # The attach mutated the cluster, so its embedding is recomputed in place rather than
+    # deleted-and-deferred: exactly one delete (the swap) and a fresh embedding row, so the
+    # cluster stays visible to vector attach for the rest of the batch.
     assert len(session.executed) == 1
+    cluster_embeddings = [v for v in session.added if isinstance(v, EventClusterEmbedding)]
+    assert len(cluster_embeddings) == 1
+    assert cluster_embeddings[0].event_cluster_id == "evt_1"
 
 
 @pytest.mark.asyncio
@@ -830,6 +841,46 @@ async def test_recluster_recent_event_clusters_merges_duplicate_clusters_with_cl
 
 
 @pytest.mark.asyncio
+async def test_recluster_recent_event_clusters_reembeds_surviving_clusters(monkeypatch) -> None:
+    session = FakeReclusterSession()
+    vector_calls = 0
+
+    async def fake_vector_item_neighbors(_session, _item_ids, *, config, min_similarity):
+        nonlocal vector_calls
+        vector_calls += 1
+        return {}
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        return ["Bitcoin"]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        return ["BTC"]
+
+    monkeypatch.setattr(event_services, "vector_item_neighbors", fake_vector_item_neighbors)
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=False,
+        embedding_config=EmbeddingConfig(provider="local", dimensions=3),
+        # No use_vector_signal: re-embed is lifecycle hygiene and must happen anyway.
+    )
+
+    # The two clusters merge into one surviving cluster, which must be re-embedded in place
+    # so it is not left invisible to live vector attach until the next pipeline embed pass.
+    assert result["status"] == "reclustered"
+    assert result["new_clusters"] == 1
+    assert result["event_cluster_embeddings_written"] == 1
+    cluster_embeddings = [v for v in session.added if isinstance(v, EventClusterEmbedding)]
+    assert len(cluster_embeddings) == 1
+    assert cluster_embeddings[0].event_cluster_id == "evt_1"
+    # Re-embed is decoupled from the grouping signal: no vector merge was requested.
+    assert vector_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_recluster_recent_event_clusters_dry_run_does_not_mutate(monkeypatch) -> None:
     session = FakeReclusterSession()
 
@@ -857,3 +908,357 @@ async def test_recluster_recent_event_clusters_dry_run_does_not_mutate(monkeypat
     assert session.added == []
     assert session.executed == []
     assert session.cluster_2.status == "reported"
+
+
+class RecordingClusterSelectSession:
+    """Captures the cluster-selection statement and returns an empty window."""
+
+    def __init__(self) -> None:
+        self.statements: list[object] = []
+
+    async def scalars(self, stmt):
+        self.statements.append(stmt)
+        return ScalarRows([])
+
+
+@pytest.mark.asyncio
+async def test_recluster_excludes_stale_clusters_and_is_unbounded_by_default() -> None:
+    session = RecordingClusterSelectSession()
+
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=True,
+    )
+
+    assert result["affected_clusters"] == 0
+    compiled = str(session.statements[0]).lower()
+    # Emptied stale husks are excluded so they don't ride along in every window forever.
+    assert "status !=" in compiled
+    # --limit is unbounded by default: no LIMIT clause is emitted, --since alone scopes it.
+    assert "limit" not in compiled
+
+
+@pytest.mark.asyncio
+async def test_recluster_applies_limit_when_provided() -> None:
+    session = RecordingClusterSelectSession()
+
+    await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=True,
+        limit=100,
+    )
+
+    assert "limit" in str(session.statements[0]).lower()
+
+
+class FakeReclusterSplitSession:
+    """A single cluster that wrongly merged two unrelated events."""
+
+    def __init__(self) -> None:
+        self.cluster_1 = EventCluster(
+            id="evt_1",
+            canonical_headline="Bitcoin options are coming to Nasdaq",
+            status="reported",
+            regions=["crypto"],
+            asset_classes=["crypto"],
+            affected_entities=["Bitcoin", "Apple"],
+            source_count=2,
+            top_source_score=75,
+        )
+        self.item_1 = NormalizedNewsItem(
+            id="news_1",
+            title="Bitcoin options are coming to Nasdaq",
+            source_score=75,
+            region="crypto",
+            asset_classes=["crypto"],
+            processing_status="normalized",
+            created_at=datetime(2026, 5, 25, 3, tzinfo=UTC),
+        )
+        self.item_2 = NormalizedNewsItem(
+            id="news_2",
+            title="Apple unveils new iPhone lineup in Cupertino",
+            source_score=70,
+            region="us",
+            asset_classes=["equity"],
+            processing_status="normalized",
+            created_at=datetime(2026, 5, 25, 4, tzinfo=UTC),
+        )
+        self.scalars_results = [
+            ["evt_1"],
+            [self.cluster_1],
+            [self.item_1, self.item_2],
+            [],
+            [
+                EventClusterItem(event_cluster_id="evt_1", news_item_id="news_1"),
+                EventClusterItem(event_cluster_id="evt_1", news_item_id="news_2"),
+            ],
+        ]
+        self.added: list[object] = []
+        self.executed: list[object] = []
+        self.flushes = 0
+
+    async def scalars(self, _stmt):
+        return ScalarRows(self.scalars_results.pop(0))
+
+    async def execute(self, stmt):
+        self.executed.append(stmt)
+        return FakeExecuteResult()
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def flush(self) -> None:
+        self.flushes += 1
+
+
+@pytest.mark.asyncio
+async def test_recluster_recent_event_clusters_splits_false_merge_without_orphans(
+    monkeypatch,
+) -> None:
+    session = FakeReclusterSplitSession()
+
+    entity_map = {"news_1": ["Bitcoin"], "news_2": ["Apple"]}
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        return entity_map[news_item_id]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        return []
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=False,
+    )
+
+    cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
+    new_clusters = [value for value in session.added if isinstance(value, EventCluster)]
+
+    # One bad cluster regroups into two events: evt_1 is reused, a fresh cluster is
+    # created for the second event, and every news item keeps a home (no orphans).
+    assert result["status"] == "reclustered"
+    assert result["new_clusters"] == 2
+    assert result["created_clusters"] == 1
+    assert result["reused_clusters"] == 1
+    assert result["stale_clusters"] == 0
+    assert len(new_clusters) == 1
+    assert len(cluster_items) == 2
+    assert {item.news_item_id for item in cluster_items} == {"news_1", "news_2"}
+    assert session.cluster_1.status == "reported"
+
+
+@pytest.mark.asyncio
+async def test_recluster_threads_llm_config_into_arbitration(monkeypatch) -> None:
+    session = FakeReclusterSession()
+    captured: dict[str, object] = {}
+
+    async def fake_arbitration(_session, _candidates, *, llm_config, vector_neighbors=None):
+        captured["llm_config"] = llm_config
+        return [], 0, 0
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return []
+
+    monkeypatch.setattr(
+        event_services, "_cluster_candidates_with_llm_arbitration", fake_arbitration
+    )
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    config = LLMConfig(enabled=True, api_key="secret")
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=True,
+        llm_config=config,
+    )
+
+    # The shared arbitration engine receives the operator's config (not the hardcoded
+    # None recluster used to pass), which is what enables gray-zone LLM decisions.
+    assert captured["llm_config"] is config
+    assert result["status"] == "dry_run"
+
+
+def _vector_candidate(
+    news_id: str,
+    title: str,
+    *,
+    entities: list[str],
+    region: str = "crypto",
+    assets: tuple[str, ...] = ("crypto",),
+) -> EventCandidate:
+    return EventCandidate(
+        news_id=news_id,
+        title=title,
+        source_score=70,
+        entities=entities,
+        region=region,
+        asset_classes=list(assets),
+        published_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_arbitration_vector_merges_lexically_different_items() -> None:
+    a = _vector_candidate("news_1", "Acme options launch on Nasdaq", entities=["Acme"])
+    b = _vector_candidate("news_2", "Derivatives debut at the exchange", entities=["Acme"])
+    neighbors = {"news_1": {"news_2"}, "news_2": {"news_1"}}
+
+    drafts, _, _ = await event_services._cluster_candidates_with_llm_arbitration(
+        object(),
+        [a, b],
+        llm_config=None,
+        vector_neighbors=neighbors,
+    )
+
+    # No shared words -> lexical alone would make two clusters; the vector edge plus a
+    # shared entity and compatible context merges the two drafts into one.
+    assert len(drafts) == 1
+    assert set(drafts[0].news_ids) == {"news_1", "news_2"}
+
+
+@pytest.mark.asyncio
+async def test_arbitration_vector_respects_context_gate() -> None:
+    a = _vector_candidate("news_1", "Acme options launch on Nasdaq", entities=["Acme"])
+    b = _vector_candidate(
+        "news_2",
+        "Acme quarterly results beat",
+        entities=["Acme"],
+        region="us",
+        assets=("equity",),
+    )
+    neighbors = {"news_1": {"news_2"}, "news_2": {"news_1"}}
+
+    drafts, _, _ = await event_services._cluster_candidates_with_llm_arbitration(
+        object(),
+        [a, b],
+        llm_config=None,
+        vector_neighbors=neighbors,
+    )
+
+    # A vector edge alone must not merge across incompatible region/asset context.
+    assert len(drafts) == 2
+
+
+@pytest.mark.asyncio
+async def test_arbitration_vector_merges_two_coherent_drafts() -> None:
+    # Two internally-coherent groups that share no words across groups: lexical builds
+    # two drafts, and a single cross-draft vector edge must merge them (the real
+    # recluster case, where every item already has a lexical home).
+    a1 = _vector_candidate(
+        "a1", "Bitcoin ETF approval imminent says regulator", entities=["Acme"]
+    )
+    a2 = _vector_candidate(
+        "a2", "Bitcoin ETF approval expected imminent today", entities=["Acme"]
+    )
+    b1 = _vector_candidate(
+        "b1", "Crypto fund greenlight nears final clearance", entities=["Acme"]
+    )
+    b2 = _vector_candidate(
+        "b2", "Crypto fund greenlight clearance coming soon", entities=["Solana"]
+    )
+    neighbors = {"a1": {"b1"}, "b1": {"a1"}}
+
+    drafts, _, _ = await event_services._cluster_candidates_with_llm_arbitration(
+        object(),
+        [a1, a2, b1, b2],
+        llm_config=None,
+        vector_neighbors=neighbors,
+    )
+
+    assert len(drafts) == 1
+    assert set(drafts[0].news_ids) == {"a1", "a2", "b1", "b2"}
+
+
+@pytest.mark.asyncio
+async def test_arbitration_without_vector_keeps_two_drafts() -> None:
+    a1 = _vector_candidate(
+        "a1", "Bitcoin ETF approval imminent says regulator", entities=["Acme"]
+    )
+    a2 = _vector_candidate(
+        "a2", "Bitcoin ETF approval expected imminent today", entities=["Acme"]
+    )
+    b1 = _vector_candidate(
+        "b1", "Crypto fund greenlight nears final clearance", entities=["Acme"]
+    )
+    b2 = _vector_candidate(
+        "b2", "Crypto fund greenlight clearance coming soon", entities=["Acme"]
+    )
+
+    drafts, _, _ = await event_services._cluster_candidates_with_llm_arbitration(
+        object(),
+        [a1, a2, b1, b2],
+        llm_config=None,
+        vector_neighbors=None,
+    )
+
+    # Sanity: the two groups are genuinely distinct to lexical matching.
+    assert len(drafts) == 2
+
+
+class FakeNeighborSession:
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self.pairs = pairs
+        self.executed_params: dict[str, object] | None = None
+
+    async def execute(self, _stmt, params: dict[str, object]):
+        self.executed_params = params
+        return QueryRows([MappingRow(a_id=a, b_id=b) for a, b in self.pairs])
+
+
+@pytest.mark.asyncio
+async def test_vector_item_neighbors_builds_symmetric_graph() -> None:
+    session = FakeNeighborSession([("news_1", "news_2")])
+
+    neighbors = await event_services.vector_item_neighbors(
+        session,
+        ["news_1", "news_2", "news_3"],
+        config=EmbeddingConfig(provider="local", model="m", version="v1", dimensions=3),
+        min_similarity=0.9,
+    )
+
+    assert neighbors == {"news_1": {"news_2"}, "news_2": {"news_1"}}
+    assert session.executed_params is not None
+    # cosine distance threshold is 1 - min_similarity
+    assert session.executed_params["max_distance"] == pytest.approx(0.1)
+    assert session.executed_params["item_ids"] == ["news_1", "news_2", "news_3"]
+
+
+@pytest.mark.asyncio
+async def test_recluster_builds_vector_neighbors_when_vector_signal_requested(monkeypatch) -> None:
+    session = FakeReclusterSession()
+    captured: dict[str, object] = {}
+
+    async def fake_vector_item_neighbors(_session, item_ids, *, config, min_similarity):
+        captured["item_ids"] = list(item_ids)
+        captured["min_similarity"] = min_similarity
+        return {}
+
+    async def fake_news_item_entities(_session, _news_item_id: str) -> list[str]:
+        return ["Bitcoin"]
+
+    async def fake_news_item_tickers(_session, _news_item_id: str) -> list[str]:
+        return ["BTC"]
+
+    monkeypatch.setattr(event_services, "vector_item_neighbors", fake_vector_item_neighbors)
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+
+    await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=True,
+        embedding_config=EmbeddingConfig(provider="local", dimensions=3),
+        use_vector_signal=True,
+    )
+
+    assert captured["item_ids"] == ["news_1", "news_2"]
+    assert captured["min_similarity"] >= 0.9

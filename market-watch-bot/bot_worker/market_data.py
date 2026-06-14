@@ -8,6 +8,10 @@ from typing import Protocol
 # share one source of truth. See common.market.
 from common.market import GLOBAL_ASSET_CLASSES, HYPERLIQUID_SYMBOL_PREFIX
 
+# These are imported by bot_worker.services.market via this module; declare them as
+# the public re-export surface so the indirection is intentional, not dead imports.
+__all__ = ["GLOBAL_ASSET_CLASSES", "HYPERLIQUID_SYMBOL_PREFIX"]
+
 BINANCE_QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "USD")
 
 

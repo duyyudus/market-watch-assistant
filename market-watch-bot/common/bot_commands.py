@@ -32,7 +32,9 @@ PAYLOAD_VALIDATORS: dict[str, dict[str, dict[str, type]]] = {
     "digest.send": {"optional": {"hours": int, "limit": int, "dry_run": bool}},
     "event.rescore": {"required": {"event_id": str}},
     "event.mark": {"required": {"event_id": str, "status": str}},
-    "event.recluster": {"optional": {"since": str, "limit": int, "apply": bool}},
+    "event.recluster": {
+        "optional": {"since": str, "limit": int, "apply": bool, "llm": bool, "embed": bool},
+    },
     "event.merge": {"required": {"source_event_id": str, "target_event_id": str}},
     "event.split": {"required": {"event_id": str, "news_item_ids": list}},
     "event.compact_archived": {

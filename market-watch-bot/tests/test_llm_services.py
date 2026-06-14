@@ -22,6 +22,7 @@ from bot_worker.llm import (
     LLMEventScore,
     LLMEventSummary,
 )
+from bot_worker.watchlist import WatchlistEntry
 
 
 class ScalarRows:
@@ -146,6 +147,10 @@ class FakeEntityExtractionSession:
         self.scalars_calls = 0
 
     async def scalars(self, _stmt):
+        # Watchlist lookups are positionally irrelevant to this stub; return empty
+        # without disturbing the items/entities call sequence below.
+        if "watchlist_entities" in str(_stmt).lower():
+            return ScalarRows(getattr(self, "watchlist_rows", []))
         self.scalars_calls += 1
         if self.scalars_calls == 1:
             return ScalarRows(self.items)
@@ -731,7 +736,7 @@ async def test_classify_news_item_records_classify_prompt_version(monkeypatch) -
 
     assert run is not None
     assert run.target_type == "news_item"
-    assert run.prompt_version == "classify-v1"
+    assert run.prompt_version == "classify-v2"
     assert run.result["event_type"] == "credit_growth"
 
 
@@ -869,7 +874,7 @@ async def test_extract_entities_with_llm_sanitizes_completed_cached_runs() -> No
         target_id=item.id,
         provider="openrouter",
         model="openai/gpt-4.1-mini",
-        prompt_version="classify-v1",
+        prompt_version="classify-v2",
         prompt_hash="hash",
         status="succeeded",
         result={
@@ -1161,3 +1166,69 @@ async def test_score_event_records_score_prompt_version(monkeypatch) -> None:
     assert run is not None
     assert run.prompt_version == "score-v1"
     assert run.result["score_modifier"] == 5
+
+
+def _classify_result(entities: list[object], tickers: list[str] | None = None) -> dict[str, object]:
+    return {"entities": entities, "tickers": tickers or [], "confidence": 88}
+
+
+def test_classification_entities_attaches_llm_ticker_to_entity() -> None:
+    rows = llm_services._classification_entities(
+        item_id="news_1",
+        result=_classify_result(
+            [{"name": "Apple", "ticker": "aapl", "exchange": "nasdaq", "is_primary": True}]
+        ),
+    )
+
+    assert len(rows) == 1
+    apple = rows[0]
+    assert apple.normalized_name == "Apple"
+    assert apple.ticker == "AAPL"
+    assert apple.exchange == "NASDAQ"
+    assert apple.entity_type == "ticker"
+
+
+def test_classification_entities_watchlist_overrides_hallucinated_ticker() -> None:
+    # The LLM attached a wrong code; the watchlist mapping is authoritative.
+    watch = [WatchlistEntry(symbol="VIC", name="Vingroup", tier="S", region="vietnam")]
+    rows = llm_services._classification_entities(
+        item_id="news_1",
+        result=_classify_result([{"name": "Vingroup", "ticker": "WRONG"}]),
+        watch_entries=watch,
+    )
+
+    assert [(r.normalized_name, r.ticker) for r in rows] == [("Vingroup", "VIC")]
+
+
+def test_classification_entities_watchlist_fills_missing_ticker() -> None:
+    watch = [WatchlistEntry(symbol="VIC", name="Vingroup", tier="S", region="vietnam")]
+    rows = llm_services._classification_entities(
+        item_id="news_1",
+        result=_classify_result([{"name": "Tập đoàn Vingroup"}]),
+        watch_entries=watch,
+    )
+
+    assert rows[0].ticker == "VIC"
+    assert rows[0].entity_type == "ticker"
+
+
+def test_classification_entities_does_not_duplicate_entity_ticker_in_flat_list() -> None:
+    rows = llm_services._classification_entities(
+        item_id="news_1",
+        result=_classify_result(
+            [{"name": "Apple", "ticker": "AAPL", "is_primary": True}], tickers=["AAPL"]
+        ),
+    )
+
+    # "AAPL" must not also appear as a bare code-named entity.
+    assert [r.normalized_name for r in rows] == ["Apple"]
+
+
+def test_classification_entities_rejects_invalid_llm_ticker() -> None:
+    rows = llm_services._classification_entities(
+        item_id="news_1",
+        result=_classify_result([{"name": "Some Co", "ticker": "not a ticker!!"}]),
+    )
+
+    assert rows[0].ticker is None
+    assert rows[0].entity_type == "market_entity"

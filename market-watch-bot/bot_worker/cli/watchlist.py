@@ -15,8 +15,8 @@ from bot_worker.services import (
     resolve_watchlist_market_symbol,
     watchlist_entries,
 )
-from common.market_symbol_resolver import watchlist_resolution_fields_changed
 from bot_worker.watchlist import match_watchlist
+from common.market_symbol_resolver import watchlist_resolution_fields_changed
 
 
 @watchlist_app.command("add")

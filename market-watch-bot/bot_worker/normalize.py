@@ -31,6 +31,23 @@ def normalize_text(value: str | None) -> str:
     return text
 
 
+def is_disclosure_noise_title(
+    title: str | None, patterns: list[str] | tuple[str, ...] | None
+) -> bool:
+    """True when ``title`` contains any routine-disclosure marker in ``patterns``.
+
+    Patterns are operator-configured (settings.ingestion.disclosure_noise_patterns) and
+    matched as case-insensitive substrings; an empty or missing list disables filtering.
+    Routine regulatory/fund disclosures (e.g. RNS-style "Net Asset Value" filings) are
+    republished in bulk by aggregator feeds and cluster/embed together as false merges
+    without being real events, so they are dropped before clustering.
+    """
+    if not title or not patterns:
+        return False
+    haystack = title.casefold()
+    return any(pattern.casefold() in haystack for pattern in patterns if pattern)
+
+
 def canonicalize_url(url: str, tracking_params: set[str] | None = None) -> str:
     parsed = urlsplit(url.strip())
     params = tracking_params if tracking_params is not None else TRACKING_PARAMS

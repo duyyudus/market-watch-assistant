@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import bot_worker.services.bot_commands as bot_commands
 from bot_worker.db.models import BotCommand, EventCluster
 from bot_worker.services.bot_commands import (
     ALLOWED_COMMAND_TYPES,
@@ -335,6 +336,132 @@ async def test_event_mark_applies_valid_status() -> None:
 
     assert result == {"event_id": "evt_1", "status": "confirmed"}
     assert event.status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_event_recluster_passes_enabled_llm_config_when_requested(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        llm_config=None,
+        embedding_config=None,
+        progress=None,
+        use_vector_signal=False,
+    ):
+        captured["llm_config"] = llm_config
+        return {"status": "dry_run", "new_clusters": 0}
+
+    monkeypatch.setattr(bot_commands, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(
+        bot_commands.LLMConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(enabled=False, api_key="secret")),
+    )
+    monkeypatch.setattr(
+        bot_commands.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(provider="local")),
+    )
+
+    command = BotCommand(command_type="event.recluster", payload={"since": "168h", "llm": True})
+    result = await execute_bot_command(object(), command, settings=SimpleNamespace())
+
+    config = captured["llm_config"]
+    assert config is not None
+    # Parity with the CLI --llm flag: a disabled config is coerced to enabled.
+    assert config.enabled is True
+    assert config.api_key == "secret"
+    assert result["status"] == "dry_run"
+
+
+@pytest.mark.asyncio
+async def test_event_recluster_defaults_to_no_llm(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        llm_config=None,
+        embedding_config=None,
+        progress=None,
+        use_vector_signal=False,
+    ):
+        captured["llm_config"] = llm_config
+        captured["embedding_config"] = embedding_config
+        captured["use_vector_signal"] = use_vector_signal
+        return {"status": "dry_run", "new_clusters": 0}
+
+    monkeypatch.setattr(bot_commands, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(
+        bot_commands.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(provider="local")),
+    )
+
+    command = BotCommand(command_type="event.recluster", payload={"since": "48h"})
+    await execute_bot_command(object(), command, settings=SimpleNamespace())
+
+    assert captured["llm_config"] is None
+    # No embed flag: vector grouping is off, but the embedding config is still built so
+    # recluster re-embeds the clusters it invalidates on apply.
+    assert captured["embedding_config"] is not None
+    assert captured["use_vector_signal"] is False
+
+
+@pytest.mark.asyncio
+async def test_event_recluster_passes_embedding_config_when_requested(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    sentinel = bot_commands.EmbeddingConfig(provider="local")
+
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        llm_config=None,
+        embedding_config=None,
+        progress=None,
+        use_vector_signal=False,
+    ):
+        captured["embedding_config"] = embedding_config
+        captured["use_vector_signal"] = use_vector_signal
+        return {"status": "dry_run", "new_clusters": 0}
+
+    monkeypatch.setattr(bot_commands, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(
+        bot_commands.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: sentinel),
+    )
+
+    command = BotCommand(command_type="event.recluster", payload={"embed": True})
+    await execute_bot_command(object(), command, settings=SimpleNamespace())
+
+    assert captured["embedding_config"] is sentinel
+    # The embed flag turns on the vector grouping signal.
+    assert captured["use_vector_signal"] is True
+
+
+@pytest.mark.asyncio
+async def test_event_recluster_llm_without_api_key_raises(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bot_commands.LLMConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(enabled=True, api_key=None)),
+    )
+
+    command = BotCommand(command_type="event.recluster", payload={"llm": True})
+    with pytest.raises(ValueError, match="no LLM API key"):
+        await execute_bot_command(object(), command, settings=SimpleNamespace())
 
 
 @pytest.mark.asyncio

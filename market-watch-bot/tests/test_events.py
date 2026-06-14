@@ -206,6 +206,87 @@ def test_same_event_decision_uses_vietnamese_title_tokens() -> None:
     assert decision.reason == "strong_title_topic_overlap"
 
 
+def test_same_event_decision_rejects_vietnamese_generic_filler_overlap() -> None:
+    # Two unrelated Vietnamese headlines that only share generic filler words
+    # ("triệu" = million, "trong" = in) must not merge on title alone.
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Vì sao giá vàng giảm 7 triệu đồng chỉ trong một ngày?",
+        source_score=75,
+        entities=["Vàng miếng SJC"],
+        region="vietnam",
+        asset_classes=["commodity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="VinFast sẽ cung cấp 1 triệu ôtô cho Green SM trong 4 năm",
+        source_score=75,
+        entities=["VinFast", "Green SM"],
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is SameEventDecisionKind.REJECT
+
+
+def test_same_event_decision_rejects_shared_financial_times_suffix() -> None:
+    # The "- Financial Times" attribution must be stripped so two unrelated FT
+    # articles do not merge on the shared "financial"/"times" tokens.
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Cycling Washington DC’s 18-mile Mount Vernon Trail - Financial Times",
+        source_score=75,
+        entities=["Washington"],
+        region="us",
+        asset_classes=["global_macro"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="Donald Trump’s $100,000 H-1B visa fee blocked by judge - Financial Times",
+        source_score=75,
+        entities=["Donald Trump"],
+        region="us",
+        asset_classes=["global_macro"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is SameEventDecisionKind.REJECT
+
+
+def test_same_event_decision_strips_bloomberg_dotcom_suffix() -> None:
+    # "- Bloomberg.com" (regex previously missed the ".com") must be stripped so
+    # the surviving "bloomberg" token cannot create a spurious overlap.
+    candidate = EventCandidate(
+        news_id="news_2",
+        title="Trump Says Fed Rate Increase Would Be Wrong Ahead of Warsh Debut - Bloomberg.com",
+        source_score=75,
+        entities=["Federal Reserve"],
+        region="us",
+        asset_classes=["rates"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_1",
+        title="OPEC+ Agrees Another Symbolic Quota Increase for July - Bloomberg.com",
+        source_score=75,
+        entities=["OPEC"],
+        region="global",
+        asset_classes=["commodity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is SameEventDecisionKind.REJECT
+
+
 def test_same_ticker_different_topic_with_weak_title_support_is_not_strong_event() -> None:
     candidate = EventCandidate(
         news_id="news_2",

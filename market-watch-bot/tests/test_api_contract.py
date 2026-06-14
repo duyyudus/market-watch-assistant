@@ -1493,6 +1493,8 @@ async def test_command_payload_validation_accepts_valid_payloads(client: AsyncCl
         ("event.rescore", {"event_id": "evt_1"}),
         ("event.mark", {"event_id": "evt_1", "status": "confirmed"}),
         ("event.recluster", {"since": "48h", "limit": 100, "apply": False}),
+        ("event.recluster", {"since": "168h", "llm": True}),
+        ("event.recluster", {"since": "168h", "embed": True}),
         ("event.recluster", {}),
         ("investigation.run_event", {"event_id": "evt_1"}),
         ("retention.preview", {}),

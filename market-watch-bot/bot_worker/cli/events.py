@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -7,13 +8,14 @@ import typer
 from sqlalchemy import select
 
 from bot_worker.cli.apps import event_app
-from bot_worker.cli.common import _echo_json, _run, _with_session
+from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
 from bot_worker.db.models import (
     AgentInvestigation,
     AlertDecisionRecord,
     EventCluster,
     EventScoreHistory,
 )
+from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.services import (
     compact_archived_events,
     digest_preview,
@@ -23,6 +25,7 @@ from bot_worker.services import (
 )
 from bot_worker.services.bot_commands import apply_event_score, score_event_cluster
 from bot_worker.services.events import merge_event_clusters, split_event_cluster
+from common.llm import LLMConfig
 
 
 @event_app.command("list")
@@ -169,13 +172,48 @@ def event_recluster(
     since_value: Annotated[str, typer.Option("--since")] = "48h",
     apply: Annotated[bool, typer.Option("--apply")] = False,
     confirm: Annotated[bool, typer.Option("--confirm")] = False,
-    limit: Annotated[int, typer.Option("--limit")] = 500,
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    use_llm: Annotated[bool, typer.Option("--llm")] = False,
+    use_embed: Annotated[bool, typer.Option("--embed")] = False,
 ) -> None:
-    """Recluster recent event items; dry-run by default."""
+    """Recluster recent event items; dry-run by default.
+
+    Pass --llm to let the model arbitrate ambiguous (gray-zone) groupings, and/or
+    --embed to merge near-duplicate items by embedding similarity (catches paraphrases
+    lexical matching misses). Without either, the regroup is deterministic-only. Both
+    flags run during dry-run too, so the preview reflects what --apply would produce.
+
+    Surviving clusters are always re-embedded on --apply (no --embed needed) whenever
+    embeddings are configured, since recluster invalidates their stored vectors.
+
+    Scope is controlled by --since; --limit is an optional cap on the number of clusters
+    and is unbounded by default.
+    """
     if apply and not confirm:
         typer.echo("Use --confirm with --apply to mutate event clusters.")
         raise typer.Exit(1)
     since = _since_cutoff(since_value)
+    settings = _settings()
+    llm_config: LLMConfig | None = None
+    if use_llm:
+        llm_config = LLMConfig.from_settings(settings)
+        if not llm_config.enabled:
+            llm_config = replace(llm_config, enabled=True)
+        if not llm_config.api_key:
+            typer.echo("--llm requested but no LLM API key is configured.")
+            raise typer.Exit(1)
+    # Build the embedding config whenever embeddings are usable, independent of --embed:
+    # recluster always invalidates cluster embeddings on apply, so it always re-embeds the
+    # surviving clusters to avoid leaving them invisible to live vector attach. --embed is a
+    # separate opt-in that *also* uses stored vectors as a grouping signal during regroup.
+    embedding_config: EmbeddingConfig | None = EmbeddingConfig.from_settings(settings)
+    if embedding_config.provider != "local" and not embedding_config.api_key:
+        embedding_config = None
+
+    def _progress(phase: str, done: int, total: int) -> None:
+        typer.echo(f"\r  {phase} {done}/{total}…", nl=False, err=True)
+        if done == total:
+            typer.echo("", err=True)
 
     async def action(session):
         result = await recluster_recent_event_clusters(
@@ -183,6 +221,10 @@ def event_recluster(
             since=since,
             dry_run=not apply,
             limit=limit,
+            progress=_progress,
+            llm_config=llm_config,
+            embedding_config=embedding_config,
+            use_vector_signal=use_embed,
         )
         _echo_json(result)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -30,13 +31,13 @@ from bot_worker.services.market import (
     run_missed_catalyst_review,
     store_market_moves,
 )
-from common.market_symbol_resolver import watchlist_market_symbol_requests
 from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
 from bot_worker.services.sources import fetch_source, refresh_source_quality_scores
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 from common.bot_commands import ALLOWED_COMMAND_TYPES, EVENT_STATUSES
 from common.llm import LLMConfig
+from common.market_symbol_resolver import watchlist_market_symbol_requests
 
 
 def utcnow() -> datetime:
@@ -171,6 +172,9 @@ async def execute_bot_command(
             investigation_config=InvestigationConfig.from_settings(settings),
             alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
             tracking_params=getattr(settings.ingestion, "tracking_params", None),
+            disclosure_noise_patterns=getattr(
+                settings.ingestion, "disclosure_noise_patterns", None
+            ),
         )
         await record_job_run(session, "pipeline", result)
         return dict(result)
@@ -251,11 +255,30 @@ async def execute_bot_command(
         return {"event_id": event.id, "status": event.status}
 
     if command_type == "event.recluster":
+        llm_config = None
+        if bool(payload.get("llm", False)):
+            llm_config = LLMConfig.from_settings(settings)
+            if not llm_config.enabled:
+                llm_config = replace(llm_config, enabled=True)
+            if not llm_config.api_key:
+                raise ValueError(
+                    "event.recluster requested llm=true but no LLM API key is configured"
+                )
+        # Build the embedding config whenever embeddings are usable (independent of the
+        # embed payload flag) so recluster always re-embeds the clusters it invalidates on
+        # apply. The embed flag is a separate opt-in for the vector grouping signal.
+        embedding_config = EmbeddingConfig.from_settings(settings)
+        if embedding_config.provider != "local" and not embedding_config.api_key:
+            embedding_config = None
+        recluster_limit = payload.get("limit")
         result = await recluster_recent_event_clusters(
             session,
             since=since_cutoff(str(payload.get("since", "48h"))),
             dry_run=not bool(payload.get("apply", False)),
-            limit=int(payload.get("limit", 500)),
+            limit=int(recluster_limit) if recluster_limit is not None else None,
+            llm_config=llm_config,
+            embedding_config=embedding_config,
+            use_vector_signal=bool(payload.get("embed", False)),
         )
         return dict(result)
 

@@ -997,10 +997,28 @@ def test_cli_event_recluster_dry_run_reports_result(monkeypatch) -> None:
     async def fake_with_session(fn):
         return await fn(EmptySession())
 
-    async def fake_recluster(_session, *, since, dry_run, limit):
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        progress=None,
+        llm_config=None,
+        embedding_config=None,
+        use_vector_signal=False,
+    ):
         assert since.tzinfo is not None
         assert dry_run is True
-        assert limit == 500
+        # --limit is unbounded by default; --since scopes the run.
+        assert limit is None
+        assert llm_config is None
+        # No --embed: vector grouping is off, but the embedding config is still built so
+        # recluster can re-embed on apply.
+        assert use_vector_signal is False
+        assert embedding_config is not None
+        if progress is not None:
+            progress("scanning", 1, 1)
         return {
             "status": "dry_run",
             "affected_clusters": 2,
@@ -1010,12 +1028,121 @@ def test_cli_event_recluster_dry_run_reports_result(monkeypatch) -> None:
 
     monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
     monkeypatch.setattr(event_cli, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(event_cli, "_settings", lambda: object())
+    monkeypatch.setattr(
+        event_cli.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(provider="local")),
+    )
 
     result = runner.invoke(app, ["event", "recluster", "--since", "48h"])
 
     assert result.exit_code == 0
     assert '"status": "dry_run"' in result.output
     assert '"affected_clusters": 2' in result.output
+
+
+def test_cli_event_recluster_llm_flag_passes_enabled_config(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    captured: dict[str, object] = {}
+
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        progress=None,
+        llm_config=None,
+        embedding_config=None,
+        use_vector_signal=False,
+    ):
+        captured["llm_config"] = llm_config
+        return {"status": "dry_run", "new_clusters": 0}
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(event_cli, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(event_cli, "_settings", lambda: object())
+    monkeypatch.setattr(
+        event_cli.LLMConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(enabled=False, api_key="secret")),
+    )
+    monkeypatch.setattr(
+        event_cli.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(provider="local")),
+    )
+
+    result = runner.invoke(app, ["event", "recluster", "--since", "48h", "--llm"])
+
+    assert result.exit_code == 0
+    config = captured["llm_config"]
+    assert config is not None
+    # --llm coerces a disabled config to enabled so arbitration actually fires.
+    assert config.enabled is True
+    assert config.api_key == "secret"
+
+
+def test_cli_event_recluster_llm_flag_without_api_key_errors(monkeypatch) -> None:
+    monkeypatch.setattr(event_cli, "_settings", lambda: object())
+    monkeypatch.setattr(
+        event_cli.LLMConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(enabled=True, api_key=None)),
+    )
+
+    result = runner.invoke(app, ["event", "recluster", "--since", "48h", "--llm"])
+
+    assert result.exit_code == 1
+    assert "no LLM API key" in result.output
+
+
+def test_cli_event_recluster_embed_flag_passes_embedding_config(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    captured: dict[str, object] = {}
+    sentinel = event_cli.EmbeddingConfig(provider="local")
+
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        progress=None,
+        llm_config=None,
+        embedding_config=None,
+        use_vector_signal=False,
+    ):
+        captured["embedding_config"] = embedding_config
+        captured["use_vector_signal"] = use_vector_signal
+        return {"status": "dry_run", "new_clusters": 0}
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(event_cli, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(event_cli, "_settings", lambda: object())
+    monkeypatch.setattr(
+        event_cli.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: sentinel),
+    )
+
+    result = runner.invoke(app, ["event", "recluster", "--since", "48h", "--embed"])
+
+    assert result.exit_code == 0
+    assert captured["embedding_config"] is sentinel
+    # --embed turns on the vector grouping signal.
+    assert captured["use_vector_signal"] is True
 
 
 def test_cli_event_recluster_requires_confirm_for_mutation() -> None:
@@ -1153,7 +1280,7 @@ def test_cli_llm_classify_uses_news_item_task(monkeypatch) -> None:
         target_id="news_1",
         provider="openrouter",
         model="openai/gpt-4.1-mini",
-        prompt_version="classify-v1",
+        prompt_version="classify-v2",
         prompt_hash="hash",
         input_snapshot={},
         status="succeeded",
@@ -1183,6 +1310,68 @@ def test_cli_llm_classify_uses_news_item_task(monkeypatch) -> None:
     assert result.exit_code == 0
     assert '"task": "classify"' in result.output
     assert '"target_type": "news_item"' in result.output
+
+
+def test_cli_llm_extract_entities_forwards_force_and_limit(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Session:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(_Session())
+
+    async def fake_extract_entities_with_llm(_session, *, config, limit, force, progress=None):
+        captured["config_enabled"] = config.enabled
+        captured["limit"] = limit
+        captured["force"] = force
+        if progress is not None:
+            progress("preparing", 1, 1)
+            progress("classifying", 1, 1)
+        return 7
+
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "extract_entities_with_llm", fake_extract_entities_with_llm)
+
+    result = runner.invoke(app, ["llm", "extract-entities", "--limit", "50", "--force"])
+
+    assert result.exit_code == 0
+    assert captured == {"config_enabled": True, "limit": 50, "force": True}
+    assert '"task": "extract-entities"' in result.output
+    assert '"extracted": 7' in result.output
+
+
+def test_cli_llm_extract_entities_dry_run_previews_without_extracting(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    class _Session:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(_Session())
+
+    async def fake_preview(_session, *, config, limit, force):
+        called["preview"] = (limit, force)
+        return {
+            "candidates": 3129,
+            "would_extract": 3129,
+            "would_reuse_cached": 0,
+            "skipped_existing": 0,
+        }
+
+    async def fail_extract(*_args, **_kwargs):
+        raise AssertionError("dry-run must not call extract_entities_with_llm")
+
+    monkeypatch.setattr(llm_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(llm_cli, "preview_entity_extraction", fake_preview)
+    monkeypatch.setattr(llm_cli, "extract_entities_with_llm", fail_extract)
+
+    result = runner.invoke(app, ["llm", "extract-entities", "--force", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert called["preview"] == (None, True)
+    assert '"dry_run": true' in result.output
+    assert '"would_extract": 3129' in result.output
 
 
 def test_cli_llm_summarize_uses_event_summary_task(monkeypatch) -> None:
