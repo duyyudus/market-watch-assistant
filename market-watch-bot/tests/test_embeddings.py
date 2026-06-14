@@ -4,7 +4,7 @@ import os
 import pytest
 
 import bot_worker.services.embeddings as embedding_services
-from bot_worker.config import load_settings
+from bot_worker.config import Settings, load_settings
 from bot_worker.db.models import (
     EventCluster,
     EventClusterEmbedding,
@@ -141,12 +141,11 @@ def test_cosine_similarity_orders_related_vectors() -> None:
 def test_embedding_config_reads_api_key_from_env(monkeypatch) -> None:
     monkeypatch.setitem(os.environ, "OPENROUTER_API_KEY", "from-env")
 
-    config = EmbeddingConfig.from_settings(load_settings())
+    # Build settings in-memory rather than via load_settings() so this test never
+    # reads the live settings.yml; operator edits there must not break it.
+    config = EmbeddingConfig.from_settings(Settings(database_url="sqlite+aiosqlite:///:memory:"))
 
     assert config.api_key == "from-env"
-    # max_concurrency is operator-tunable in settings.yml; default coverage lives in
-    # test_load_settings_uses_openrouter_embedding_defaults, so this test (about the
-    # api key) does not pin a value that changes with config.
 
 
 def test_validate_embedding_dimensions_rejects_unsupported_vector_column_size() -> None:
