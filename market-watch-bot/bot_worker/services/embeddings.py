@@ -172,7 +172,7 @@ async def embed_event_clusters(
             )
         )
     if progress is not None:
-        progress("embedding", len(work_items), len(work_items))
+        progress("embedding clusters", len(work_items), len(work_items))
     return len(work_items)
 
 

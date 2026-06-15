@@ -951,7 +951,7 @@ async def recluster_recent_event_clusters(
     for index, item in enumerate(items, start=1):
         candidates.append(await _candidate_from_item(session, item, watch_entries))
         if progress is not None:
-            progress("scanning", index, len(items))
+            progress("scanning clustered items", index, len(items))
     vector_neighbors: dict[str, set[str]] | None = None
     if embedding_config is not None and use_vector_signal:
         vector_neighbors = await vector_item_neighbors(
