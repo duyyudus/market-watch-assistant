@@ -567,6 +567,28 @@ export function buildNewsPath(
   return `/news?${params.toString()}`;
 }
 
+export type EventQueryOptions = {
+  offset: number;
+  pageSize: number;
+  maxItems: number | null;
+  minScore: number;
+};
+
+export function buildEventsPath({
+  offset,
+  pageSize,
+  maxItems,
+  minScore,
+}: EventQueryOptions): string {
+  const params = new URLSearchParams({
+    limit: String(pageSize),
+    offset: String(offset),
+  });
+  if (maxItems !== null) params.set("max_items", String(maxItems));
+  params.set("min_score", String(minScore));
+  return `/events?${params.toString()}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...buildRequestHeaders(API_AUTH_TOKEN), ...(init?.headers ?? {}) },
@@ -586,7 +608,14 @@ export const api = {
   botStatus: () => request<BotStatus>("/bot/status"),
   sources: () => request<ListEnvelope<Source>>("/sources"),
   sourceHealth: () => request<ListEnvelope<SourceHealth>>("/sources/health"),
-  events: () => request<ListEnvelope<EventCluster>>("/events?limit=100"),
+  events: (
+    options: EventQueryOptions = {
+      offset: 0,
+      pageSize: 100,
+      maxItems: 100,
+      minScore: 0,
+    },
+  ) => request<ListEnvelope<EventCluster>>(buildEventsPath(options)),
   event: (id: string) => request<EventDetail>(`/events/${id}`),
   news: (limit = 100, domain?: string, offset = 0, filters?: NewsFilters) =>
     request<ListEnvelope<NewsItem>>(buildNewsPath(limit, domain, offset, filters)),

@@ -30,27 +30,41 @@ async def list_events(
     *,
     limit: int,
     offset: int,
+    max_items: int | None,
+    min_score: int | None,
     status_filter: str | None,
     q: str | None,
 ) -> tuple[list[dict[str, object]], int]:
     report_ranges = _report_range_subquery()
+    report_end_at = report_ranges.c.report_end_at
     stmt = (
         select(
             EventCluster,
             report_ranges.c.report_start_at,
-            report_ranges.c.report_end_at,
+            report_end_at,
         )
         .outerjoin(report_ranges, report_ranges.c.event_cluster_id == EventCluster.id)
         .order_by(
-        EventCluster.final_score.desc(), EventCluster.created_at.desc()
+            report_end_at.is_(None),
+            report_end_at.desc(),
+            EventCluster.last_updated_at.desc(),
+            EventCluster.created_at.desc(),
         )
     )
     if status_filter:
         stmt = stmt.where(EventCluster.status == status_filter)
+    if min_score is not None:
+        stmt = stmt.where(EventCluster.final_score >= min_score)
     if q:
         stmt = stmt.where(EventCluster.canonical_headline.ilike(f"%{q}%"))
-    total = await count_for(session, stmt)
-    rows = list((await session.execute(apply_pagination(stmt, limit=limit, offset=offset))).all())
+    matching_total = await count_for(session, stmt)
+    total = min(matching_total, max_items) if max_items is not None else matching_total
+    if offset >= total:
+        rows = []
+    else:
+        effective_limit = min(limit, total - offset)
+        page_stmt = apply_pagination(stmt, limit=effective_limit, offset=offset)
+        rows = list((await session.execute(page_stmt)).all())
     return (
         [
             event_read_payload(

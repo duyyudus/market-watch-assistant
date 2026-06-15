@@ -769,11 +769,13 @@ describe("App data states", () => {
     )!;
     expect(within(eventPanel).getByText("Updated")).toBeInTheDocument();
     expect(within(eventPanel).getByText("Report range")).toBeInTheDocument();
+    expect(within(eventPanel).queryByText("Status")).not.toBeInTheDocument();
     expect(
       within(eventPanel).getAllByText(
         `${formatTime("2026-05-27T08:30:00Z")} - ${formatTime("2026-05-30T09:00:00Z")}`,
       ).length,
     ).toBeGreaterThan(0);
+    expect(screen.getByText("Event detail").closest("section")).toHaveTextContent("Status");
   });
 
   it("sorts event rows by report range end newest first by default", async () => {
@@ -817,6 +819,131 @@ describe("App data states", () => {
     expect((await screen.findAllByTestId(/^event-card-/))[0]).toHaveAttribute(
       "data-testid",
       "event-card-evt_1",
+    );
+  });
+
+  it("renders event paging filters and reloads when max items or score changes", async () => {
+    apiMock.events.mockResolvedValue({
+      items: [
+        {
+          id: "evt_1",
+          canonical_headline: "Fed signals a slower rate path",
+          summary: "Policy makers leaned less hawkish.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["Federal Reserve"],
+          affected_tickers: [],
+          source_count: 2,
+          final_score: 84,
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+          last_updated_at: "2026-05-29T13:00:00Z",
+        },
+      ],
+      total: 100,
+    });
+    await renderLoadedApp();
+    switchTo("events");
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 100,
+        minScore: 0,
+      }),
+    );
+
+    expect(await screen.findByLabelText("Max items")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Minimum score")).toBeInTheDocument();
+    expect(screen.getByText("1-100 of 100")).toBeInTheDocument();
+
+    apiMock.events.mockClear();
+    fireEvent.change(screen.getByLabelText("Max items"), { target: { value: "500" } });
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 0,
+      }),
+    );
+
+    apiMock.events.mockClear();
+    fireEvent.change(screen.getByLabelText("Minimum score"), { target: { value: "70" } });
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 70,
+      }),
+    );
+  });
+
+  it("loads next and previous event pages with a fixed page size", async () => {
+    apiMock.events.mockResolvedValue({
+      items: [
+        {
+          id: "evt_1",
+          canonical_headline: "Fed signals a slower rate path",
+          summary: "Policy makers leaned less hawkish.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["Federal Reserve"],
+          affected_tickers: [],
+          source_count: 2,
+          final_score: 84,
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+          last_updated_at: "2026-05-29T13:00:00Z",
+        },
+      ],
+      total: 150,
+    });
+    await renderLoadedApp();
+    switchTo("events");
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 100,
+        minScore: 0,
+      }),
+    );
+
+    apiMock.events.mockClear();
+    fireEvent.change(await screen.findByLabelText("Max items"), { target: { value: "500" } });
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 0,
+      }),
+    );
+
+    apiMock.events.mockClear();
+    fireEvent.click(await screen.findByRole("button", { name: "Next event page" }));
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 100,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 0,
+      }),
+    );
+
+    apiMock.events.mockClear();
+    fireEvent.click(await screen.findByRole("button", { name: "Previous event page" }));
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 0,
+      }),
     );
   });
 

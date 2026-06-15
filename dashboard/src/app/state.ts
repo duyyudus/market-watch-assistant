@@ -5,6 +5,7 @@ export const emptyState: DashboardState = {
   sources: [],
   sourceHealth: [],
   events: [],
+  eventsTotal: 0,
   eventDetails: {},
   news: [],
   newsTotal: 0,

@@ -19,11 +19,19 @@ async def list_events(
     session: SessionDep,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    max_items: int | None = Query(None, ge=1),
+    min_score: int | None = Query(None, ge=0, le=100),
     status_filter: str | None = Query(None, alias="status"),
     q: str | None = None,
 ) -> ListEnvelope[EventRead]:
     rows, total = await event_service.list_events(
-        session, limit=limit, offset=offset, status_filter=status_filter, q=q
+        session,
+        limit=limit,
+        offset=offset,
+        max_items=max_items,
+        min_score=min_score,
+        status_filter=status_filter,
+        q=q,
     )
     return ListEnvelope(items=[EventRead.model_validate(row) for row in rows], total=total)
 

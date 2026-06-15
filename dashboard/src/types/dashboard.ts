@@ -33,6 +33,7 @@ export type DashboardState = {
   sources: Source[];
   sourceHealth: SourceHealth[];
   events: EventCluster[];
+  eventsTotal: number;
   eventDetails: Record<string, EventDetail>;
   news: NewsItem[];
   newsTotal: number;

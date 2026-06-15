@@ -93,6 +93,50 @@ async def client():
             created_at=datetime(2026, 5, 29, 13, 0, tzinfo=UTC),
             updated_at=datetime(2026, 5, 29, 13, 10, tzinfo=UTC),
         )
+        newer_report_event = EventCluster(
+            id="evt_newer_report",
+            canonical_headline="Oil supply shock hits global markets",
+            summary="Fresh report with lower score than the Fed event.",
+            status="reported",
+            regions=["global"],
+            asset_classes=["commodity"],
+            affected_entities=["Oil"],
+            affected_tickers=["CL"],
+            source_count=1,
+            top_source_score=70,
+            confirmation_score=70,
+            novelty_score=70,
+            urgency_score=70,
+            market_impact_score=70,
+            relevance_score=70,
+            final_score=70,
+            first_seen_at=datetime(2026, 5, 31, 8, 0, tzinfo=UTC),
+            last_updated_at=datetime(2026, 5, 31, 8, 5, tzinfo=UTC),
+            created_at=datetime(2026, 5, 28, 8, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 31, 8, 5, tzinfo=UTC),
+        )
+        older_high_score_event = EventCluster(
+            id="evt_older_high_score",
+            canonical_headline="Older high score inflation analysis",
+            summary="Higher score but older report range.",
+            status="reported",
+            regions=["us"],
+            asset_classes=["global_macro"],
+            affected_entities=["Inflation"],
+            affected_tickers=["TIP"],
+            source_count=1,
+            top_source_score=95,
+            confirmation_score=90,
+            novelty_score=90,
+            urgency_score=85,
+            market_impact_score=92,
+            relevance_score=90,
+            final_score=95,
+            first_seen_at=datetime(2026, 5, 26, 8, 0, tzinfo=UTC),
+            last_updated_at=datetime(2026, 6, 1, 8, 5, tzinfo=UTC),
+            created_at=datetime(2026, 6, 1, 8, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 1, 8, 5, tzinfo=UTC),
+        )
         news = NormalizedNewsItem(
             id="news_1",
             source_id="src_1",
@@ -164,6 +208,52 @@ async def client():
             normalized_text_hash="mock_text_hash_3",
             created_at=datetime(2026, 5, 28, 12, 30, tzinfo=UTC),
             updated_at=datetime(2026, 5, 28, 12, 31, tzinfo=UTC),
+        )
+        newer_report_news = NormalizedNewsItem(
+            id="news_newer_report",
+            source_id="src_1",
+            title="Oil supply shock hits global markets",
+            snippet="A fresh oil supply report moved markets.",
+            url="https://markets.example.net/oil-newer",
+            canonical_url=None,
+            source_name="Federal Reserve",
+            source_type="official",
+            source_score=70,
+            language="en",
+            region="global",
+            asset_classes=["commodity"],
+            is_paywalled=False,
+            full_text_available=False,
+            processing_status="clustered",
+            published_at=datetime(2026, 6, 2, 8, 0, tzinfo=UTC),
+            fetched_at=datetime(2026, 6, 2, 8, 5, tzinfo=UTC),
+            title_hash="mock_title_hash_newer_report",
+            normalized_text_hash="mock_text_hash_newer_report",
+            created_at=datetime(2026, 6, 2, 8, 5, tzinfo=UTC),
+            updated_at=datetime(2026, 6, 2, 8, 6, tzinfo=UTC),
+        )
+        older_high_score_news = NormalizedNewsItem(
+            id="news_older_high_score",
+            source_id="src_1",
+            title="Older high score inflation analysis",
+            snippet="A high scoring but older report.",
+            url="https://oil.example.org/inflation-older",
+            canonical_url=None,
+            source_name="Federal Reserve",
+            source_type="official",
+            source_score=95,
+            language="en",
+            region="us",
+            asset_classes=["global_macro"],
+            is_paywalled=False,
+            full_text_available=False,
+            processing_status="clustered",
+            published_at=datetime(2026, 5, 26, 8, 0, tzinfo=UTC),
+            fetched_at=datetime(2026, 5, 26, 8, 5, tzinfo=UTC),
+            title_hash="mock_title_hash_older_high_score",
+            normalized_text_hash="mock_text_hash_older_high_score",
+            created_at=datetime(2026, 5, 26, 8, 5, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 26, 8, 6, tzinfo=UTC),
         )
         alert = AlertDecision(
             id="alert_1",
@@ -314,6 +404,20 @@ async def client():
             similarity_score=78,
             added_at=datetime(2026, 5, 29, 13, 3, tzinfo=UTC),
         )
+        newer_report_cluster_item = EventClusterItem(
+            event_cluster_id="evt_newer_report",
+            news_item_id="news_newer_report",
+            relation_type="seed",
+            similarity_score=90,
+            added_at=datetime(2026, 6, 2, 8, 6, tzinfo=UTC),
+        )
+        older_high_score_cluster_item = EventClusterItem(
+            event_cluster_id="evt_older_high_score",
+            news_item_id="news_older_high_score",
+            relation_type="seed",
+            similarity_score=90,
+            added_at=datetime(2026, 5, 26, 8, 6, tzinfo=UTC),
+        )
         entity = NewsEntity(
             id="ent_1",
             news_item_id="news_1",
@@ -379,6 +483,24 @@ async def client():
             embedding_text_hash="hash_4",
             vector=[0.4] * 1536,
         )
+        newer_report_news_embedding = NewsItemEmbedding(
+            news_item_id="news_newer_report",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_5",
+            vector=[0.5] * 1536,
+        )
+        older_high_score_news_embedding = NewsItemEmbedding(
+            news_item_id="news_older_high_score",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_6",
+            vector=[0.6] * 1536,
+        )
         event_embedding = EventClusterEmbedding(
             event_cluster_id="evt_1",
             provider="openai",
@@ -387,6 +509,24 @@ async def client():
             dimensions=1536,
             embedding_text_hash="hash_2",
             vector=[0.2]*1536,
+        )
+        newer_report_event_embedding = EventClusterEmbedding(
+            event_cluster_id="evt_newer_report",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_7",
+            vector=[0.7] * 1536,
+        )
+        older_high_score_event_embedding = EventClusterEmbedding(
+            event_cluster_id="evt_older_high_score",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_8",
+            vector=[0.8] * 1536,
         )
         llm_run = LLMAnalysisRun(
             id="llm_1",
@@ -460,9 +600,13 @@ async def client():
             [
                 source,
                 event,
+                newer_report_event,
+                older_high_score_event,
                 news,
                 other_news,
                 older_news,
+                newer_report_news,
+                older_high_score_news,
                 alert,
                 channel,
                 suppression_rule,
@@ -474,13 +618,19 @@ async def client():
                 cluster_item,
                 fallback_report_cluster_item,
                 older_report_cluster_item,
+                newer_report_cluster_item,
+                older_high_score_cluster_item,
                 entity,
                 score_history,
                 catalyst,
                 news_embedding,
                 other_news_embedding,
                 older_news_embedding,
+                newer_report_news_embedding,
+                older_high_score_news_embedding,
                 event_embedding,
+                newer_report_event_embedding,
+                older_high_score_event_embedding,
                 llm_run,
                 investigation,
                 market_move,
@@ -531,7 +681,7 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
     events = await client.get("/events")
     assert events.status_code == 200
-    event_item = events.json()["items"][0]
+    event_item = next(item for item in events.json()["items"] if item["id"] == "evt_1")
     assert event_item["final_score"] == 84
     assert event_item["report_start_at"] == "2026-05-27T08:30:00"
     assert event_item["report_end_at"] == "2026-05-30T09:00:00"
@@ -570,11 +720,44 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_events_endpoint_orders_filters_and_caps_by_report_range(
+    client: AsyncClient,
+) -> None:
+    events = await client.get("/events?limit=100")
+    assert events.status_code == 200
+    payload = events.json()
+    assert [item["id"] for item in payload["items"][:3]] == [
+        "evt_newer_report",
+        "evt_1",
+        "evt_older_high_score",
+    ]
+
+    filtered = await client.get("/events?limit=100&min_score=75")
+    assert filtered.status_code == 200
+    filtered_payload = filtered.json()
+    assert filtered_payload["total"] == 2
+    assert [item["id"] for item in filtered_payload["items"]] == [
+        "evt_1",
+        "evt_older_high_score",
+    ]
+
+    capped_exhausted = await client.get("/events?limit=100&offset=2&max_items=2")
+    assert capped_exhausted.status_code == 200
+    assert capped_exhausted.json()["total"] == 2
+    assert capped_exhausted.json()["items"] == []
+
+    uncapped = await client.get("/events?limit=1&offset=1")
+    assert uncapped.status_code == 200
+    assert uncapped.json()["total"] >= 3
+    assert [item["id"] for item in uncapped.json()["items"]] == ["evt_1"]
+
+
+@pytest.mark.asyncio
 async def test_news_list_supports_limit_and_article_domain_filter(client: AsyncClient) -> None:
     limited = await client.get("/news?limit=1")
     assert limited.status_code == 200
     assert len(limited.json()["items"]) == 1
-    assert limited.json()["total"] == 3
+    assert limited.json()["total"] == 5
 
     response = await client.get("/news?domain=www.example.com")
     assert response.status_code == 200
@@ -1651,9 +1834,9 @@ async def test_maintenance_endpoints(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert "total_news_items" in data
-    assert data["news_items_with_embeddings"] == 3
+    assert data["news_items_with_embeddings"] == 5
     assert data["embedding_coverage_pct"] == 100.0
-    assert data["event_clusters_with_embeddings"] == 1
+    assert data["event_clusters_with_embeddings"] == 3
     assert data["cluster_embedding_coverage_pct"] == 100.0
     assert "openai" in data["news_providers"]
     assert "text-embedding-3-small" in data["news_models"]

@@ -71,7 +71,8 @@ export function EventRows({
             {event.canonical_headline}
           </div>
           <div className="mt-2 text-xs text-base-content/60">
-            {event.status} · {event.source_count} sources
+            {event.status !== "reported" ? `${event.status} · ` : ""}
+            {event.source_count} sources
           </div>
           <div className="mt-1 text-xs text-base-content/50">
             Reports {formatTimeRange(event.report_start_at, event.report_end_at)}
@@ -93,13 +94,6 @@ export function EventRows({
             <SortableHeader
               label="Headline"
               sortKey="canonical_headline"
-              currentSortKey={sortConfig.key}
-              direction={sortConfig.direction}
-              onSort={requestSort}
-            />
-            <SortableHeader
-              label="Status"
-              sortKey="status"
               currentSortKey={sortConfig.key}
               direction={sortConfig.direction}
               onSort={requestSort}
@@ -148,7 +142,6 @@ export function EventRows({
               <td className="py-3 px-4 max-w-[520px] whitespace-normal text-sm font-semibold text-zinc-200 group-hover:text-primary transition-colors duration-150">
                 {event.canonical_headline}
               </td>
-              <td className="py-3 px-4 text-zinc-400 font-normal text-xs">{event.status}</td>
               <td className="py-3 px-4 text-zinc-400 font-normal text-xs w-20 whitespace-nowrap">
                 {event.source_count}
               </td>

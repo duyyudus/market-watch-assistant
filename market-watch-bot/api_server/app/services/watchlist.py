@@ -6,12 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.app.schemas import WatchlistCreate, WatchlistUpdate
 from common.config import Settings
+from common.db.models import MarketSymbolResolution, WatchlistEntity
 from common.external_providers import ProviderRetryPolicy
 from common.market_symbol_resolver import (
     resolve_watchlist_market_symbol,
     watchlist_resolution_fields_changed,
 )
-from common.db.models import MarketSymbolResolution, WatchlistEntity
 
 
 def _attach_resolution(

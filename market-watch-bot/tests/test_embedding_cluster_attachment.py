@@ -428,6 +428,20 @@ async def test_build_event_clusters_excludes_deduped_news_items() -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_event_clusters_prioritizes_newest_report_candidates() -> None:
+    session = FakeSession(scalars=[[], []])
+
+    await services.build_event_clusters(session)
+
+    sql = str(session.scalars_statements[0]).lower()
+    assert "order by coalesce(" in sql
+    assert "normalized_news_items.published_at" in sql
+    assert "normalized_news_items.fetched_at" in sql
+    assert "normalized_news_items.created_at" in sql
+    assert "desc" in sql
+
+
+@pytest.mark.asyncio
 async def test_build_event_clusters_attaches_gray_zone_match_when_llm_confirms(
     monkeypatch,
 ) -> None:

@@ -26,6 +26,7 @@ import { emptyErrors, emptyState } from "./state";
 
 type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail" | "newsDetail">;
 export type AlertSubTab = "decisions" | "settings";
+const EVENT_PAGE_SIZE = 100;
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -38,6 +39,9 @@ export function useDashboardData() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [eventsOffset, setEventsOffset] = useState(0);
+  const [eventsMaxItems, setEventsMaxItems] = useState<number | null>(100);
+  const [eventsMinScore, setEventsMinScore] = useState(0);
   const [newsLimit, setNewsLimit] = useState(100);
   const [newsOffset, setNewsOffset] = useState(0);
   const [newsDomain, setNewsDomain] = useState("");
@@ -54,6 +58,8 @@ export function useDashboardData() {
   const [alertSubTab, setAlertSubTab] = useState<AlertSubTab>("decisions");
   const loadingKeys = useRef(new Set<ResourceKey>());
   const resourceCache = useRef(createResourceCache({ ttlMs: 15_000 })).current;
+  const eventsParams = `${eventsOffset}:${eventsMaxItems ?? "all"}:${eventsMinScore}`;
+  const previousEventsParams = useRef(eventsParams);
   const newsParams = `${newsLimit}:${newsDomain}:${newsOffset}:${newsSourceId}:${newsStatus}:${newsRegion}`;
   const previousNewsParams = useRef(newsParams);
   const newsFilters = useMemo(
@@ -78,7 +84,8 @@ export function useDashboardData() {
         return { ...current, sourceHealth: normalizeListResponse<SourceHealth>(value).items };
       }
       if (key === "events") {
-        return { ...current, events: normalizeListResponse<EventCluster>(value).items };
+        const response = normalizeListResponse<EventCluster>(value);
+        return { ...current, events: response.items, eventsTotal: response.total };
       }
       if (key === "news") {
         const response = normalizeListResponse<NewsItem>(value);
@@ -128,7 +135,13 @@ export function useDashboardData() {
       status: api.botStatus,
       sources: api.sources,
       sourceHealth: api.sourceHealth,
-      events: api.events,
+      events: () =>
+        api.events({
+          offset: eventsOffset,
+          pageSize: EVENT_PAGE_SIZE,
+          maxItems: eventsMaxItems,
+          minScore: eventsMinScore,
+        }),
       news: () =>
         newsFilters
           ? api.news(newsLimit, newsDomain || undefined, newsOffset, newsFilters)
@@ -144,7 +157,7 @@ export function useDashboardData() {
       alertPolicy: api.alertPolicy,
       presets: api.presets,
     }),
-    [newsDomain, newsFilters, newsLimit, newsOffset],
+    [eventsMaxItems, eventsMinScore, eventsOffset, newsDomain, newsFilters, newsLimit, newsOffset],
   );
 
   const loadResources = useCallback(
@@ -271,6 +284,15 @@ export function useDashboardData() {
       if (view === "news") void loadResources(["news"], true);
     }
   }, [loadResources, newsParams, view]);
+
+  useEffect(() => {
+    if (previousEventsParams.current !== eventsParams) {
+      previousEventsParams.current = eventsParams;
+      if (view === "events" || view === "overview" || view === "commands") {
+        void loadResources(["events"], true);
+      }
+    }
+  }, [eventsParams, loadResources, view]);
 
   useEffect(() => {
     let source: EventSource | null = null;
@@ -473,6 +495,23 @@ export function useDashboardData() {
     setSelectedNewsId(null);
   }, []);
 
+  const updateEventsMaxItems = useCallback((maxItems: number | null) => {
+    setEventsMaxItems(maxItems);
+    setEventsOffset(0);
+    setSelectedEventId(null);
+  }, []);
+
+  const updateEventsMinScore = useCallback((score: number) => {
+    setEventsMinScore(Math.max(0, Math.min(100, score)));
+    setEventsOffset(0);
+    setSelectedEventId(null);
+  }, []);
+
+  const updateEventsOffset = useCallback((offset: number) => {
+    setEventsOffset(Math.max(0, offset));
+    setSelectedEventId(null);
+  }, []);
+
   return {
     view,
     setView,
@@ -481,6 +520,13 @@ export function useDashboardData() {
     loading,
     query,
     setQuery,
+    eventsOffset,
+    setEventsOffset: updateEventsOffset,
+    eventsPageSize: EVENT_PAGE_SIZE,
+    eventsMaxItems,
+    setEventsMaxItems: updateEventsMaxItems,
+    eventsMinScore,
+    setEventsMinScore: updateEventsMinScore,
     autoRefreshMs,
     setAutoRefreshMs,
     actionError,

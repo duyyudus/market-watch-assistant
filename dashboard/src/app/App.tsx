@@ -34,6 +34,13 @@ export function App() {
     loading,
     query,
     setQuery,
+    eventsOffset,
+    setEventsOffset,
+    eventsPageSize,
+    eventsMaxItems,
+    setEventsMaxItems,
+    eventsMinScore,
+    setEventsMinScore,
     autoRefreshMs,
     setAutoRefreshMs,
     actionError,
@@ -289,9 +296,17 @@ export function App() {
                 events={filteredEvents}
                 error={resourceErrors.events}
                 query={query}
+                maxItems={eventsMaxItems}
+                minScore={eventsMinScore}
+                offset={eventsOffset}
+                pageSize={eventsPageSize}
+                total={state.eventsTotal}
                 selectedEvent={selectedEvent}
                 selectedEventDetail={selectedEventDetail}
                 setQuery={setQuery}
+                setMaxItems={setEventsMaxItems}
+                setMinScore={setEventsMinScore}
+                setOffset={setEventsOffset}
                 setSelectedEventId={(id) => {
                   setSelectedEventId(id);
                   void loadEventDetail(id);

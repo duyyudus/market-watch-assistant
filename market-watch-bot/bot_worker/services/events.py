@@ -882,6 +882,13 @@ async def build_event_clusters(
         select(NormalizedNewsItem)
         .where(NormalizedNewsItem.processing_status == "normalized")
         .where(NormalizedNewsItem.id.not_in(existing_news))
+        .order_by(
+            func.coalesce(
+                NormalizedNewsItem.published_at,
+                NormalizedNewsItem.fetched_at,
+                NormalizedNewsItem.created_at,
+            ).desc()
+        )
         .limit(limit)
     )
     items = list((await session.scalars(stmt)).all())

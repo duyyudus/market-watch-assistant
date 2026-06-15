@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildEventsPath,
   buildMaintenanceLLMCostsPath,
   buildMaintenancePipelineMetricsPath,
   buildRequestHeaders,
@@ -48,6 +49,25 @@ describe("normalizeListResponse", () => {
     expect(buildMaintenancePipelineMetricsPath(20, 40)).toBe(
       "/maintenance/pipeline-metrics?limit=20&offset=40",
     );
+  });
+
+  it("builds event endpoint paths with pagination cap and score filter", () => {
+    expect(
+      buildEventsPath({
+        offset: 100,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 70,
+      }),
+    ).toBe("/events?limit=100&offset=100&max_items=500&min_score=70");
+    expect(
+      buildEventsPath({
+        offset: 0,
+        pageSize: 100,
+        maxItems: null,
+        minScore: 0,
+      }),
+    ).toBe("/events?limit=100&offset=0&min_score=0");
   });
 });
 
