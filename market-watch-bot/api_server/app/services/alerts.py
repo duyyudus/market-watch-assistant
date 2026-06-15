@@ -15,7 +15,11 @@ from api_server.app.schemas import (
     AlertSuppressionRuleUpdate,
     BotCommandRead,
 )
-from api_server.app.services.events import event_summary_payload, report_ranges_by_event_id
+from api_server.app.services.events import (
+    _report_range_subquery,
+    event_summary_payload,
+    report_ranges_by_event_id,
+)
 from api_server.app.services.query import apply_pagination, count_for
 from common.db.models import (
     AlertChannel,
@@ -30,31 +34,58 @@ from common.db.models import (
     AlertDeliveryRecord as AlertDelivery,
 )
 
+ACTIONABLE_ALERT_DECISIONS = ("immediate_alert", "watchlist_batch", "daily_digest", "digest_only")
+
 
 async def list_alerts(
     session: AsyncSession,
     *,
     limit: int,
     offset: int,
-    level: str | None,
+    max_items: int | None,
+    decision: str | None,
 ) -> tuple[list[AlertRead], int]:
+    report_ranges = _report_range_subquery()
+    report_end_at = report_ranges.c.report_end_at
     stmt = (
-        select(AlertDecision, EventCluster)
+        select(
+            AlertDecision,
+            EventCluster,
+            report_ranges.c.report_start_at,
+            report_end_at,
+        )
         .join(EventCluster, EventCluster.id == AlertDecision.event_cluster_id)
-        .order_by(AlertDecision.created_at.desc())
+        .outerjoin(report_ranges, report_ranges.c.event_cluster_id == EventCluster.id)
+        .order_by(
+            report_end_at.is_(None),
+            report_end_at.desc(),
+            AlertDecision.created_at.desc(),
+        )
     )
-    if level:
-        stmt = stmt.where(AlertDecision.decision == level)
-    total = await count_for(session, stmt)
-    rows = list((await session.execute(apply_pagination(stmt, limit=limit, offset=offset))).all())
-    report_ranges = await report_ranges_by_event_id(session, [event.id for _alert, event in rows])
+    if decision:
+        stmt = stmt.where(AlertDecision.decision == decision)
+    else:
+        stmt = stmt.where(AlertDecision.decision.in_(ACTIONABLE_ALERT_DECISIONS))
+    matching_total = await count_for(session, stmt)
+    total = min(matching_total, max_items) if max_items is not None else matching_total
+    if offset >= total:
+        rows = []
+    else:
+        effective_limit = min(limit, total - offset)
+        rows = list(
+            (
+                await session.execute(
+                    apply_pagination(stmt, limit=effective_limit, offset=offset)
+                )
+            ).all()
+        )
     return (
         [
             AlertRead(
                 **alert.__dict__,
-                event=event_summary_payload(event, report_ranges.get(event.id)),
+                event=event_summary_payload(event, (report_start_at, report_end_at)),
             )
-            for alert, event in rows
+            for alert, event, report_start_at, report_end_at in rows
         ],
         total,
     )

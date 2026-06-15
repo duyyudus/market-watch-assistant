@@ -25,10 +25,16 @@ async def list_alerts(
     session: SessionDep,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    max_items: int | None = Query(None, ge=1),
+    decision: str | None = None,
     level: str | None = None,
 ) -> ListEnvelope[AlertRead]:
     rows, total = await alert_service.list_alerts(
-        session, limit=limit, offset=offset, level=level
+        session,
+        limit=limit,
+        offset=offset,
+        max_items=max_items,
+        decision=decision or level,
     )
     return ListEnvelope(items=rows, total=total)
 

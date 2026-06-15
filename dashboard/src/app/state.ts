@@ -13,6 +13,7 @@ export const emptyState: DashboardState = {
   newsFilterOptions: { statuses: [], regions: [] },
   newsDetails: {},
   alerts: [],
+  alertsTotal: 0,
   alertDetails: {},
   alertChannels: [],
   alertSuppressionRules: [],

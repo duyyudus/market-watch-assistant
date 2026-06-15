@@ -363,7 +363,7 @@ def _cosine(left: list[float], right: list[float]) -> float:
     dot = 0.0
     norm_left = 0.0
     norm_right = 0.0
-    for a, b in zip(left, right):
+    for a, b in zip(left, right, strict=False):
         dot += a * b
         norm_left += a * a
         norm_right += b * b

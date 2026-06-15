@@ -589,6 +589,28 @@ export function buildEventsPath({
   return `/events?${params.toString()}`;
 }
 
+export type AlertQueryOptions = {
+  offset: number;
+  pageSize: number;
+  maxItems: number | null;
+  decision: string | null;
+};
+
+export function buildAlertsPath({
+  offset,
+  pageSize,
+  maxItems,
+  decision,
+}: AlertQueryOptions): string {
+  const params = new URLSearchParams({
+    limit: String(pageSize),
+    offset: String(offset),
+  });
+  if (maxItems !== null) params.set("max_items", String(maxItems));
+  if (decision) params.set("decision", decision);
+  return `/alerts?${params.toString()}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...buildRequestHeaders(API_AUTH_TOKEN), ...(init?.headers ?? {}) },
@@ -622,7 +644,14 @@ export const api = {
   newsDomains: () => request<ListEnvelope<string>>("/news/domains"),
   newsFilterOptions: () => request<NewsFilterOptions>("/news/filter-options"),
   newsDetail: (id: string) => request<NewsDetail>(`/news/${id}`),
-  alerts: () => request<ListEnvelope<AlertDecision>>("/alerts?limit=100"),
+  alerts: (
+    options: AlertQueryOptions = {
+      offset: 0,
+      pageSize: 100,
+      maxItems: 100,
+      decision: null,
+    },
+  ) => request<ListEnvelope<AlertDecision>>(buildAlertsPath(options)),
   alert: (id: string) => request<AlertDecision>(`/alerts/${id}`),
   alertChannels: () => request<ListEnvelope<AlertChannel>>("/alert-channels"),
   alertSuppressionRules: () =>

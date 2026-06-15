@@ -41,6 +41,13 @@ export function App() {
     setEventsMaxItems,
     eventsMinScore,
     setEventsMinScore,
+    alertsOffset,
+    setAlertsOffset,
+    alertsPageSize,
+    alertsMaxItems,
+    setAlertsMaxItems,
+    alertsDecision,
+    setAlertsDecision,
     autoRefreshMs,
     setAutoRefreshMs,
     actionError,
@@ -277,6 +284,7 @@ export function App() {
           {loading ? <div className="loading loading-spinner loading-md" /> : null}
           <div className="lg:hidden">
             <select
+              aria-label="View"
               className="select select-bordered mb-4 w-full"
               onChange={(event) => setView(event.target.value as View)}
               value={view}
@@ -350,6 +358,14 @@ export function App() {
                 onTabChange={setAlertSubTab}
                 alerts={state.alerts}
                 alertError={resourceErrors.alerts}
+                maxItems={alertsMaxItems}
+                decision={alertsDecision}
+                offset={alertsOffset}
+                pageSize={alertsPageSize}
+                total={state.alertsTotal}
+                setMaxItems={setAlertsMaxItems}
+                setDecision={setAlertsDecision}
+                setOffset={setAlertsOffset}
                 selectedAlertId={selectedAlert?.id}
                 selectedAlertDetail={selectedAlertDetail}
                 selectedAlertEventDetail={selectedAlertEventDetail}

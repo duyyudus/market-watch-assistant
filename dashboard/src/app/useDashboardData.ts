@@ -27,6 +27,7 @@ import { emptyErrors, emptyState } from "./state";
 type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail" | "newsDetail">;
 export type AlertSubTab = "decisions" | "settings";
 const EVENT_PAGE_SIZE = 100;
+const ALERT_PAGE_SIZE = 100;
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -42,6 +43,9 @@ export function useDashboardData() {
   const [eventsOffset, setEventsOffset] = useState(0);
   const [eventsMaxItems, setEventsMaxItems] = useState<number | null>(100);
   const [eventsMinScore, setEventsMinScore] = useState(0);
+  const [alertsOffset, setAlertsOffset] = useState(0);
+  const [alertsMaxItems, setAlertsMaxItems] = useState<number | null>(100);
+  const [alertsDecision, setAlertsDecision] = useState<string | null>(null);
   const [newsLimit, setNewsLimit] = useState(100);
   const [newsOffset, setNewsOffset] = useState(0);
   const [newsDomain, setNewsDomain] = useState("");
@@ -60,6 +64,8 @@ export function useDashboardData() {
   const resourceCache = useRef(createResourceCache({ ttlMs: 15_000 })).current;
   const eventsParams = `${eventsOffset}:${eventsMaxItems ?? "all"}:${eventsMinScore}`;
   const previousEventsParams = useRef(eventsParams);
+  const alertsParams = `${alertsOffset}:${alertsMaxItems ?? "all"}:${alertsDecision ?? "all"}`;
+  const previousAlertsParams = useRef(alertsParams);
   const newsParams = `${newsLimit}:${newsDomain}:${newsOffset}:${newsSourceId}:${newsStatus}:${newsRegion}`;
   const previousNewsParams = useRef(newsParams);
   const newsFilters = useMemo(
@@ -98,7 +104,8 @@ export function useDashboardData() {
         return { ...current, newsFilterOptions: value as NewsFilterOptions };
       }
       if (key === "alerts") {
-        return { ...current, alerts: normalizeListResponse<AlertDecision>(value).items };
+        const response = normalizeListResponse<AlertDecision>(value);
+        return { ...current, alerts: response.items, alertsTotal: response.total };
       }
       if (key === "alertChannels") {
         return {
@@ -148,7 +155,13 @@ export function useDashboardData() {
           : api.news(newsLimit, newsDomain || undefined, newsOffset),
       newsDomains: api.newsDomains,
       newsFilterOptions: api.newsFilterOptions,
-      alerts: api.alerts,
+      alerts: () =>
+        api.alerts({
+          offset: alertsOffset,
+          pageSize: ALERT_PAGE_SIZE,
+          maxItems: alertsMaxItems,
+          decision: alertsDecision,
+        }),
       alertChannels: api.alertChannels,
       alertSuppressionRules: api.alertSuppressionRules,
       jobs: api.jobs,
@@ -157,7 +170,18 @@ export function useDashboardData() {
       alertPolicy: api.alertPolicy,
       presets: api.presets,
     }),
-    [eventsMaxItems, eventsMinScore, eventsOffset, newsDomain, newsFilters, newsLimit, newsOffset],
+    [
+      alertsDecision,
+      alertsMaxItems,
+      alertsOffset,
+      eventsMaxItems,
+      eventsMinScore,
+      eventsOffset,
+      newsDomain,
+      newsFilters,
+      newsLimit,
+      newsOffset,
+    ],
   );
 
   const loadResources = useCallback(
@@ -293,6 +317,19 @@ export function useDashboardData() {
       }
     }
   }, [eventsParams, loadResources, view]);
+
+  useEffect(() => {
+    if (previousAlertsParams.current !== alertsParams) {
+      previousAlertsParams.current = alertsParams;
+      if (
+        view === "alerts" ||
+        view === "overview" ||
+        view === "operations"
+      ) {
+        void loadResources(["alerts"], true);
+      }
+    }
+  }, [alertsParams, loadResources, view]);
 
   useEffect(() => {
     let source: EventSource | null = null;
@@ -512,6 +549,23 @@ export function useDashboardData() {
     setSelectedEventId(null);
   }, []);
 
+  const updateAlertsMaxItems = useCallback((maxItems: number | null) => {
+    setAlertsMaxItems(maxItems);
+    setAlertsOffset(0);
+    setSelectedAlertId(null);
+  }, []);
+
+  const updateAlertsDecision = useCallback((decision: string | null) => {
+    setAlertsDecision(decision);
+    setAlertsOffset(0);
+    setSelectedAlertId(null);
+  }, []);
+
+  const updateAlertsOffset = useCallback((offset: number) => {
+    setAlertsOffset(Math.max(0, offset));
+    setSelectedAlertId(null);
+  }, []);
+
   return {
     view,
     setView,
@@ -527,6 +581,13 @@ export function useDashboardData() {
     setEventsMaxItems: updateEventsMaxItems,
     eventsMinScore,
     setEventsMinScore: updateEventsMinScore,
+    alertsOffset,
+    setAlertsOffset: updateAlertsOffset,
+    alertsPageSize: ALERT_PAGE_SIZE,
+    alertsMaxItems,
+    setAlertsMaxItems: updateAlertsMaxItems,
+    alertsDecision,
+    setAlertsDecision: updateAlertsDecision,
     autoRefreshMs,
     setAutoRefreshMs,
     actionError,

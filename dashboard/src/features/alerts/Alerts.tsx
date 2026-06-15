@@ -20,6 +20,14 @@ export function Alerts({
   onTabChange,
   alerts,
   alertError,
+  maxItems,
+  decision,
+  offset,
+  pageSize,
+  total,
+  setMaxItems,
+  setDecision,
+  setOffset,
   selectedAlertId,
   selectedAlertDetail,
   selectedAlertEventDetail,
@@ -39,6 +47,14 @@ export function Alerts({
   onTabChange: (tab: AlertTab) => void;
   alerts: AlertDecision[];
   alertError?: string;
+  maxItems: number | null;
+  decision: string | null;
+  offset: number;
+  pageSize: number;
+  total: number;
+  setMaxItems: (value: number | null) => void;
+  setDecision: (value: string | null) => void;
+  setOffset: (value: number) => void;
   selectedAlertId?: string;
   selectedAlertDetail?: AlertDecision;
   selectedAlertEventDetail?: EventDetail;
@@ -62,6 +78,14 @@ export function Alerts({
         <AlertDecisionsTab
           alerts={alerts}
           error={alertError}
+          maxItems={maxItems}
+          decision={decision}
+          offset={offset}
+          pageSize={pageSize}
+          total={total}
+          setMaxItems={setMaxItems}
+          setDecision={setDecision}
+          setOffset={setOffset}
           retry={retryAlerts}
           acknowledge={acknowledge}
           dismiss={dismiss}

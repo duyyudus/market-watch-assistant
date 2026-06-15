@@ -14,8 +14,8 @@ from bot_worker.db.models import (
 )
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.events import EventCandidate, EventClusterDraft, VectorClusterCandidate
-from bot_worker.services.llm import LLMClusterOutcome
 from bot_worker.llm import LLMConfig
+from bot_worker.services.llm import LLMClusterOutcome
 
 
 class ScalarRows:

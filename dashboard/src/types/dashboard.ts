@@ -44,6 +44,7 @@ export type DashboardState = {
   };
   newsDetails: Record<string, NewsDetail>;
   alerts: AlertDecision[];
+  alertsTotal: number;
   alertDetails: Record<string, AlertDecision>;
   alertChannels: AlertChannel[];
   alertSuppressionRules: AlertSuppressionRule[];

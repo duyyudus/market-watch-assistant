@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -41,7 +41,7 @@ from common.external_providers import ProviderRetryPolicy
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
-RECENT_AT = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+RECENT_AT = datetime.now(UTC).replace(microsecond=0) - timedelta(days=1)
 RECENT_DAY = RECENT_AT.date().isoformat()
 
 
@@ -263,6 +263,33 @@ async def client():
             score_breakdown={"final_score": 84},
             channel="telegram",
             created_at=datetime(2026, 5, 29, 13, 5, tzinfo=UTC),
+        )
+        newer_report_alert = AlertDecision(
+            id="alert_newer_report",
+            event_cluster_id="evt_newer_report",
+            decision="digest_only",
+            reason="score_above_digest_threshold",
+            score_breakdown={"final_score": 70},
+            channel="log",
+            created_at=datetime(2026, 5, 28, 8, 5, tzinfo=UTC),
+        )
+        older_report_alert = AlertDecision(
+            id="alert_older_high_score",
+            event_cluster_id="evt_older_high_score",
+            decision="watchlist_batch",
+            reason="score_above_watchlist_threshold",
+            score_breakdown={"final_score": 95},
+            channel="log",
+            created_at=datetime(2026, 6, 1, 8, 5, tzinfo=UTC),
+        )
+        archive_alert = AlertDecision(
+            id="alert_archive",
+            event_cluster_id="evt_newer_report",
+            decision="archive_only",
+            reason="score_below_digest_threshold",
+            score_breakdown={"final_score": 40},
+            channel="log",
+            created_at=datetime(2026, 6, 2, 9, 5, tzinfo=UTC),
         )
         channel = AlertChannel(
             id="chan_1",
@@ -608,6 +635,9 @@ async def client():
                 newer_report_news,
                 older_high_score_news,
                 alert,
+                newer_report_alert,
+                older_report_alert,
+                archive_alert,
                 channel,
                 suppression_rule,
                 job,
@@ -699,7 +729,7 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
 
     alerts = await client.get("/alerts")
     assert alerts.status_code == 200
-    alert_item = alerts.json()["items"][0]
+    alert_item = next(item for item in alerts.json()["items"] if item["id"] == "alert_1")
     assert alert_item["event"]["id"] == "evt_1"
     assert alert_item["event"]["report_start_at"] == "2026-05-27T08:30:00"
     assert alert_item["event"]["report_end_at"] == "2026-05-30T09:00:00"
@@ -750,6 +780,47 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
     assert uncapped.status_code == 200
     assert uncapped.json()["total"] >= 3
     assert [item["id"] for item in uncapped.json()["items"]] == ["evt_1"]
+
+
+@pytest.mark.asyncio
+async def test_alerts_endpoint_orders_filters_and_caps_by_report_range(
+    client: AsyncClient,
+) -> None:
+    alerts = await client.get("/alerts?limit=100")
+    assert alerts.status_code == 200
+    payload = alerts.json()
+    assert payload["total"] == 3
+    assert [item["id"] for item in payload["items"]] == [
+        "alert_newer_report",
+        "alert_1",
+        "alert_older_high_score",
+    ]
+    assert all(item["decision"] != "archive_only" for item in payload["items"])
+
+    immediate = await client.get("/alerts?limit=100&decision=immediate_alert")
+    assert immediate.status_code == 200
+    immediate_payload = immediate.json()
+    assert immediate_payload["total"] == 1
+    assert [item["id"] for item in immediate_payload["items"]] == ["alert_1"]
+
+    archive = await client.get("/alerts?limit=100&decision=archive_only")
+    assert archive.status_code == 200
+    archive_payload = archive.json()
+    assert archive_payload["total"] == 1
+    assert [item["id"] for item in archive_payload["items"]] == ["alert_archive"]
+
+    capped = await client.get("/alerts?limit=100&max_items=2")
+    assert capped.status_code == 200
+    assert capped.json()["total"] == 2
+    assert [item["id"] for item in capped.json()["items"]] == [
+        "alert_newer_report",
+        "alert_1",
+    ]
+
+    second_page = await client.get("/alerts?limit=1&offset=1")
+    assert second_page.status_code == 200
+    assert second_page.json()["total"] == 3
+    assert [item["id"] for item in second_page.json()["items"]] == ["alert_1"]
 
 
 @pytest.mark.asyncio
@@ -1070,13 +1141,13 @@ async def test_maintenance_observability_endpoints_return_costs_and_pipeline_met
 
 @pytest.mark.asyncio
 async def test_event_stream_emits_heartbeat_and_existing_change_events(client: AsyncClient) -> None:
-    async with client.stream("GET", "/events/stream?replay=true&limit=4") as response:
+    async with client.stream("GET", "/events/stream?replay=true&limit=8") as response:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         body = ""
         async for chunk in response.aiter_text():
             body += chunk
-            if body.count("\n\n") >= 4:
+            if body.count("\n\n") >= 8:
                 break
 
     assert "event: heartbeat" in body

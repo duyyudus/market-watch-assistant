@@ -27,6 +27,7 @@ export function AlertsTable({
   dismiss,
   selectedAlertId,
   onSelectAlert,
+  showDecisionColumn = true,
 }: {
   rows: AlertDecision[];
   compact?: boolean;
@@ -36,9 +37,10 @@ export function AlertsTable({
   dismiss?: (id: string) => Promise<void>;
   selectedAlertId?: string | null;
   onSelectAlert?: (id: string) => void;
+  showDecisionColumn?: boolean;
 }) {
   const { items: sortedRows, requestSort, sortConfig } = useSortableData(rows, {
-    key: "sent",
+    key: compact ? "sent" : "event_report_range",
     direction: "desc",
   });
 
@@ -114,13 +116,15 @@ export function AlertsTable({
       <table className="table w-full">
         <thead>
           <tr className="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider">
-            <SortableHeader
-              label="Decision"
-              sortKey="decision"
-              currentSortKey={sortConfig.key}
-              direction={sortConfig.direction}
-              onSort={requestSort}
-            />
+            {showDecisionColumn ? (
+              <SortableHeader
+                label="Decision"
+                sortKey="decision"
+                currentSortKey={sortConfig.key}
+                direction={sortConfig.direction}
+                onSort={requestSort}
+              />
+            ) : null}
             <SortableHeader
               label="Event"
               sortKey="event_headline"
@@ -173,11 +177,13 @@ export function AlertsTable({
               }}
               tabIndex={onSelectAlert ? 0 : undefined}
             >
-              <td className="py-3 px-4 whitespace-nowrap">
-                <StatusBadge tone={alertDecisionTone(row.decision)}>
-                  {alertDecisionLabel(row.decision)}
-                </StatusBadge>
-              </td>
+              {showDecisionColumn ? (
+                <td className="py-3 px-4 whitespace-nowrap">
+                  <StatusBadge tone={alertDecisionTone(row.decision)}>
+                    {alertDecisionLabel(row.decision)}
+                  </StatusBadge>
+                </td>
+              ) : null}
               <td className="py-3 px-4 max-w-[700px] whitespace-normal text-sm font-semibold text-zinc-200">
                 {row.event?.headline ?? row.reason}
               </td>

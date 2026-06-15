@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildAlertsPath,
   buildEventsPath,
   buildMaintenanceLLMCostsPath,
   buildMaintenancePipelineMetricsPath,
@@ -68,6 +69,25 @@ describe("normalizeListResponse", () => {
         minScore: 0,
       }),
     ).toBe("/events?limit=100&offset=0&min_score=0");
+  });
+
+  it("builds alert endpoint paths with pagination cap and decision filter", () => {
+    expect(
+      buildAlertsPath({
+        offset: 100,
+        pageSize: 100,
+        maxItems: 500,
+        decision: "immediate_alert",
+      }),
+    ).toBe("/alerts?limit=100&offset=100&max_items=500&decision=immediate_alert");
+    expect(
+      buildAlertsPath({
+        offset: 0,
+        pageSize: 100,
+        maxItems: null,
+        decision: null,
+      }),
+    ).toBe("/alerts?limit=100&offset=0");
   });
 });
 

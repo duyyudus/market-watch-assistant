@@ -650,8 +650,9 @@ async function renderLoadedApp() {
 }
 
 function switchTo(view: string) {
-  const selectors = screen.getAllByRole("combobox");
-  fireEvent.change(selectors[selectors.length - 1], { target: { value: view } });
+  fireEvent.change(screen.getByRole("combobox", { name: "View" }), {
+    target: { value: view },
+  });
 }
 
 beforeEach(() => {
@@ -1698,6 +1699,82 @@ describe("App data states", () => {
         `${formatTime("2026-05-27T08:30:00Z")} - ${formatTime("2026-05-30T09:00:00Z")}`,
       ).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("filters and paginates alert decisions from overview controls", async () => {
+    apiMock.alerts.mockResolvedValue({
+      items: [
+        {
+          id: "alert_2",
+          event_cluster_id: "evt_2",
+          decision: "digest_only",
+          reason: "score_above_digest_threshold",
+          score_breakdown: { final_score: 61, relevance_score: 70 },
+          channel: "log",
+          sent_at: null,
+          created_at: "2026-05-29T14:05:00Z",
+          event: {
+            id: "evt_2",
+            headline: "Treasury yields fall after jobs report",
+            final_score: 61,
+            report_start_at: "2026-05-29T14:00:00Z",
+            report_end_at: "2026-05-29T14:00:00Z",
+          },
+          latest_delivery_status: "queued",
+          latest_delivery_error: "waiting for digest window",
+          acknowledged_at: null,
+        },
+      ],
+      total: 250,
+    });
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    const alertOverview = (await screen.findByRole("heading", { name: "Alert decisions" })).closest(
+      "section",
+    )!;
+    await waitFor(() =>
+      expect(apiMock.alerts).toHaveBeenLastCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 100,
+        decision: null,
+      }),
+    );
+    expect(within(alertOverview).queryByRole("columnheader", { name: "Decision" })).not.toBeInTheDocument();
+    expect(within(alertOverview).getByText("1-100 of 250")).toBeInTheDocument();
+
+    fireEvent.change(within(alertOverview).getByLabelText("Alert max items"), {
+      target: { value: "all" },
+    });
+    await waitFor(() =>
+      expect(apiMock.alerts).toHaveBeenLastCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: null,
+        decision: null,
+      }),
+    );
+
+    fireEvent.click(within(alertOverview).getByRole("button", { name: "Next alert page" }));
+    await waitFor(() =>
+      expect(apiMock.alerts).toHaveBeenLastCalledWith({
+        offset: 100,
+        pageSize: 100,
+        maxItems: null,
+        decision: null,
+      }),
+    );
+
+    fireEvent.click(within(alertOverview).getByRole("button", { name: "Immediate" }));
+    await waitFor(() =>
+      expect(apiMock.alerts).toHaveBeenLastCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: null,
+        decision: "immediate_alert",
+      }),
+    );
   });
 
   it("shows alert action errors", async () => {
