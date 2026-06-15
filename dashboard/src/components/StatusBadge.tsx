@@ -9,5 +9,5 @@ export function StatusBadge({
   children: ReactNode;
   tone?: StatusBadgeTone;
 }) {
-  return <span className={`badge badge-sm badge-${tone}`}>{children}</span>;
+  return <span className={`badge badge-sm badge-${tone} whitespace-nowrap`}>{children}</span>;
 }

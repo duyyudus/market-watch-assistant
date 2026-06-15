@@ -173,7 +173,7 @@ export function AlertsTable({
               }}
               tabIndex={onSelectAlert ? 0 : undefined}
             >
-              <td className="py-3 px-4">
+              <td className="py-3 px-4 whitespace-nowrap">
                 <StatusBadge tone={alertDecisionTone(row.decision)}>
                   {alertDecisionLabel(row.decision)}
                 </StatusBadge>
