@@ -22,14 +22,17 @@ from bot_worker.embeddings import (
     EmbeddingConfig,
 )
 from bot_worker.events import (
+    WEAK_SAME_EVENT_REASONS,
     EventCandidate,
     EventClusterDraft,
     SameEventDecision,
     SameEventDecisionKind,
     VectorClusterCandidate,
     _compatible_context,
+    _cosine,
     _specific_entity_set,
     classify_same_event,
+    coherence_outlier_indices,
     is_vector_cluster_attachable,
     vector_similarity_score,
 )
@@ -42,7 +45,11 @@ from bot_worker.scoring import (
     score_event,
 )
 from bot_worker.services.embeddings import embed_event_cluster, embed_event_clusters
-from bot_worker.services.llm import resolve_llm_cluster_decision
+from bot_worker.services.llm import (
+    LLMClusterOutcome,
+    evaluate_llm_cluster_decision,
+    resolve_llm_cluster_decision,
+)
 from bot_worker.services.watchlists import (
     news_item_entities,
     news_item_tickers,
@@ -428,11 +435,179 @@ def _add_candidate_to_draft_with_metadata(
             draft.watchlist_tier = candidate.watchlist_tier
 
 
+async def _load_item_vectors(
+    session: AsyncSession,
+    item_ids: list[str],
+    *,
+    config: EmbeddingConfig,
+) -> dict[str, list[float]]:
+    """Fetch embedding vectors for ``item_ids`` matching the active embedding config."""
+    if not item_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(NewsItemEmbedding.news_item_id, NewsItemEmbedding.vector).where(
+                NewsItemEmbedding.news_item_id.in_(item_ids),
+                NewsItemEmbedding.provider == config.provider,
+                NewsItemEmbedding.embedding_model == config.model,
+                NewsItemEmbedding.embedding_version == config.version,
+                NewsItemEmbedding.dimensions == config.dimensions,
+            )
+        )
+    ).all()
+    return {row[0]: list(row[1]) for row in rows}
+
+
+async def _eject_coherence_outliers(
+    session: AsyncSession,
+    drafts: list[EventClusterDraft],
+    candidates: list[EventCandidate],
+    *,
+    embedding_config: EmbeddingConfig,
+    llm_config: LLMConfig | None,
+) -> tuple[list[EventClusterDraft], int, int]:
+    """Re-check weak-branch members against each cluster's embedding coherence.
+
+    A member that joined via a title/entity-only branch but sits far below its
+    cluster's coherent core (see ``coherence_outlier_indices``) is routed back through
+    LLM arbitration. If the LLM declines -- or cannot run -- the member is split into
+    its own cluster. Strong joins (ticker, near-duplicate) are never revisited.
+    """
+    if not any(
+        len(draft.news_ids) >= 3 for draft in drafts
+    ):
+        return drafts, 0, 0
+    cand_by_id = {candidate.news_id: candidate for candidate in candidates}
+    all_ids = [news_id for draft in drafts for news_id in draft.news_ids]
+    vectors_by_id = await _load_item_vectors(session, all_ids, config=embedding_config)
+
+    rebuilt: list[EventClusterDraft] = []
+    llm_decisions = 0
+    llm_splits = 0
+    for draft in drafts:
+        member_ids = list(draft.news_ids)
+        guarded = {
+            index
+            for index, news_id in enumerate(member_ids)
+            if (draft.item_decision_metadata.get(news_id, {}) or {}).get("reason")
+            in WEAK_SAME_EVENT_REASONS
+        }
+        if not guarded:
+            rebuilt.append(draft)
+            continue
+        member_vectors = [vectors_by_id.get(news_id) for news_id in member_ids]
+        outlier_indices = coherence_outlier_indices(member_vectors, guarded=guarded)
+        if not outlier_indices:
+            rebuilt.append(draft)
+            continue
+
+        kept_ids = [
+            news_id
+            for index, news_id in enumerate(member_ids)
+            if index not in outlier_indices
+        ]
+        ejected: list[str] = []
+        for index in sorted(outlier_indices):
+            news_id = member_ids[index]
+            candidate = cand_by_id.get(news_id)
+            kept_candidates = [cand_by_id[n] for n in kept_ids if n in cand_by_id]
+            outcome = LLMClusterOutcome.DISABLED
+            if candidate is not None and kept_candidates and llm_config is not None:
+                kept_draft = _rebuild_draft(draft, kept_candidates)
+                best = max(
+                    (
+                        _vector_cosine(member_vectors[index], member_vectors[k])
+                        for k, n in enumerate(member_ids)
+                        if n in kept_ids and member_vectors[index] and member_vectors[k]
+                    ),
+                    default=0.0,
+                )
+                outcome = await evaluate_llm_cluster_decision(
+                    session=session,
+                    item=NormalizedNewsItem(
+                        id=candidate.news_id,
+                        title=candidate.title,
+                        snippet=candidate.snippet,
+                        source_name=candidate.source_name,
+                        source_type=candidate.source_type,
+                        source_score=candidate.source_score,
+                        region=candidate.region,
+                        asset_classes=candidate.asset_classes,
+                    ),
+                    cluster=_draft_cluster(kept_draft),
+                    similarity=best,
+                    config=llm_config,
+                    entities=candidate.entities,
+                    tickers=candidate.tickers,
+                )
+            if outcome in (LLMClusterOutcome.ATTACH, LLMClusterOutcome.REJECT):
+                llm_decisions += 1
+            # Fail safe: only split on an explicit REJECT verdict. If the LLM is
+            # unavailable (disabled or provider error), keep the deterministic merge
+            # intact rather than splitting on a transient outage.
+            if outcome is LLMClusterOutcome.REJECT:
+                ejected.append(news_id)
+                llm_splits += 1
+            else:
+                kept_ids.append(news_id)
+
+        if not ejected:
+            rebuilt.append(draft)
+            continue
+        ordered_kept = [n for n in member_ids if n in set(kept_ids)]
+        rebuilt.append(
+            _rebuild_draft(
+                draft,
+                [cand_by_id[n] for n in ordered_kept if n in cand_by_id],
+            )
+        )
+        for news_id in ejected:
+            candidate = cand_by_id.get(news_id)
+            if candidate is None:
+                continue
+            split = EventClusterDraft(canonical_headline=candidate.title)
+            original = draft.item_decision_metadata.get(news_id, {}) or {}
+            _add_candidate_to_draft_with_metadata(
+                split,
+                candidate,
+                metadata={
+                    "decision_source": "coherence_guard",
+                    "decision": "split",
+                    "reason": "embedding_outlier",
+                    "prior_reason": original.get("reason"),
+                },
+            )
+            rebuilt.append(split)
+    return rebuilt, llm_decisions, llm_splits
+
+
+def _rebuild_draft(
+    template: EventClusterDraft,
+    members: list[EventCandidate],
+) -> EventClusterDraft:
+    """Reconstruct a draft from a subset of its members, preserving join metadata."""
+    fresh = EventClusterDraft(canonical_headline=template.canonical_headline)
+    for candidate in members:
+        metadata = template.item_decision_metadata.get(candidate.news_id) or {
+            "decision_source": "seed",
+            "decision": "seed",
+        }
+        _add_candidate_to_draft_with_metadata(fresh, candidate, metadata=metadata)
+    return fresh
+
+
+def _vector_cosine(left: list[float] | None, right: list[float] | None) -> float:
+    if not left or not right:
+        return 0.0
+    return _cosine(left, right)
+
+
 async def _cluster_candidates_with_llm_arbitration(
     session: AsyncSession,
     candidates: list[EventCandidate],
     *,
     llm_config: LLMConfig | None,
+    embedding_config: EmbeddingConfig | None = None,
     vector_neighbors: dict[str, set[str]] | None = None,
 ) -> tuple[list[EventClusterDraft], int, int]:
     drafts: list[EventClusterDraft] = []
@@ -514,6 +689,15 @@ async def _cluster_candidates_with_llm_arbitration(
         )
     if vector_neighbors:
         drafts = _merge_drafts_by_vector(drafts, vector_neighbors)
+    if embedding_config is not None:
+        drafts, guard_decisions, _ = await _eject_coherence_outliers(
+            session,
+            drafts,
+            candidates,
+            embedding_config=embedding_config,
+            llm_config=llm_config,
+        )
+        llm_decisions += guard_decisions
     return drafts, llm_decisions, llm_attaches
 
 
@@ -783,6 +967,7 @@ async def recluster_recent_event_clusters(
         session,
         candidates,
         llm_config=llm_config,
+        embedding_config=embedding_config,
         vector_neighbors=vector_neighbors,
     )
     membership = list(
@@ -1001,6 +1186,7 @@ async def build_event_clusters(
             session,
             candidates,
             llm_config=llm_config,
+            embedding_config=embedding_config,
         )
     )
     drafts = batch_drafts

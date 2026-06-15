@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -332,6 +333,91 @@ def is_vector_cluster_attachable(
         return bool(candidate_entities & item_entity_set)
 
     return candidate.similarity >= max(min_similarity, 0.94)
+
+
+# Same-event reasons that rest on title/entity surface overlap alone, with no strong
+# corroboration (shared ticker, near-duplicate embedding). These are the branches that
+# let unrelated articles in when they share boilerplate phrasing or a single incidental
+# entity, so they are the ones the embedding-coherence guard re-checks.
+WEAK_SAME_EVENT_REASONS = frozenset(
+    {
+        "strong_title_topic_overlap",
+        "specific_entity_overlap_with_title_support",
+        "specific_entity_overlap_without_title_support",
+        "weak_entity_overlap_requires_arbitration",
+    }
+)
+# Embedding-coherence guard. A weak-branch member is treated as a cluster intruder when
+# its best cosine to any cluster-mate is BOTH low in absolute terms AND well below the
+# cluster's tightest internal pair. The test is relative to each cluster's own
+# coherence, not an absolute floor: a uniformly-loose-but-legitimate cluster keeps its
+# members, while a hanger-on on a tight core is ejected. Thresholds were validated
+# against the live corpus -- this catches the known false merges at a ~7% link-flag
+# rate, whereas an absolute 0.75 floor flagged ~50% of all existing memberships.
+COHERENCE_GUARD_MIN_CLUSTER_SIZE = 3
+COHERENCE_GUARD_ABS_FLOOR = 0.70
+COHERENCE_GUARD_GAP = 0.15
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    dot = 0.0
+    norm_left = 0.0
+    norm_right = 0.0
+    for a, b in zip(left, right):
+        dot += a * b
+        norm_left += a * a
+        norm_right += b * b
+    if norm_left <= 0.0 or norm_right <= 0.0:
+        return 0.0
+    return dot / math.sqrt(norm_left * norm_right)
+
+
+def coherence_outlier_indices(
+    vectors: list[list[float] | None],
+    *,
+    guarded: set[int],
+) -> set[int]:
+    """Return indices of cluster members that are embedding-coherence intruders.
+
+    ``vectors`` are the member embeddings (``None`` for members without one), and
+    ``guarded`` restricts the test to members joined via a weak same-event branch --
+    strong joins (shared ticker, near-duplicate) are never second-guessed.
+
+    A guarded member is an outlier when its maximum cosine to any other member is below
+    ``COHERENCE_GUARD_ABS_FLOOR`` and more than ``COHERENCE_GUARD_GAP`` below the
+    cluster's tightest internal pair. Clusters smaller than
+    ``COHERENCE_GUARD_MIN_CLUSTER_SIZE`` never flag: a pair has no stable core to
+    deviate from, so the intruder is indistinguishable from its host.
+    """
+    n = len(vectors)
+    if n < COHERENCE_GUARD_MIN_CLUSTER_SIZE:
+        return set()
+    pair_cosine: dict[tuple[int, int], float] = {}
+    for i in range(n):
+        if vectors[i] is None:
+            continue
+        for j in range(i + 1, n):
+            if vectors[j] is None:
+                continue
+            pair_cosine[(i, j)] = _cosine(vectors[i], vectors[j])
+    if not pair_cosine:
+        return set()
+    cluster_max = max(pair_cosine.values())
+    outliers: set[int] = set()
+    for i in guarded:
+        if i >= n or vectors[i] is None:
+            continue
+        neighbours = [
+            pair_cosine[(min(i, j), max(i, j))]
+            for j in range(n)
+            if j != i and vectors[j] is not None
+        ]
+        if not neighbours:
+            continue
+        best = max(neighbours)
+        if best < COHERENCE_GUARD_ABS_FLOOR and best < cluster_max - COHERENCE_GUARD_GAP:
+            outliers.add(i)
+    return outliers
 
 
 def _candidate_from_cluster_draft(cluster: EventClusterDraft) -> EventCandidate:

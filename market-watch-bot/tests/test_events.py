@@ -7,6 +7,7 @@ from bot_worker.events import (
     VectorClusterCandidate,
     classify_same_event,
     cluster_candidates,
+    coherence_outlier_indices,
     is_vector_cluster_attachable,
     vector_similarity_score,
 )
@@ -351,6 +352,57 @@ def test_cluster_candidates_uses_best_strong_match_not_first_match() -> None:
         ["news_oil"],
         ["news_copper", "news_follow"],
     ]
+
+
+def _on_common_axis(shared: float, axis: int, dims: int = 5) -> list[float]:
+    """Unit vector = sqrt(shared)*common_direction + sqrt(1-shared)*axis_unit.
+
+    Any two such vectors that differ only in ``axis`` have cosine exactly ``shared``,
+    which makes cluster geometry easy to assert."""
+    import math
+
+    vec = [0.0] * dims
+    vec[0] = math.sqrt(shared)
+    vec[axis] = math.sqrt(1.0 - shared)
+    return vec
+
+
+def test_coherence_guard_flags_intruder_on_tight_core() -> None:
+    import math
+
+    seed = [1.0, 0.0, 0.0, 0.0]
+    near_dup = [0.9, math.sqrt(1 - 0.81), 0.0, 0.0]  # cos(seed, near_dup) = 0.90
+    intruder = [0.0, 0.0, 1.0, 0.0]  # cos ~0 to both
+
+    outliers = coherence_outlier_indices([seed, near_dup, intruder], guarded={1, 2})
+
+    assert outliers == {2}
+
+
+def test_coherence_guard_spares_uniformly_loose_cluster() -> None:
+    # Every member sits at cosine 0.6 to every other: coherent at that level, no
+    # internal gap for a member to fall through, so nothing is an outlier.
+    members = [_on_common_axis(0.6, axis=i) for i in (1, 2, 3)]
+
+    assert coherence_outlier_indices(members, guarded={1, 2}) == set()
+
+
+def test_coherence_guard_only_inspects_guarded_members() -> None:
+    seed = [1.0, 0.0, 0.0, 0.0]
+    near_dup = [0.9, (1 - 0.81) ** 0.5, 0.0, 0.0]
+    intruder = [0.0, 0.0, 1.0, 0.0]
+
+    # The intruder is index 2 but was joined via a strong branch (not guarded);
+    # the guard must not touch it.
+    assert coherence_outlier_indices([seed, near_dup, intruder], guarded={1}) == set()
+
+
+def test_coherence_guard_ignores_pairs_with_no_stable_core() -> None:
+    seed = [1.0, 0.0, 0.0, 0.0]
+    intruder = [0.0, 1.0, 0.0, 0.0]
+
+    # Size-2 cluster: cannot tell intruder from host, so never flag.
+    assert coherence_outlier_indices([seed, intruder], guarded={1}) == set()
 
 
 def test_vector_cluster_attach_policy_accepts_strict_compatible_match() -> None:

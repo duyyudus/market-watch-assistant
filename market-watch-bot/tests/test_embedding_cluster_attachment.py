@@ -13,7 +13,8 @@ from bot_worker.db.models import (
     NormalizedNewsItem,
 )
 from bot_worker.embeddings import EmbeddingConfig
-from bot_worker.events import EventCandidate, VectorClusterCandidate
+from bot_worker.events import EventCandidate, EventClusterDraft, VectorClusterCandidate
+from bot_worker.services.llm import LLMClusterOutcome
 from bot_worker.llm import LLMConfig
 
 
@@ -1071,7 +1072,9 @@ async def test_recluster_threads_llm_config_into_arbitration(monkeypatch) -> Non
     session = FakeReclusterSession()
     captured: dict[str, object] = {}
 
-    async def fake_arbitration(_session, _candidates, *, llm_config, vector_neighbors=None):
+    async def fake_arbitration(
+        _session, _candidates, *, llm_config, embedding_config=None, vector_neighbors=None
+    ):
         captured["llm_config"] = llm_config
         return [], 0, 0
 
@@ -1276,3 +1279,102 @@ async def test_recluster_builds_vector_neighbors_when_vector_signal_requested(mo
 
     assert captured["item_ids"] == ["news_1", "news_2"]
     assert captured["min_similarity"] >= 0.9
+
+
+def _guard_candidate(news_id: str, title: str) -> EventCandidate:
+    return EventCandidate(
+        news_id=news_id,
+        title=title,
+        source_score=70,
+        entities=[],
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        published_at=datetime(2026, 6, 2, tzinfo=UTC),
+    )
+
+
+def _guard_draft() -> tuple[EventClusterDraft, list[EventCandidate]]:
+    """A 3-member draft: seed + near-duplicate core, plus a weak-branch intruder."""
+    seed = _guard_candidate("seed", "Sacombank dời trụ sở chính")
+    legit = _guard_candidate("legit", "Sacombank đổi địa chỉ trụ sở chính")
+    intruder = _guard_candidate("intruder", "Tin tức sáng 15-6: hỗ trợ bảo hiểm y tế")
+    draft = EventClusterDraft(canonical_headline=seed.title)
+    draft.news_ids = ["seed", "legit", "intruder"]
+    draft.item_decision_metadata = {
+        "seed": {"decision_source": "seed", "decision": "seed"},
+        "legit": {
+            "decision_source": "deterministic",
+            "reason": "ticker_overlap_with_title_support",
+        },
+        "intruder": {
+            "decision_source": "deterministic",
+            "reason": "strong_title_topic_overlap",
+        },
+    }
+    return draft, [seed, legit, intruder]
+
+
+_GUARD_VECTORS = {
+    "seed": [1.0, 0.0, 0.0, 0.0],
+    "legit": [0.9, (1 - 0.81) ** 0.5, 0.0, 0.0],  # cos(seed, legit) = 0.90 -> tight core
+    "intruder": [0.0, 0.0, 1.0, 0.0],  # ~0 cosine to both -> outlier
+}
+
+
+@pytest.mark.asyncio
+async def test_coherence_guard_keeps_member_when_llm_unavailable(monkeypatch) -> None:
+    draft, candidates = _guard_draft()
+
+    async def fake_load_vectors(_session, _ids, *, config):
+        return dict(_GUARD_VECTORS)
+
+    async def fake_evaluate(**_kwargs):
+        return LLMClusterOutcome.FAILED  # e.g. OpenRouter down
+
+    monkeypatch.setattr(event_services, "_load_item_vectors", fake_load_vectors)
+    monkeypatch.setattr(event_services, "evaluate_llm_cluster_decision", fake_evaluate)
+
+    drafts, decisions, splits = await event_services._eject_coherence_outliers(
+        object(),
+        [draft],
+        candidates,
+        embedding_config=EmbeddingConfig(provider="local"),
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    # Fail safe: the flagged intruder stays in the original cluster, nothing splits.
+    assert len(drafts) == 1
+    assert sorted(drafts[0].news_ids) == ["intruder", "legit", "seed"]
+    assert splits == 0
+    assert decisions == 0
+
+
+@pytest.mark.asyncio
+async def test_coherence_guard_splits_member_on_llm_reject(monkeypatch) -> None:
+    draft, candidates = _guard_draft()
+
+    async def fake_load_vectors(_session, _ids, *, config):
+        return dict(_GUARD_VECTORS)
+
+    async def fake_evaluate(**_kwargs):
+        return LLMClusterOutcome.REJECT
+
+    monkeypatch.setattr(event_services, "_load_item_vectors", fake_load_vectors)
+    monkeypatch.setattr(event_services, "evaluate_llm_cluster_decision", fake_evaluate)
+
+    drafts, decisions, splits = await event_services._eject_coherence_outliers(
+        object(),
+        [draft],
+        candidates,
+        embedding_config=EmbeddingConfig(provider="local"),
+        llm_config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    # Explicit reject -> intruder split into its own cluster, core preserved.
+    kept = next(d for d in drafts if "seed" in d.news_ids)
+    split = next(d for d in drafts if "intruder" in d.news_ids)
+    assert sorted(kept.news_ids) == ["legit", "seed"]
+    assert split.news_ids == ["intruder"]
+    assert split.item_decision_metadata["intruder"]["decision_source"] == "coherence_guard"
+    assert splits == 1
+    assert decisions == 1
