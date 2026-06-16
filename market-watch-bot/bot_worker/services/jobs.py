@@ -11,8 +11,17 @@ from bot_worker.db.models import (
 from bot_worker.services.pipeline_metrics import slow_pipeline_stages
 
 
-async def record_job_run(session: AsyncSession, job_name: str, result: dict[str, object]) -> JobRun:
-    if job_name == "pipeline" and isinstance(result.get("pipeline_metrics"), dict):
+async def record_job_run(
+    session: AsyncSession,
+    job_name: str,
+    result: dict[str, object],
+    *,
+    status: str = "success",
+    error_message: str | None = None,
+) -> JobRun:
+    if status == "success" and job_name == "pipeline" and isinstance(
+        result.get("pipeline_metrics"), dict
+    ):
         prior = list(
             (
                 await session.scalars(
@@ -29,9 +38,10 @@ async def record_job_run(session: AsyncSession, job_name: str, result: dict[str,
         metrics["slow_stages"] = slow_pipeline_stages(metrics, prior_results)
     run = JobRun(
         job_name=job_name,
-        status="success",
+        status=status,
         completed_at=datetime.now(UTC),
         result=result,
+        error_message=error_message,
     )
     session.add(run)
     await session.flush()

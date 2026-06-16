@@ -6,7 +6,14 @@ import typer
 from sqlalchemy import select
 
 from bot_worker.cli.apps import pipeline_app
-from bot_worker.cli.common import _db_error, _echo_json, _run, _settings, _with_session
+from bot_worker.cli.common import (
+    _db_error,
+    _echo_json,
+    _record_failed_job,
+    _run,
+    _settings,
+    _with_session,
+)
 from bot_worker.db.models import (
     AgentInvestigation,
     AlertDecisionRecord,
@@ -18,10 +25,12 @@ from bot_worker.db.models import (
     NormalizedNewsItem,
     RawNewsItem,
 )
+from bot_worker.db.session import make_session_factory
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
 from bot_worker.services import (
     AlertDeliveryConfig,
+    deliver_pending_alerts,
     record_job_run,
     run_pipeline,
 )
@@ -38,25 +47,45 @@ def pipeline_run(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) ->
         )
         return
 
-    async def action(session):
+    async def action():
         settings = _settings()
-        result = await run_pipeline(
-            session,
-            freshness_hours=settings.ingestion.rss_freshness_hours,
-            embedding_config=EmbeddingConfig.from_settings(settings),
-            llm_config=LLMConfig.from_settings(settings),
-            investigation_config=InvestigationConfig.from_settings(settings),
-            alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
-            tracking_params=getattr(settings.ingestion, "tracking_params", None),
-            disclosure_noise_patterns=getattr(
-                settings.ingestion, "disclosure_noise_patterns", None
-            ),
-        )
-        await record_job_run(session, "pipeline", result)
+        factory = make_session_factory(settings)
+
+        async def pipeline_txn(session):
+            result = await run_pipeline(
+                session,
+                freshness_hours=settings.ingestion.rss_freshness_hours,
+                embedding_config=EmbeddingConfig.from_settings(settings),
+                llm_config=LLMConfig.from_settings(settings),
+                investigation_config=InvestigationConfig.from_settings(settings),
+                alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
+                tracking_params=getattr(settings.ingestion, "tracking_params", None),
+                disclosure_noise_patterns=getattr(
+                    settings.ingestion, "disclosure_noise_patterns", None
+                ),
+            )
+            await record_job_run(session, "pipeline", result)
+            return result
+
+        try:
+            result = await _with_session(
+                pipeline_txn, settings=settings, session_factory=factory
+            )
+        except Exception as exc:
+            await _record_failed_job(factory, "pipeline", exc)
+            raise
+
+        # Deliver alerts after the pipeline transaction has committed, so a failed
+        # delivery can be retried without re-running the whole pipeline.
+        delivery_config = AlertDeliveryConfig.from_settings(settings)
+        if delivery_config.channel == "telegram":
+            counts = await deliver_pending_alerts(factory, delivery_config)
+            result["delivered_alerts"] = counts["sent"]
+            result["failed_alert_deliveries"] = counts["failed"]
         _echo_json(result)
 
     try:
-        _run(_with_session(action))
+        _run(action())
     except Exception as exc:  # noqa: BLE001
         _db_error(exc)
         raise typer.Exit(1) from exc

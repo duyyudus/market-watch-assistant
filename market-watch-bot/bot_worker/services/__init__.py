@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
+    deliver_pending_alerts,
     dispatch_pending_alerts,
     format_alert_message,
     format_webhook_payload,
@@ -134,6 +135,7 @@ __all__ = [
     "digest_display_headline",
     "digest_preview",
     "digest_time_in_window",
+    "deliver_pending_alerts",
     "dispatch_pending_alerts",
     "embed_event_cluster",
     "embed_event_clusters",

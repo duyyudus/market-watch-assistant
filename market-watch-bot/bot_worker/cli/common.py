@@ -29,6 +29,31 @@ async def _with_session(
     async with factory() as session, session.begin():
         return await fn(session)
 
+async def _record_failed_job(
+    factory: async_sessionmaker[AsyncSession],
+    job_name: str,
+    exc: Exception,
+) -> None:
+    """Persist a failed JobRun in its own transaction so crashes are observable.
+
+    The pipeline runs inside a single transaction that rolls back on failure, which
+    otherwise leaves no DB trace that a run was even attempted.
+    """
+    from contextlib import suppress
+
+    from bot_worker.services import record_job_run
+
+    with suppress(Exception):
+        async with factory() as session, session.begin():
+            await record_job_run(
+                session,
+                job_name,
+                {"error": str(exc)},
+                status="failed",
+                error_message=str(exc),
+            )
+
+
 def _echo_json(data: object) -> None:
     typer.echo(json.dumps(_redact_cli_secrets(data), indent=2, sort_keys=True, default=str))
 

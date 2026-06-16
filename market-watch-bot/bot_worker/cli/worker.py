@@ -12,7 +12,7 @@ import typer
 from sqlalchemy import select
 
 from bot_worker.cli.apps import worker_app
-from bot_worker.cli.common import _echo_json, _run, _settings, _with_session
+from bot_worker.cli.common import _echo_json, _record_failed_job, _run, _settings, _with_session
 from bot_worker.db.models import DigestRecord, JobRun
 from bot_worker.db.session import make_session_factory
 from bot_worker.embeddings import EmbeddingConfig
@@ -20,6 +20,7 @@ from bot_worker.investigation import InvestigationConfig
 from bot_worker.services import (
     CORE_JOBS,
     AlertDeliveryConfig,
+    deliver_pending_alerts,
     record_job_run,
     run_pending_investigations,
     run_pipeline,
@@ -74,18 +75,19 @@ async def run_worker_tick(
         )
         await record_job_run(session, "agent_investigation", pending_result)
         typer.echo(f"agent_investigation: {pending_result}")
-    await maybe_send_daily_digest(session, settings)
-    await run_operational_checks(
-        session,
-        settings=settings,
-        alert_delivery_config=AlertDeliveryConfig.from_settings(settings, channel="telegram"),
-    )
+    # Digest delivery and operational checks run after this transaction commits
+    # (see the worker loop) so their external sends / state are not rolled back.
     return now
 
 
-async def maybe_send_daily_digest(session, settings) -> None:
-    if not hasattr(session, "scalar"):
-        return
+async def maybe_send_daily_digest(session_factory, settings) -> None:
+    """Build and deliver the daily digest outside the pipeline transaction.
+
+    The digest record is committed (status ``built``) before delivery, and ``sent_at``
+    is committed immediately after a successful send, so a crash cannot roll back a
+    sent digest and cause it to be re-delivered on the next tick. A built-but-unsent
+    digest (crash before send) is retried instead of rebuilt.
+    """
     timezone = ZoneInfo(getattr(settings.bot, "timezone", "Asia/Bangkok"))
     local_now = datetime.now(timezone)
     if local_now.time() < time(8, 0):
@@ -93,21 +95,43 @@ async def maybe_send_daily_digest(session, settings) -> None:
     window_end = local_now.replace(hour=8, minute=0, second=0, microsecond=0)
     window_start = window_end - timedelta(hours=24)
     window_end_utc = window_end.astimezone(UTC)
-    existing = await session.scalar(
-        select(DigestRecord)
-        .where(DigestRecord.digest_type == "daily")
-        .where(DigestRecord.window_end == window_end_utc)
-        .limit(1)
-    )
-    if existing is not None:
-        return
-    digest = await build_digest_record(
-        session,
-        since=window_start.astimezone(UTC),
-        until=window_end_utc,
-        threshold=settings.alerts.digest_threshold,
-    )
-    await send_digest_record(session, digest, AlertDeliveryConfig.from_settings(settings))
+    config = AlertDeliveryConfig.from_settings(settings)
+
+    async with session_factory() as session, session.begin():
+        existing = await session.scalar(
+            select(DigestRecord)
+            .where(DigestRecord.digest_type == "daily")
+            .where(DigestRecord.window_end == window_end_utc)
+            .limit(1)
+        )
+        if existing is not None and existing.sent_at is not None:
+            return
+        if existing is None:
+            digest = await build_digest_record(
+                session,
+                since=window_start.astimezone(UTC),
+                until=window_end_utc,
+                threshold=settings.alerts.digest_threshold,
+            )
+        else:
+            digest = existing
+        digest_id = digest.id
+
+    async with session_factory() as session, session.begin():
+        digest = await session.get(DigestRecord, digest_id)
+        if digest is None or digest.sent_at is not None:
+            return
+        await send_digest_record(session, digest, config)
+
+
+async def run_operational_checks_in_transaction(session_factory, settings) -> None:
+    config = AlertDeliveryConfig.from_settings(settings, channel="telegram")
+    async with session_factory() as session, session.begin():
+        await run_operational_checks(
+            session,
+            settings=settings,
+            alert_delivery_config=config,
+        )
 
 
 @worker_app.command("start")
@@ -128,6 +152,7 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
         last_pipeline_run_at = asyncio.get_running_loop().time()
         while not shutdown.is_set():
             now = asyncio.get_running_loop().time()
+            ran_pipeline = now - last_pipeline_run_at >= settings.bot.polling_interval_seconds
 
             async def action(
                 session,
@@ -142,11 +167,27 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
                     now=now,
                 )
 
-            last_pipeline_run_at = await _with_session(
-                action,
-                settings=settings,
-                session_factory=session_factory,
-            )
+            try:
+                last_pipeline_run_at = await _with_session(
+                    action,
+                    settings=settings,
+                    session_factory=session_factory,
+                )
+            except Exception as exc:  # noqa: BLE001 - a failed tick must not kill the worker
+                await _record_failed_job(session_factory, "pipeline", exc)
+                typer.echo(f"pipeline tick failed: {exc}")
+                # Back off until the next interval instead of hammering a broken run.
+                last_pipeline_run_at = now
+            else:
+                if ran_pipeline:
+                    delivery_config = AlertDeliveryConfig.from_settings(settings)
+                    if delivery_config.channel == "telegram":
+                        with suppress(Exception):
+                            await deliver_pending_alerts(session_factory, delivery_config)
+                    with suppress(Exception):
+                        await maybe_send_daily_digest(session_factory, settings)
+                    with suppress(Exception):
+                        await run_operational_checks_in_transaction(session_factory, settings)
             try:
                 await asyncio.wait_for(
                     shutdown.wait(),

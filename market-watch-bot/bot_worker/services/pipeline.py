@@ -14,7 +14,7 @@ from bot_worker.embeddings import (
     EmbeddingConfig,
 )
 from bot_worker.investigation import InvestigationConfig
-from bot_worker.services.alert_delivery import AlertDeliveryConfig, dispatch_pending_alerts
+from bot_worker.services.alert_delivery import AlertDeliveryConfig
 from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
 from bot_worker.services.events import ClusterBuildStats, build_event_clusters
@@ -483,22 +483,10 @@ async def run_pipeline(
             logger.error("  ❌ Failed to queue agent investigations: %s", exc)
     alerts = await record_alert_decisions(session)
     logger.info("  ✓ Recorded alert decisions for %d event clusters", alerts)
+    # Alert delivery runs outside this transaction (see deliver_pending_alerts) so a
+    # crash later in the run cannot roll back ``sent_at`` and re-deliver alerts.
     delivered_alerts = 0
     failed_alert_deliveries = 0
-    if alert_delivery_config is not None and alert_delivery_config.channel == "telegram":
-        delivery_counts = await dispatch_pending_alerts(session, alert_delivery_config)
-        delivered_alerts = delivery_counts["sent"]
-        failed_alert_deliveries = delivery_counts["failed"]
-        if failed_alert_deliveries:
-            degraded_stages.append("dispatch_alerts")
-            stage_status = "degraded"
-        logger.info(
-            "  ✓ Delivered %d Telegram alerts (%d failed)",
-            delivered_alerts,
-            failed_alert_deliveries,
-        )
-    else:
-        logger.info("  ⚠ Alert delivery config not provided or not Telegram, skipping dispatch")
     metrics.record_stage(
         stage_name="record_alert_decisions",
         start_time=stage_start,

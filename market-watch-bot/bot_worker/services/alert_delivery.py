@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot_worker.config import Settings
 from bot_worker.db.models import (
@@ -251,8 +251,14 @@ async def dispatch_pending_alerts(
     send_telegram_message: TelegramSender = send_telegram_message,
     send_webhook_payload: WebhookSender = send_webhook_payload,
     now: datetime | None = None,
+    commit_each: bool = False,
 ) -> DeliveryCounts:
     current = now or _utcnow()
+
+    async def _maybe_commit() -> None:
+        if commit_each and hasattr(session, "commit"):
+            await session.commit()
+
     counts = {
         "pending": 0,
         "attempted": 0,
@@ -287,11 +293,13 @@ async def dispatch_pending_alerts(
                 counts["permanently_failed"] = counts.get("permanently_failed", 0) + 1
             else:
                 counts["failed"] += 1
+            await _maybe_commit()
             continue
         delivery.status = "sent"
         delivery.error_message = None
         delivery.next_attempt_at = None
         counts["sent"] += 1
+        await _maybe_commit()
 
     stmt = (
         select(AlertDecisionRecord, EventCluster)
@@ -352,6 +360,7 @@ async def dispatch_pending_alerts(
                     next_attempt_at=attempted_at + RETRY_DELAY,
                 )
             )
+            await _maybe_commit()
             continue
         counts["pending"] -= 1
         alert.sent_at = attempted_at
@@ -373,7 +382,35 @@ async def dispatch_pending_alerts(
                 attempted_at=attempted_at,
             )
         )
+        await _maybe_commit()
+    await _maybe_commit()
     return counts
+
+
+async def deliver_pending_alerts(
+    session_factory: async_sessionmaker[AsyncSession],
+    config: AlertDeliveryConfig,
+    *,
+    limit: int = 20,
+    send_telegram_message: TelegramSender = send_telegram_message,
+    send_webhook_payload: WebhookSender = send_webhook_payload,
+    now: datetime | None = None,
+) -> DeliveryCounts:
+    """Dispatch pending alerts in their own transaction, outside the pipeline txn.
+
+    Each successful send is committed immediately so a crash later in the run can
+    never roll back ``sent_at`` and cause the same alert to be re-delivered.
+    """
+    async with session_factory() as session:
+        return await dispatch_pending_alerts(
+            session,
+            config,
+            limit=limit,
+            send_telegram_message=send_telegram_message,
+            send_webhook_payload=send_webhook_payload,
+            now=now,
+            commit_each=True,
+        )
 
 
 async def send_test_alert_to_channel(

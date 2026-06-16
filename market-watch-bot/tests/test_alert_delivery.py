@@ -17,6 +17,7 @@ from bot_worker.db.models import (
 from bot_worker.services.alert_delivery import (
     AlertDeliveryConfig,
     apply_alert_suppression,
+    deliver_pending_alerts,
     dispatch_pending_alerts,
     format_alert_message,
     format_webhook_payload,
@@ -400,7 +401,7 @@ async def test_send_test_alert_records_failed_delivery_without_raising() -> None
 
 
 @pytest.mark.asyncio
-async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
+async def test_run_pipeline_records_decisions_without_delivering(monkeypatch) -> None:
     order: list[str] = []
 
     async def zero(*_args, **_kwargs) -> int:
@@ -427,16 +428,12 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
     async def one_alert(_session) -> int:
         return 1
 
-    async def fake_dispatch(_session, _config):
-        return {"pending": 1, "attempted": 3, "sent": 2, "failed": 1, "skipped": 0}
-
     monkeypatch.setattr(pipeline_services, "normalize_pending_raw_items", zero)
     monkeypatch.setattr(pipeline_services, "mark_exact_duplicates", zero)
     monkeypatch.setattr(pipeline_services, "extract_entities_with_llm", extract_zero)
     monkeypatch.setattr(pipeline_services, "embed_pending_news_items", embed_zero)
     monkeypatch.setattr(pipeline_services, "build_event_clusters", cluster_zero)
     monkeypatch.setattr(pipeline_services, "record_alert_decisions", one_alert)
-    monkeypatch.setattr(pipeline_services, "dispatch_pending_alerts", fake_dispatch)
 
     result = await pipeline_services.run_pipeline(
         PipelineSession(),
@@ -456,8 +453,55 @@ async def test_run_pipeline_reports_alert_delivery_counts(monkeypatch) -> None:
     assert result["llm_cluster_decisions"] == 1
     assert result["llm_cluster_attaches"] == 1
     assert result["alerts"] == 1
-    assert result["delivered_alerts"] == 2
-    assert result["failed_alert_deliveries"] == 1
+    # Delivery now happens outside the pipeline transaction, so run_pipeline never sends.
+    assert result["delivered_alerts"] == 0
+    assert result["failed_alert_deliveries"] == 0
+
+
+class CommittingDeliverySession(DeliverySession):
+    def __init__(self, rows, report_rows=None) -> None:
+        super().__init__(rows, report_rows)
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def __aenter__(self) -> CommittingDeliverySession:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_deliver_pending_alerts_commits_after_each_send() -> None:
+    first = _alert(id="alert_a", event_cluster_id="evt_a")
+    second = _alert(id="alert_b", event_cluster_id="evt_b")
+    session = CommittingDeliverySession(
+        [(first, _event(id="evt_a")), (second, _event(id="evt_b"))]
+    )
+
+    async def fake_send(_config: AlertDeliveryConfig, _recipient: str, _message: str) -> dict:
+        # sent_at must already be durable for prior alerts before the next send.
+        if second.sent_at is None and first.sent_at is not None:
+            assert session.commits >= 1
+        return {"ok": True, "result": {"message_id": 1}}
+
+    counts = await deliver_pending_alerts(
+        lambda: session,
+        AlertDeliveryConfig(
+            channel="telegram",
+            telegram_bot_token="token",
+            telegram_chat_id="chat_1",
+        ),
+        send_telegram_message=fake_send,
+    )
+
+    assert counts["sent"] == 2
+    assert first.sent_at is not None
+    assert second.sent_at is not None
+    # One commit per successful send (the trailing commit may add one more).
+    assert session.commits >= 2
 
 
 @pytest.mark.asyncio
