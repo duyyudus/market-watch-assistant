@@ -1,4 +1,12 @@
-import { ChevronLeft, ChevronRight, ExternalLink, Newspaper, RefreshCcw } from "lucide-react";
+import { useState } from "react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Newspaper,
+  RefreshCcw,
+} from "lucide-react";
 
 import type { NewsDetail, NewsItem, Source } from "../../api";
 import { EmptyState } from "../../components/EmptyState";
@@ -329,6 +337,7 @@ export function NewsTable({
 
       <div className="xl:sticky xl:top-20 xl:self-start xl:max-h-[calc(100vh-100px)] xl:overflow-y-auto xl:overflow-x-hidden">
         <NewsDetailPanel
+          key={selectedNewsId ?? "empty"}
           detail={selectedNewsDetail}
           detailError={detailError}
           isLoading={Boolean(selectedNewsId && !selectedNewsDetail && !detailError)}
@@ -347,6 +356,9 @@ function NewsDetailPanel({
   detailError?: string;
   isLoading: boolean;
 }) {
+  const [isMetadataExpanded, setIsMetadataExpanded] = useState(false);
+  const metadataId = "news-detail-metadata";
+
   if (detailError) {
     return <SectionError title="Article detail unavailable" message={detailError} retry={noopRetry} />;
   }
@@ -384,22 +396,40 @@ function NewsDetailPanel({
         </a>
       </div>
 
-      <div className="mt-4 grid gap-2 text-xs">
-        <DetailRow label="ID" value={detail.id} />
-        <DetailRow label="Source" value={detail.source_name} />
-        <DetailRow label="Domain" value={domainFor(detail.canonical_url ?? detail.url)} />
-        <DetailRow label="Status" value={detail.processing_status} />
-        <DetailRow label="Region" value={detail.region} />
-        <DetailRow label="Language" value={detail.language} />
-        <DetailRow label="Assets" value={detail.asset_classes.join(", ") || "-"} />
-        <DetailRow label="Published" value={formatTime(detail.published_at)} />
-        <DetailRow label="Fetched" value={formatTime(detail.fetched_at)} />
-        <DetailRow label="Paywalled" value={detail.is_paywalled ? "yes" : "no"} />
-        <DetailRow
-          label="Full text"
-          value={`${detail.full_text_available ? "available" : "unavailable"} · ${detail.full_text_extraction_status}`}
-        />
-        <DetailRow label="HTTP" value={String(detail.full_text_last_http_status ?? "-")} />
+      <div className="mt-4">
+        <button
+          aria-controls={metadataId}
+          aria-expanded={isMetadataExpanded}
+          className="btn btn-ghost btn-xs h-auto min-h-0 gap-1 px-0 py-1 text-xs font-bold uppercase tracking-wider text-zinc-500 hover:bg-transparent hover:text-zinc-300"
+          onClick={() => setIsMetadataExpanded((expanded) => !expanded)}
+          type="button"
+        >
+          {isMetadataExpanded ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+          Metadata
+        </button>
+        {isMetadataExpanded ? (
+          <div className="mt-2 grid gap-2 text-xs" id={metadataId}>
+            <DetailRow label="ID" value={detail.id} />
+            <DetailRow label="Source" value={detail.source_name} />
+            <DetailRow label="Domain" value={domainFor(detail.canonical_url ?? detail.url)} />
+            <DetailRow label="Status" value={detail.processing_status} />
+            <DetailRow label="Region" value={detail.region} />
+            <DetailRow label="Language" value={detail.language} />
+            <DetailRow label="Assets" value={detail.asset_classes.join(", ") || "-"} />
+            <DetailRow label="Published" value={formatTime(detail.published_at)} />
+            <DetailRow label="Fetched" value={formatTime(detail.fetched_at)} />
+            <DetailRow label="Paywalled" value={detail.is_paywalled ? "yes" : "no"} />
+            <DetailRow
+              label="Full text"
+              value={`${detail.full_text_available ? "available" : "unavailable"} · ${detail.full_text_extraction_status}`}
+            />
+            <DetailRow label="HTTP" value={String(detail.full_text_last_http_status ?? "-")} />
+          </div>
+        ) : null}
       </div>
 
       <DetailSection title="Snippet" body={detail.snippet || "No snippet available."} />

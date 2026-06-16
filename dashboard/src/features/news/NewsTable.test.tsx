@@ -218,6 +218,11 @@ describe("NewsTable", () => {
 
     expect(selectNews).toHaveBeenCalledWith("news_1");
     expect(screen.getByText("Article detail")).toBeInTheDocument();
+    const metadataButton = screen.getByRole("button", { name: "Metadata" });
+    expect(metadataButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("news_1")).not.toBeInTheDocument();
+    fireEvent.click(metadataButton);
+    expect(metadataButton).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("news_1")).toBeInTheDocument();
     expect(screen.getByText("Policy makers leaned less hawkish.")).toBeInTheDocument();
     expect(screen.getByText("Full normalized article text.")).toBeInTheDocument();
