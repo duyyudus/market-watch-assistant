@@ -26,7 +26,11 @@ from bot_worker.services import (
     recompute_affected_from_primary_entities,
 )
 from bot_worker.services.bot_commands import apply_event_score, score_event_cluster
-from bot_worker.services.events import merge_event_clusters, split_event_cluster
+from bot_worker.services.events import (
+    audit_event_cluster,
+    merge_event_clusters,
+    split_event_cluster,
+)
 from common.llm import LLMConfig
 
 
@@ -118,6 +122,22 @@ def event_show(identifier: str) -> None:
         )
 
     _run(_with_session(action))
+
+
+@event_app.command("audit")
+def event_audit(identifier: str) -> None:
+    """Print read-only diagnostics for an event cluster's member coherence."""
+
+    async def action(session):
+        try:
+            _echo_json(await audit_event_cluster(session, identifier))
+        except ValueError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(1) from exc
+
+    _run(_with_session(action))
+
+
 @event_app.command("merge")
 def event_merge(
     source: str,
@@ -172,6 +192,7 @@ def _since_cutoff(value: str) -> datetime:
 @event_app.command("recluster")
 def event_recluster(
     since_value: Annotated[str, typer.Option("--since")] = "48h",
+    event_id: Annotated[str | None, typer.Option("--event")] = None,
     apply: Annotated[bool, typer.Option("--apply")] = False,
     confirm: Annotated[bool, typer.Option("--confirm")] = False,
     limit: Annotated[int | None, typer.Option("--limit")] = None,
@@ -188,8 +209,8 @@ def event_recluster(
     Surviving clusters are always re-embedded on --apply (no --embed needed) whenever
     embeddings are configured, since recluster invalidates their stored vectors.
 
-    Scope is controlled by --since; --limit is an optional cap on the number of clusters
-    and is unbounded by default.
+    Scope is controlled by --since, or by --event for one specific cluster. --limit is
+    an optional cap on the number of clusters in --since mode and is unbounded by default.
     """
     if apply and not confirm:
         typer.echo("Use --confirm with --apply to mutate event clusters.")
@@ -222,6 +243,7 @@ def event_recluster(
             session,
             since=since,
             dry_run=not apply,
+            event_id=event_id,
             limit=limit,
             progress=_progress,
             llm_config=llm_config,

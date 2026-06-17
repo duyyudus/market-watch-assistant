@@ -12,6 +12,7 @@ from bot_worker.db.models import (
     EventCluster,
     EventClusterEmbedding,
     EventClusterItem,
+    NewsEntity,
     NewsItemEmbedding,
     NormalizedNewsItem,
     Vector,
@@ -22,6 +23,8 @@ from bot_worker.embeddings import (
     EmbeddingConfig,
 )
 from bot_worker.events import (
+    COHERENCE_GUARD_ABS_FLOOR,
+    COHERENCE_GUARD_MIN_CLUSTER_SIZE,
     WEAK_SAME_EVENT_REASONS,
     EventCandidate,
     EventClusterDraft,
@@ -30,6 +33,8 @@ from bot_worker.events import (
     VectorClusterCandidate,
     _compatible_context,
     _cosine,
+    _effective_primary_entities,
+    _effective_primary_tickers,
     _specific_entity_set,
     classify_same_event,
     coherence_outlier_indices,
@@ -398,8 +403,8 @@ def _draft_candidate(draft: EventClusterDraft) -> EventCandidate:
         news_id="draft",
         title=draft.canonical_headline,
         source_score=draft.top_source_score,
-        entities=list(draft.entities),
-        tickers=list(draft.tickers),
+        entities=list(draft.primary_entities),
+        tickers=list(draft.primary_tickers),
         primary_entities=list(draft.primary_entities),
         primary_tickers=list(draft.primary_tickers),
         region=next(iter(draft.regions), "global"),
@@ -442,8 +447,8 @@ def _add_candidate_to_draft_with_metadata(
     draft.item_decision_metadata[candidate.news_id] = metadata
     draft.entities.update(candidate.entities)
     draft.tickers.update(candidate.tickers)
-    draft.primary_entities.update(candidate.primary_entities)
-    draft.primary_tickers.update(candidate.primary_tickers)
+    draft.primary_entities.update(_effective_primary_entities(candidate))
+    draft.primary_tickers.update(_effective_primary_tickers(candidate))
     draft.regions.add(candidate.region)
     draft.asset_classes.update(candidate.asset_classes)
     draft.source_count += 1
@@ -768,7 +773,7 @@ def _merge_drafts_by_vector(
     if len(drafts) < 2:
         return drafts
     parent = list(range(len(drafts)))
-    entity_sets = [_specific_entity_set(list(draft.entities)) for draft in drafts]
+    entity_sets = [_specific_entity_set(list(draft.primary_entities)) for draft in drafts]
 
     def find(node: int) -> int:
         while parent[node] != node:
@@ -895,6 +900,166 @@ def _match_drafts_to_clusters(
     return assignments, claimed
 
 
+def _normalized_values(values: object) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    return {str(value).casefold() for value in values if value}
+
+
+def _audit_member_flags(
+    metadata: dict[str, object] | None,
+    *,
+    primary_entities: list[str],
+    primary_tickers: list[str],
+    best_neighbor_cosine: float | None,
+) -> list[str]:
+    flags: list[str] = []
+    metadata = metadata or {}
+    if (
+        metadata.get("decision") == "strong_same_event"
+        and metadata.get("reason") == "strong_title_topic_overlap"
+        and not metadata.get("entity_overlap")
+        and not metadata.get("ticker_overlap")
+    ):
+        flags.append("title_only_strong_join")
+
+    overlap = _normalized_values(metadata.get("entity_overlap")) | _normalized_values(
+        metadata.get("ticker_overlap")
+    )
+    primary = {value.casefold() for value in primary_entities + primary_tickers if value}
+    if overlap and not (overlap & primary):
+        flags.append("non_primary_overlap_join")
+
+    if best_neighbor_cosine is not None and best_neighbor_cosine < COHERENCE_GUARD_ABS_FLOOR:
+        flags.append("low_best_neighbor_cosine")
+    return flags
+
+
+async def audit_event_cluster(session: AsyncSession, event_id: str) -> dict[str, object]:
+    """Return read-only diagnostics for one event cluster's membership coherence."""
+    cluster = await session.get(EventCluster, event_id)
+    if cluster is None:
+        raise ValueError(f"Event not found: {event_id}")
+
+    rows = (
+        await session.execute(
+            select(EventClusterItem, NormalizedNewsItem)
+            .join(NormalizedNewsItem, NormalizedNewsItem.id == EventClusterItem.news_item_id)
+            .where(EventClusterItem.event_cluster_id == event_id)
+            .order_by(EventClusterItem.added_at, _effective_news_time())
+        )
+    ).all()
+    item_rows = [(row[0], row[1]) for row in rows]
+    item_ids = [item.id for _link, item in item_rows]
+    entity_rows = list(
+        (
+            await session.scalars(
+                select(NewsEntity)
+                .where(NewsEntity.news_item_id.in_(item_ids))
+                .order_by(NewsEntity.news_item_id, NewsEntity.is_primary.desc())
+            )
+        ).all()
+    ) if item_ids else []
+    entities_by_item: dict[str, list[NewsEntity]] = {}
+    for entity in entity_rows:
+        entities_by_item.setdefault(entity.news_item_id, []).append(entity)
+
+    vectors = {}
+    if item_ids:
+        vector_rows = (
+            await session.execute(
+                select(NewsItemEmbedding.news_item_id, NewsItemEmbedding.vector).where(
+                    NewsItemEmbedding.news_item_id.in_(item_ids)
+                )
+            )
+        ).all()
+        vectors = {news_id: list(vector) for news_id, vector in vector_rows}
+
+    pairwise: list[dict[str, object]] = []
+    best_by_item: dict[str, float] = {}
+    for left_index, left_id in enumerate(item_ids):
+        left_vector = vectors.get(left_id)
+        if left_vector is None:
+            continue
+        for right_id in item_ids[left_index + 1:]:
+            right_vector = vectors.get(right_id)
+            if right_vector is None:
+                continue
+            cosine = _cosine(left_vector, right_vector)
+            pairwise.append(
+                {
+                    "left_news_item_id": left_id,
+                    "right_news_item_id": right_id,
+                    "cosine": round(cosine, 4),
+                }
+            )
+            best_by_item[left_id] = max(best_by_item.get(left_id, 0.0), cosine)
+            best_by_item[right_id] = max(best_by_item.get(right_id, 0.0), cosine)
+
+    members: list[dict[str, object]] = []
+    cluster_flags: set[str] = set()
+    for link, item in item_rows:
+        item_entities = entities_by_item.get(item.id, [])
+        primary_entities = sorted(
+            {entity.normalized_name for entity in item_entities if entity.is_primary}
+        )
+        primary_tickers = sorted(
+            {entity.ticker for entity in item_entities if entity.is_primary and entity.ticker}
+        )
+        non_primary_entities = sorted(
+            {entity.normalized_name for entity in item_entities if not entity.is_primary}
+        )
+        non_primary_tickers = sorted(
+            {entity.ticker for entity in item_entities if not entity.is_primary and entity.ticker}
+        )
+        best = best_by_item.get(item.id)
+        flags = _audit_member_flags(
+            link.decision_metadata,
+            primary_entities=primary_entities,
+            primary_tickers=primary_tickers,
+            best_neighbor_cosine=best,
+        )
+        cluster_flags.update(flags)
+        members.append(
+            {
+                "news_item_id": item.id,
+                "title": item.title,
+                "source_name": item.source_name,
+                "published_at": item.published_at,
+                "fetched_at": item.fetched_at,
+                "decision_metadata": link.decision_metadata,
+                "primary_entities": primary_entities,
+                "primary_tickers": primary_tickers,
+                "non_primary_entities": non_primary_entities,
+                "non_primary_tickers": non_primary_tickers,
+                "best_neighbor_cosine": round(best, 4) if best is not None else None,
+                "flags": flags,
+            }
+        )
+
+    max_pairwise = max((float(pair["cosine"]) for pair in pairwise), default=None)
+    if len(item_ids) >= COHERENCE_GUARD_MIN_CLUSTER_SIZE and (
+        max_pairwise is None or max_pairwise < COHERENCE_GUARD_ABS_FLOOR
+    ):
+        cluster_flags.add("diffuse_incoherence")
+
+    return {
+        "event_cluster_id": cluster.id,
+        "headline": cluster.canonical_headline,
+        "member_count": len(members),
+        "flags": sorted(cluster_flags),
+        "members": members,
+        "embedding_summary": {
+            "available": bool(vectors),
+            "embedded_members": len(vectors),
+            "pair_count": len(pairwise),
+            "max_pairwise_cosine": max_pairwise,
+            "low_best_neighbor_threshold": COHERENCE_GUARD_ABS_FLOOR,
+            "pairs": pairwise,
+        },
+    }
+
+
 async def recompute_affected_from_primary_entities(
     session: AsyncSession,
     *,
@@ -953,6 +1118,7 @@ async def recluster_recent_event_clusters(
     *,
     since: datetime,
     dry_run: bool = True,
+    event_id: str | None = None,
     limit: int | None = None,
     progress: Callable[[str, int, int], None] | None = None,
     llm_config: LLMConfig | None = None,
@@ -967,13 +1133,20 @@ async def recluster_recent_event_clusters(
     # re-bumped each time they are re-staled, which would otherwise keep them in every
     # window forever, inflating affected/stale counts with no real work. --since scopes the
     # run; --limit is an optional cap (unbounded by default).
-    cluster_stmt = (
-        select(EventCluster.id)
-        .where(EventCluster.last_updated_at >= since)
-        .where(EventCluster.status != "stale")
-        .order_by(EventCluster.last_updated_at.desc())
-    )
-    if limit is not None:
+    if event_id is not None:
+        cluster_stmt = (
+            select(EventCluster.id)
+            .where(EventCluster.id == event_id)
+            .where(EventCluster.status != "stale")
+        )
+    else:
+        cluster_stmt = (
+            select(EventCluster.id)
+            .where(EventCluster.last_updated_at >= since)
+            .where(EventCluster.status != "stale")
+            .order_by(EventCluster.last_updated_at.desc())
+        )
+    if limit is not None and event_id is None:
         cluster_stmt = cluster_stmt.limit(limit)
     cluster_ids = list((await session.scalars(cluster_stmt)).all())
     if not cluster_ids:

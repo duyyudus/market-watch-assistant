@@ -808,6 +808,49 @@ def test_cli_event_show_reports_event_details(monkeypatch) -> None:
     assert "requires event_clusters data" not in result.output
 
 
+def test_cli_event_audit_prints_read_only_report(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    async def fake_audit_event_cluster(_session, event_id: str):
+        assert event_id == "evt_1"
+        return {
+            "event_cluster_id": "evt_1",
+            "member_count": 2,
+            "flags": ["title_only_strong_join"],
+            "members": [
+                {
+                    "news_item_id": "news_1",
+                    "title": "China demand weakens",
+                    "decision_metadata": {"decision_source": "seed"},
+                    "flags": [],
+                },
+                {
+                    "news_item_id": "news_2",
+                    "title": "Domestic institutions keep buying",
+                    "decision_metadata": {
+                        "decision_source": "deterministic",
+                        "reason": "strong_title_topic_overlap",
+                    },
+                    "flags": ["title_only_strong_join"],
+                },
+            ],
+            "embedding_summary": {"available": False},
+        }
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(event_cli, "audit_event_cluster", fake_audit_event_cluster)
+
+    result = runner.invoke(app, ["event", "audit", "evt_1"])
+
+    assert result.exit_code == 0
+    assert '"event_cluster_id": "evt_1"' in result.output
+    assert '"title_only_strong_join"' in result.output
+
+
 def test_cli_source_purge_requires_explicit_confirmation(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -1048,6 +1091,7 @@ def test_cli_event_recluster_dry_run_reports_result(monkeypatch) -> None:
         since,
         dry_run,
         limit,
+        event_id=None,
         progress=None,
         llm_config=None,
         embedding_config=None,
@@ -1087,6 +1131,56 @@ def test_cli_event_recluster_dry_run_reports_result(monkeypatch) -> None:
     assert '"affected_clusters": 2' in result.output
 
 
+def test_cli_event_recluster_event_flag_scopes_to_one_cluster(monkeypatch) -> None:
+    class EmptySession:
+        pass
+
+    async def fake_with_session(fn):
+        return await fn(EmptySession())
+
+    captured: dict[str, object] = {}
+
+    async def fake_recluster(
+        _session,
+        *,
+        since,
+        dry_run,
+        limit,
+        event_id=None,
+        progress=None,
+        llm_config=None,
+        embedding_config=None,
+        use_vector_signal=False,
+    ):
+        captured["since"] = since
+        captured["dry_run"] = dry_run
+        captured["limit"] = limit
+        captured["event_id"] = event_id
+        return {
+            "status": "dry_run",
+            "affected_clusters": 1,
+            "news_items": 5,
+            "new_clusters": 4,
+        }
+
+    monkeypatch.setattr(event_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(event_cli, "recluster_recent_event_clusters", fake_recluster)
+    monkeypatch.setattr(event_cli, "_settings", lambda: object())
+    monkeypatch.setattr(
+        event_cli.EmbeddingConfig,
+        "from_settings",
+        classmethod(lambda cls, _settings: cls(provider="local")),
+    )
+
+    result = runner.invoke(app, ["event", "recluster", "--event", "evt_1", "--embed"])
+
+    assert result.exit_code == 0
+    assert captured["event_id"] == "evt_1"
+    assert captured["dry_run"] is True
+    assert captured["limit"] is None
+    assert '"affected_clusters": 1' in result.output
+
+
 def test_cli_event_recluster_llm_flag_passes_enabled_config(monkeypatch) -> None:
     class EmptySession:
         pass
@@ -1102,6 +1196,7 @@ def test_cli_event_recluster_llm_flag_passes_enabled_config(monkeypatch) -> None
         since,
         dry_run,
         limit,
+        event_id=None,
         progress=None,
         llm_config=None,
         embedding_config=None,
@@ -1164,6 +1259,7 @@ def test_cli_event_recluster_embed_flag_passes_embedding_config(monkeypatch) -> 
         since,
         dry_run,
         limit,
+        event_id=None,
         progress=None,
         llm_config=None,
         embedding_config=None,

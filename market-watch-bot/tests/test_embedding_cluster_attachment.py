@@ -28,6 +28,10 @@ async def _fake_primary_from_patched(session, news_item_id: str) -> tuple[list[s
     )
 
 
+async def _empty_primary_subjects(_session, _news_item_id: str) -> tuple[list[str], list[str]]:
+    return [], []
+
+
 class ScalarRows:
     def __init__(self, rows: list[object]) -> None:
         self.rows = rows
@@ -48,6 +52,7 @@ class FakeSession:
         self.executed: list[object] = []
         self.scalars_statements: list[object] = []
         self.flushes = 0
+        self.next_cluster_id = 1
         self.scalar_results: list[object | None] = []
 
     async def scalars(self, stmt):
@@ -73,6 +78,10 @@ class FakeSession:
 
     async def flush(self) -> None:
         self.flushes += 1
+        for value in self.added:
+            if isinstance(value, EventCluster) and value.id is None:
+                value.id = f"evt_fake_{self.next_cluster_id}"
+                self.next_cluster_id += 1
 
 
 class FakeReclusterSession:
@@ -141,6 +150,18 @@ class FakeReclusterSession:
 
     async def flush(self) -> None:
         self.flushes += 1
+
+
+class FakeTargetedReclusterSession(FakeReclusterSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scalars_results = [
+            ["evt_1"],
+            [self.cluster_1],
+            [self.item_1],
+            [],
+            [EventClusterItem(event_cluster_id="evt_1", news_item_id="news_1")],
+        ]
 
 
 class QueryRows:
@@ -421,6 +442,164 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
     cluster_embeddings = [v for v in session.added if isinstance(v, EventClusterEmbedding)]
     assert len(cluster_embeddings) == 1
     assert cluster_embeddings[0].event_cluster_id == "evt_1"
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_keeps_reproduced_false_merge_articles_separate(
+    monkeypatch,
+) -> None:
+    items = [
+        NormalizedNewsItem(
+            id="news_china",
+            title="Nhu cầu trong nước ảm đạm, kinh tế Trung Quốc tiếp tục suy yếu",
+            source_score=70,
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            processing_status="normalized",
+            published_at=datetime(2026, 6, 17, 2, 13, tzinfo=UTC),
+        ),
+        NormalizedNewsItem(
+            id="news_flow",
+            title="Tổ chức trong nước tiếp tục gom ròng",
+            source_score=70,
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            processing_status="normalized",
+            published_at=datetime(2026, 6, 16, 15, 41, tzinfo=UTC),
+        ),
+        NormalizedNewsItem(
+            id="news_payment",
+            title="Khách quốc tế đến Lễ hội Tài chính số 2026, quét mã như ở quê nhà",
+            source_score=70,
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            processing_status="normalized",
+            fetched_at=datetime(2026, 6, 8, 5, 52, tzinfo=UTC),
+        ),
+        NormalizedNewsItem(
+            id="news_land",
+            title="Các ông lớn đua nhau gom thêm hàng chục nghìn ha đất",
+            source_score=70,
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            processing_status="normalized",
+            fetched_at=datetime(2026, 6, 8, 5, 52, tzinfo=UTC),
+        ),
+        NormalizedNewsItem(
+            id="news_beach",
+            title="Giới kinh doanh miền Trung săn tìm song lập Bạch Vân",
+            source_score=70,
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            processing_status="normalized",
+            published_at=datetime(2026, 6, 6, 3, 56, tzinfo=UTC),
+        ),
+    ]
+    session = FakeSession(scalars=[items, []])
+    entities = {
+        "news_china": ["National Bureau of Statistics of China"],
+        "news_flow": ["Vingroup", "Vinhomes", "BIDV"],
+        "news_payment": ["BIDV", "TPBank", "NAPAS"],
+        "news_land": ["Sun Group", "Sunshine Group", "Vingroup", "Vinhomes"],
+        "news_beach": ["Vinhomes"],
+    }
+    tickers = {
+        "news_china": [],
+        "news_flow": ["BID", "VHM", "VIC"],
+        "news_payment": ["BID", "TPB"],
+        "news_land": ["VHM", "VIC"],
+        "news_beach": ["VHM"],
+    }
+    primary = {
+        "news_china": (["National Bureau of Statistics of China"], []),
+        "news_flow": ([], []),
+        "news_payment": (["BIDV", "TPBank"], ["BID", "TPB"]),
+        "news_land": (["Sun Group", "Sunshine Group", "Vingroup", "Vinhomes"], ["VHM", "VIC"]),
+        "news_beach": (["Vinhomes"], ["VHM"]),
+    }
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        return entities[news_item_id]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        return tickers[news_item_id]
+
+    async def fake_news_item_primary_subjects(
+        _session, news_item_id: str
+    ) -> tuple[list[str], list[str]]:
+        return primary[news_item_id]
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "news_item_primary_subjects",
+        fake_news_item_primary_subjects,
+    )
+
+    stats = await services.build_event_clusters(session)
+
+    assert stats.created_clusters > 1
+    cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
+    memberships: dict[str, list[str]] = {}
+    for item in cluster_items:
+        memberships.setdefault(item.event_cluster_id, []).append(item.news_item_id)
+    assert not any(
+        sorted(news_ids)
+        == ["news_beach", "news_china", "news_flow", "news_land", "news_payment"]
+        for news_ids in memberships.values()
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_event_clusters_does_not_chain_from_non_primary_flow_mentions(
+    monkeypatch,
+) -> None:
+    flow = NormalizedNewsItem(
+        id="news_flow",
+        title="Tổ chức trong nước tiếp tục gom ròng Vinhomes",
+        source_score=70,
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        processing_status="normalized",
+        published_at=datetime(2026, 6, 16, tzinfo=UTC),
+    )
+    project = NormalizedNewsItem(
+        id="news_project",
+        title="Vinhomes mở bán khu đô thị mới tại Đà Nẵng",
+        source_score=70,
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        processing_status="normalized",
+        published_at=datetime(2026, 6, 17, tzinfo=UTC),
+    )
+    session = FakeSession(scalars=[[flow, project], []])
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        return {"news_flow": ["Vinhomes"], "news_project": ["Vinhomes"]}[news_item_id]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        return {"news_flow": ["VHM"], "news_project": ["VHM"]}[news_item_id]
+
+    async def fake_news_item_primary_subjects(
+        _session, news_item_id: str
+    ) -> tuple[list[str], list[str]]:
+        return {"news_flow": ([], []), "news_project": (["Vinhomes"], ["VHM"])}[news_item_id]
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(
+        event_services,
+        "news_item_primary_subjects",
+        fake_news_item_primary_subjects,
+    )
+
+    stats = await services.build_event_clusters(session)
+
+    cluster_items = [value for value in session.added if isinstance(value, EventClusterItem)]
+    assert stats.created_clusters == 2
+    assert [item.news_item_id for item in cluster_items] == ["news_flow", "news_project"]
+    assert len({item.event_cluster_id for item in cluster_items}) == 2
 
 
 @pytest.mark.asyncio
@@ -1056,6 +1235,37 @@ async def test_recluster_recent_event_clusters_dry_run_does_not_mutate(monkeypat
     assert session.added == []
     assert session.executed == []
     assert session.cluster_2.status == "reported"
+
+
+@pytest.mark.asyncio
+async def test_recluster_recent_event_clusters_can_scope_to_specific_event(monkeypatch) -> None:
+    session = FakeTargetedReclusterSession()
+
+    async def fake_news_item_entities(_session, news_item_id: str) -> list[str]:
+        assert news_item_id == "news_1"
+        return ["Bitcoin"]
+
+    async def fake_news_item_tickers(_session, news_item_id: str) -> list[str]:
+        assert news_item_id == "news_1"
+        return ["BTC"]
+
+    monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
+    monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
+
+    result = await services.recluster_recent_event_clusters(
+        session,
+        since=datetime(2026, 5, 25, 0, tzinfo=UTC),
+        dry_run=True,
+        event_id="evt_1",
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["affected_clusters"] == 1
+    assert result["news_items"] == 1
+    assert result["new_clusters"] == 1
+    assert session.added == []
+    assert session.executed == []
 
 
 class RecordingClusterSelectSession:

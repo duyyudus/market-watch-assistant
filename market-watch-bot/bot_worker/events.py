@@ -21,8 +21,8 @@ class EventCandidate:
     # Primary-subject mentions only. `entities`/`tickers` carry every mention (used
     # for clustering/merge overlap); the `primary_*` subsets are what define a
     # cluster's affected_tickers/affected_entities so comparison mentions don't leak in.
-    primary_entities: list[str] = field(default_factory=list)
-    primary_tickers: list[str] = field(default_factory=list)
+    primary_entities: list[str] | None = None
+    primary_tickers: list[str] | None = None
     watchlist_tier: str | None = None
     source_name: str = ""
     source_type: str = ""
@@ -141,6 +141,9 @@ VIETNAMESE_TITLE_STOPWORDS = {
     "dưới",
     "trước",
     "khoảng",
+    "nước",
+    "tiếp",
+    "tục",
 }
 TITLE_STOPWORDS = {
     "after",
@@ -210,6 +213,18 @@ def _weak_entity_set(values: list[str] | set[str]) -> set[str]:
     }
 
 
+def _effective_primary_entities(candidate: EventCandidate) -> list[str]:
+    if candidate.primary_entities is not None:
+        return candidate.primary_entities
+    return candidate.entities
+
+
+def _effective_primary_tickers(candidate: EventCandidate) -> list[str]:
+    if candidate.primary_tickers is not None:
+        return candidate.primary_tickers
+    return candidate.tickers
+
+
 def _compatible_context(left: EventCandidate, right: EventCandidate) -> bool:
     left_assets = {value.casefold() for value in left.asset_classes if value}
     right_assets = {value.casefold() for value in right.asset_classes if value}
@@ -261,6 +276,14 @@ def classify_same_event(candidate: EventCandidate, existing: EventCandidate) -> 
         )
 
     if title_similarity >= 0.45 and len(title_token_overlap) >= 2:
+        if not entity_overlap and not ticker_overlap and len(title_token_overlap) < 3:
+            return SameEventDecision(
+                kind=SameEventDecisionKind.AMBIGUOUS,
+                title_similarity=title_similarity,
+                entity_overlap=entity_overlap,
+                ticker_overlap=ticker_overlap,
+                reason="title_topic_overlap_requires_arbitration",
+            )
         return SameEventDecision(
             kind=SameEventDecisionKind.STRONG_SAME_EVENT,
             title_similarity=title_similarity,
@@ -432,8 +455,8 @@ def _candidate_from_cluster_draft(cluster: EventClusterDraft) -> EventCandidate:
         news_id="cluster",
         title=cluster.canonical_headline,
         source_score=cluster.top_source_score,
-        entities=list(cluster.entities),
-        tickers=list(cluster.tickers),
+        entities=list(cluster.primary_entities),
+        tickers=list(cluster.primary_tickers),
         primary_entities=list(cluster.primary_entities),
         primary_tickers=list(cluster.primary_tickers),
         region=next(iter(cluster.regions), "global"),
@@ -474,8 +497,8 @@ def cluster_candidates(candidates: list[EventCandidate]) -> list[EventClusterDra
         )
         target.entities.update(candidate.entities)
         target.tickers.update(candidate.tickers)
-        target.primary_entities.update(candidate.primary_entities)
-        target.primary_tickers.update(candidate.primary_tickers)
+        target.primary_entities.update(_effective_primary_entities(candidate))
+        target.primary_tickers.update(_effective_primary_tickers(candidate))
         target.regions.add(candidate.region)
         target.asset_classes.update(candidate.asset_classes)
         target.source_count += 1

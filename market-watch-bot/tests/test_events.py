@@ -234,6 +234,72 @@ def test_same_event_decision_rejects_vietnamese_generic_filler_overlap() -> None
     assert decision.kind is SameEventDecisionKind.REJECT
 
 
+def test_same_event_decision_does_not_strong_merge_china_macro_with_domestic_flow() -> None:
+    candidate = EventCandidate(
+        news_id="news_flow",
+        title="Tổ chức trong nước tiếp tục gom ròng",
+        source_score=70,
+        entities=[
+            "Vingroup",
+            "Vinhomes",
+            "BIDV",
+        ],
+        tickers=["BID", "VHM", "VIC"],
+        primary_entities=[],
+        primary_tickers=[],
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        published_at=datetime(2026, 6, 16, 15, 41, tzinfo=UTC),
+    )
+    existing = EventCandidate(
+        news_id="news_china",
+        title="Nhu cầu trong nước ảm đạm, kinh tế Trung Quốc tiếp tục suy yếu",
+        source_score=70,
+        entities=["National Bureau of Statistics of China"],
+        primary_entities=["National Bureau of Statistics of China"],
+        region="vietnam",
+        asset_classes=["vietnam_equity"],
+        published_at=datetime(2026, 6, 17, 2, 13, tzinfo=UTC),
+    )
+
+    decision = classify_same_event(candidate, existing)
+
+    assert decision.kind is not SameEventDecisionKind.STRONG_SAME_EVENT
+
+
+def test_cluster_candidates_do_not_chain_from_non_primary_entity_pollution() -> None:
+    candidates = [
+        EventCandidate(
+            news_id="news_flow",
+            title="Tổ chức trong nước tiếp tục gom ròng Vinhomes",
+            source_score=70,
+            entities=["Vinhomes"],
+            tickers=["VHM"],
+            primary_entities=[],
+            primary_tickers=[],
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            published_at=datetime(2026, 6, 16, tzinfo=UTC),
+        ),
+        EventCandidate(
+            news_id="news_project",
+            title="Vinhomes mở bán khu đô thị mới tại Đà Nẵng",
+            source_score=70,
+            entities=["Vinhomes"],
+            tickers=["VHM"],
+            primary_entities=["Vinhomes"],
+            primary_tickers=["VHM"],
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            published_at=datetime(2026, 6, 17, tzinfo=UTC),
+        ),
+    ]
+
+    clusters = cluster_candidates(candidates)
+
+    assert [cluster.news_ids for cluster in clusters] == [["news_flow"], ["news_project"]]
+
+
 def test_same_event_decision_rejects_shared_financial_times_suffix() -> None:
     # The "- Financial Times" attribution must be stripped so two unrelated FT
     # articles do not merge on the shared "financial"/"times" tokens.
