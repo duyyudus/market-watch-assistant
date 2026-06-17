@@ -168,7 +168,9 @@ retention:
 
 logging:
   level: INFO
-  log_file: .log/market-watch-bot.log
+  # Per-component files are written here: api.log, worker-pipeline.log,
+  # worker-command.log, worker.log, cli.log. Set to null to disable file logging.
+  log_dir: .log
   console: true
   max_lines: 10000
   backup_count: 5

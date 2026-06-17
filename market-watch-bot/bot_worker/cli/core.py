@@ -21,7 +21,7 @@ from bot_worker.services import (
 def main() -> None:
     """Initialize logging for CLI commands."""
     from bot_worker.logging import setup_logging
-    setup_logging(_settings())
+    setup_logging(_settings(), component="cli")
 @app.command()
 def init(
     project_dir: Annotated[Path, typer.Option(help="Directory for runtime files")] = Path("."),

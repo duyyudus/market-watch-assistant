@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 from contextlib import suppress
 from datetime import UTC, datetime, time, timedelta
@@ -29,9 +30,12 @@ from bot_worker.services.bot_commands import process_pending_bot_commands
 from bot_worker.services.digests import build_digest_record, send_digest_record
 from bot_worker.services.operations import run_operational_checks
 from common.llm import LLMConfig
+from common.logging import WORKER_TASK_LOG_FILES, log_component, setup_logging
 
 COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25
+
+logger = logging.getLogger("bot_worker")
 
 
 async def drain_bot_commands(session, settings) -> None:
@@ -82,6 +86,8 @@ async def _command_loop(session_factory, settings, *, shutdown) -> None:
     a long pipeline tick is in flight. No command can trigger the pipeline, so the two
     loops never run the pipeline concurrently.
     """
+    # Tag this task so every record it emits is routed to worker-command.log.
+    log_component.set("command")
     poll_interval = getattr(
         settings.bot, "command_poll_interval_seconds", COMMAND_POLL_INTERVAL_SECONDS
     )
@@ -94,13 +100,15 @@ async def _command_loop(session_factory, settings, *, shutdown) -> None:
             )
         except Exception as exc:  # noqa: BLE001 - a failed drain must not kill the worker
             await _record_failed_job(session_factory, "bot_command", exc)
-            typer.echo(f"bot command drain failed: {exc}")
+            logger.exception("bot command drain failed: %s", exc)
         with suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(), timeout=poll_interval)
 
 
 async def _pipeline_loop(session_factory, settings, *, shutdown) -> None:
     """Run the scheduled pipeline and post-commit deliveries on the polling interval."""
+    # Tag this task so every record it emits is routed to worker-pipeline.log.
+    log_component.set("pipeline")
     running_loop = asyncio.get_running_loop()
     interval = settings.bot.polling_interval_seconds
     last_pipeline_run_at = running_loop.time()
@@ -119,7 +127,7 @@ async def _pipeline_loop(session_factory, settings, *, shutdown) -> None:
             )
         except Exception as exc:  # noqa: BLE001 - a failed tick must not kill the worker
             await _record_failed_job(session_factory, "pipeline", exc)
-            typer.echo(f"pipeline tick failed: {exc}")
+            logger.exception("pipeline tick failed: %s", exc)
         else:
             delivery_config = AlertDeliveryConfig.from_settings(settings)
             if delivery_config.channel == "telegram":
@@ -195,6 +203,10 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
 
     async def loop() -> None:
         settings = _settings()
+        # Reconfigure logging for the worker process: the pipeline and command
+        # tasks each get their own file, lifecycle records go to worker.log.
+        setup_logging(settings, component="worker")
+        logger.info("worker started; jobs=%s", ", ".join(jobs))
         session_factory = make_session_factory(settings)
         shutdown = asyncio.Event()
         running_loop = asyncio.get_running_loop()
@@ -218,6 +230,7 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
             # Let each loop finish its current cycle, then exit on the shared event.
             shutdown.set()
             await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info("worker stopped")
 
     _run(loop())
 @worker_app.command("status")
@@ -248,11 +261,26 @@ def worker_status() -> None:
 
 
 @worker_app.command("logs")
-def worker_logs(tail: Annotated[int, typer.Option("--tail")] = 200) -> None:
-    """Retrieve recent runtime log lines when the configured log file exists."""
-    log_path = Path(".log/market-watch-bot.log")
+def worker_logs(
+    tail: Annotated[int, typer.Option("--tail")] = 200,
+    component: Annotated[
+        str, typer.Option("--component", help="pipeline | command | worker")
+    ] = "pipeline",
+) -> None:
+    """Retrieve recent runtime log lines for a worker component."""
+    filenames = {**WORKER_TASK_LOG_FILES, "worker": "worker.log"}
+    filename = filenames.get(component)
+    if filename is None:
+        choices = ", ".join(filenames)
+        typer.echo(f"unknown component '{component}'; choose one of: {choices}")
+        raise typer.Exit(1)
+    settings = _settings()
+    if not settings.logging.log_dir:
+        typer.echo("file logging is disabled (logging.log_dir is unset)")
+        return
+    log_path = Path(settings.logging.log_dir) / filename
     if not log_path.exists():
-        typer.echo("worker logs are stdout/stderr; .log/market-watch-bot.log not found")
+        typer.echo(f"worker logs are stdout/stderr; {log_path} not found")
         return
     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     for line in lines[-tail:]:

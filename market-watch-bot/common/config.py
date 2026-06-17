@@ -248,7 +248,9 @@ class RetentionConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"
-    log_file: str | None = ".log/market-watch-bot.log"
+    # Directory for per-component log files (api.log, worker-pipeline.log, ...).
+    # Set to null/empty to disable file logging (console only).
+    log_dir: str | None = ".log"
     console: bool = True
     max_lines: int = 10000
     backup_count: int = 5

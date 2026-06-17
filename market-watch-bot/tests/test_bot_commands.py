@@ -241,6 +241,29 @@ async def test_process_pending_bot_commands_drains_multiple_commands(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_process_pending_bot_commands_logs_outcome(monkeypatch, caplog) -> None:
+    commands = [
+        BotCommand(id="cmd_ok", command_type="event.mark", status="pending", payload={}),
+        BotCommand(id="cmd_bad", command_type="event.mark", status="pending", payload={}),
+    ]
+    session = CommandSession(commands)
+
+    async def fake_execute(_session, command, *, settings):
+        if command.id == "cmd_bad":
+            raise ValueError("boom")
+        return {"command": command.id}
+
+    monkeypatch.setattr("bot_worker.services.bot_commands.execute_bot_command", fake_execute)
+
+    with caplog.at_level("INFO", logger="bot_worker"):
+        await process_pending_bot_commands(session, settings=SimpleNamespace(), limit=25)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("bot command succeeded: cmd_ok" in message for message in messages)
+    assert any("bot command failed: cmd_bad" in message for message in messages)
+
+
+@pytest.mark.asyncio
 async def test_process_pending_bot_commands_stops_at_limit(monkeypatch) -> None:
     commands = [
         BotCommand(id="cmd_1", command_type="event.mark", status="pending", payload={}),

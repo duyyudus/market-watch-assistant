@@ -3,7 +3,30 @@ import logging
 from pathlib import Path
 
 from bot_worker.config import load_settings
-from bot_worker.logging import JsonLogFormatter, LineRotatingFileHandler
+from bot_worker.logging import (
+    JsonLogFormatter,
+    LineRotatingFileHandler,
+    log_component,
+    setup_logging,
+)
+
+
+def _settings_with_log_dir(tmp_path: Path, **logging_overrides):
+    env_file = tmp_path / ".env"
+    env_file.write_text("DATABASE_URL=sqlite+aiosqlite:///:memory:\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
+    settings.logging.log_dir = str(tmp_path / "logs")
+    settings.logging.console = False
+    for key, value in logging_overrides.items():
+        setattr(settings.logging, key, value)
+    return settings
+
+
+def _teardown_logger() -> None:
+    logger = logging.getLogger("bot_worker")
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
 
 
 def test_logging_config_defaults(tmp_path: Path) -> None:
@@ -11,6 +34,7 @@ def test_logging_config_defaults(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=sqlite+aiosqlite:///:memory:\n", encoding="utf-8")
     settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
+    assert settings.logging.log_dir == ".log"
     assert settings.logging.max_lines == 10000
     assert settings.logging.backup_count == 5
 
@@ -22,7 +46,7 @@ def test_logging_config_custom(tmp_path: Path) -> None:
         """
 logging:
   level: DEBUG
-  log_file: .log/custom.log
+  log_dir: .log/custom
   console: false
   max_lines: 50
   backup_count: 2
@@ -33,7 +57,7 @@ logging:
     env_file.write_text("DATABASE_URL=sqlite+aiosqlite:///:memory:\n", encoding="utf-8")
     settings = load_settings(env_file=env_file, settings_file=settings_file)
     assert settings.logging.level == "DEBUG"
-    assert settings.logging.log_file == ".log/custom.log"
+    assert settings.logging.log_dir == ".log/custom"
     assert settings.logging.console is False
     assert settings.logging.max_lines == 50
     assert settings.logging.backup_count == 2
@@ -150,6 +174,59 @@ def test_json_log_formatter_outputs_structured_fields_and_redacts_token() -> Non
     assert payload["stage_name"] == "extract_entities"
     assert payload["duration_ms"] == 42
     assert payload["items_processed"] == 7
+
+
+def test_worker_setup_routes_tasks_to_separate_files(tmp_path: Path) -> None:
+    settings = _settings_with_log_dir(tmp_path)
+    log_dir = Path(settings.logging.log_dir)
+    setup_logging(settings, component="worker")
+    logger = logging.getLogger("bot_worker")
+    try:
+        token = log_component.set("pipeline")
+        logger.info("pipeline tick ran")
+        log_component.reset(token)
+
+        token = log_component.set("command")
+        logger.info("command drained")
+        log_component.reset(token)
+
+        # No component set -> worker lifecycle file.
+        logger.info("worker starting up")
+
+        pipeline_lines = (log_dir / "worker-pipeline.log").read_text("utf-8").splitlines()
+        command_lines = (log_dir / "worker-command.log").read_text("utf-8").splitlines()
+        worker_lines = (log_dir / "worker.log").read_text("utf-8").splitlines()
+
+        assert [json.loads(line)["message"] for line in pipeline_lines] == [
+            "pipeline tick ran"
+        ]
+        assert [json.loads(line)["message"] for line in command_lines] == [
+            "command drained"
+        ]
+        assert [json.loads(line)["message"] for line in worker_lines] == [
+            "worker starting up"
+        ]
+        # Records are stamped with their component for in-file attribution.
+        assert json.loads(pipeline_lines[0])["component"] == "pipeline"
+        assert json.loads(worker_lines[0])["component"] == "worker"
+    finally:
+        _teardown_logger()
+
+
+def test_component_setup_writes_single_named_file(tmp_path: Path) -> None:
+    settings = _settings_with_log_dir(tmp_path)
+    log_dir = Path(settings.logging.log_dir)
+    setup_logging(settings, component="api")
+    logger = logging.getLogger("bot_worker")
+    try:
+        logger.info("request handled")
+        api_lines = (log_dir / "api.log").read_text("utf-8").splitlines()
+        assert [json.loads(line)["message"] for line in api_lines] == ["request handled"]
+        assert json.loads(api_lines[0])["component"] == "api"
+        # Worker task files are not created for a non-worker component.
+        assert not (log_dir / "worker-pipeline.log").exists()
+    finally:
+        _teardown_logger()
 
 
 def test_line_rotating_file_handler_counts_lines_from_single_formatted_message(

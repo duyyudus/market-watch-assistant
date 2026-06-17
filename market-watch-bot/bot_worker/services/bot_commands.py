@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -36,6 +37,8 @@ from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
 from common.bot_commands import ALLOWED_COMMAND_TYPES, EVENT_STATUSES
 from common.llm import LLMConfig
 from common.market_symbol_resolver import watchlist_market_symbol_requests
+
+logger = logging.getLogger("bot_worker")
 
 
 def utcnow() -> datetime:
@@ -90,6 +93,7 @@ async def reap_stale_running_bot_commands(
             command.completed_at = current
         if candidates:
             await session.flush()
+            logger.warning("reaped %d stale running bot command(s)", len(candidates))
         return len(candidates)
     result = await session.scalars(
         select(BotCommand)
@@ -104,6 +108,7 @@ async def reap_stale_running_bot_commands(
         reaped += 1
     if reaped:
         await session.flush()
+        logger.warning("reaped %d stale running bot command(s)", reaped)
     return reaped
 
 
@@ -399,12 +404,29 @@ async def process_one_bot_command(session: AsyncSession, *, settings) -> BotComm
     command = await claim_pending_bot_command(session)
     if command is None:
         return None
+    log_fields = {"command_id": command.id, "command_type": command.command_type}
+    logger.info(
+        "bot command claimed: %s (%s)", command.id, command.command_type, extra=log_fields
+    )
     try:
         result = await execute_bot_command(session, command, settings=settings)
     except Exception as exc:  # noqa: BLE001 - command result must capture operational failures
         fail_bot_command(command, exc)
+        logger.exception(
+            "bot command failed: %s (%s): %s",
+            command.id,
+            command.command_type,
+            exc,
+            extra=log_fields,
+        )
     else:
         complete_bot_command(command, result)
+        logger.info(
+            "bot command succeeded: %s (%s)",
+            command.id,
+            command.command_type,
+            extra={**log_fields, "result": result},
+        )
     return command
 
 

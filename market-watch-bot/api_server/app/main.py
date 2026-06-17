@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api_server.app.api.routers import router
 from common.config import Settings, load_settings
+from common.logging import setup_logging
 
 MUTATING_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 
 
+@asynccontextmanager
+async def _lifespan(api: FastAPI) -> AsyncIterator[None]:
+    # Configure logging once the server is actually starting (not on bare import
+    # of the module), so the API process logs to its own api.log file.
+    app_settings = getattr(api.state, "settings", None) or load_settings()
+    api.state.settings = app_settings
+    setup_logging(app_settings, component="api")
+    yield
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
-    api = FastAPI(title="Market Watch API", version="0.1.0")
+    api = FastAPI(title="Market Watch API", version="0.1.0", lifespan=_lifespan)
     if settings is not None:
         api.state.settings = settings
     api.add_middleware(
