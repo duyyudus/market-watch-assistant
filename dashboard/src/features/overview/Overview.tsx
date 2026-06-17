@@ -42,6 +42,7 @@ type ActionItem =
 const ACKNOWLEDGEABLE_DECISIONS = new Set(["immediate_alert", "watchlist_batch"]);
 const INVESTIGATION_ACTION_STATUSES = new Set(["pending", "running", "investigating", "failed"]);
 const WATCHLIST_TIERS = new Set(["tier-1", "tier1", "1", "s", "a"]);
+const SPOTLIGHT_EVENT_LIMIT = 5;
 const SEGMENTS: Array<{ id: Segment; label: string }> = [
   { id: "global", label: "Global" },
   { id: "us", label: "U.S." },
@@ -102,6 +103,11 @@ function mergedEvent(event: EventCluster, detail?: EventDetail) {
   return detail ?? event;
 }
 
+function eventRecency(event: EventCluster) {
+  const value = event.report_end_at ?? event.last_updated_at ?? event.report_start_at;
+  return value ? new Date(value).getTime() : 0;
+}
+
 function sourceHealthCounts(state: DashboardState) {
   return state.sourceHealth.reduce(
     (counts, source) => {
@@ -130,6 +136,9 @@ function watchlistHits(state: DashboardState) {
         return haystack.some((value) =>
           Array.from(needles).some((needle) => value === needle || value.includes(needle)),
         );
+      }).sort((left, right) => {
+        const recencyDelta = eventRecency(right) - eventRecency(left);
+        return recencyDelta || right.final_score - left.final_score;
       });
       return { entry, matches };
     })
@@ -574,13 +583,11 @@ export function Overview({
 
       <OverviewPanel icon={Star} title="Watchlist spotlight">
         {spotlight.length > 0 ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {spotlight.map(({ entry, matches }) => (
-              <button
-                className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-4 text-left transition-colors hover:border-primary/40"
+              <div
+                className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-4"
                 key={entry.id}
-                onClick={() => openEvent(matches[0].id)}
-                type="button"
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-baseline gap-2">
@@ -591,10 +598,19 @@ export function Overview({
                   </div>
                   <Badge tone="info">{matches.length} hit{matches.length === 1 ? "" : "s"}</Badge>
                 </div>
-                <div className="mt-3 text-xs font-semibold text-primary">
-                  {matches[0].canonical_headline}
+                <div className="mt-3 space-y-2">
+                  {matches.slice(0, SPOTLIGHT_EVENT_LIMIT).map((event) => (
+                    <button
+                      className="w-full rounded-md border border-zinc-800/70 bg-zinc-950/40 px-3 py-2 text-left text-xs font-semibold leading-5 text-primary transition-colors hover:border-primary/40 hover:bg-zinc-900/70"
+                      key={event.id}
+                      onClick={() => openEvent(event.id)}
+                      type="button"
+                    >
+                      {event.canonical_headline}
+                    </button>
+                  ))}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         ) : (

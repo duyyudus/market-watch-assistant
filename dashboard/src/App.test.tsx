@@ -726,8 +726,8 @@ describe("App data states", () => {
     await renderLoadedApp();
 
     expect(apiMock.botStatus).toHaveBeenCalledTimes(1);
-    // 1 shared recency window + 1 per market segment (global/vietnam/crypto).
-    expect(apiMock.events).toHaveBeenCalledTimes(4);
+    // 1 shared recency window + 1 per market segment (global/us/vietnam/crypto).
+    expect(apiMock.events).toHaveBeenCalledTimes(5);
     expect(apiMock.events).toHaveBeenCalledWith(expect.objectContaining({ segment: "crypto" }));
     expect(apiMock.alerts).toHaveBeenCalledTimes(1);
     expect(apiMock.sourceHealth).toHaveBeenCalledTimes(1);
@@ -750,11 +750,61 @@ describe("App data states", () => {
     expect(screen.getByRole("heading", { name: "Daily synthesis" })).toBeInTheDocument();
     expect(screen.getByText(/US \/ global_macro/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Top events" })).toBeInTheDocument();
-    expect(await screen.findByText("SPY")).toBeInTheDocument();
+    expect((await screen.findAllByText("SPY")).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "Watchlist spotlight" })).toBeInTheDocument();
     expect(screen.getByText("S&P 500 ETF")).toBeInTheDocument();
     expect(screen.getByText(/Coverage:/)).toBeInTheDocument();
     expect(screen.getByText(/1 healthy/)).toBeInTheDocument();
+  });
+
+  it("shows five newest reported spotlight events per watchlist asset", async () => {
+    const makeEvent = (id: string, headline: string, reportEnd: string, score: number) => ({
+      id,
+      canonical_headline: headline,
+      summary: `${headline} summary for SPY.`,
+      status: "reported",
+      regions: ["us"],
+      asset_classes: ["equity"],
+      affected_entities: ["S&P 500 ETF"],
+      affected_tickers: ["SPY"],
+      source_count: 1,
+      final_score: score,
+      alert_level: "digest_only",
+      report_start_at: "2026-05-29T09:00:00Z",
+      report_end_at: reportEnd,
+      last_updated_at: "2026-05-29T09:05:00Z",
+    });
+    const spotlightEvents = [
+      makeEvent("evt_spy_older", "SPY oldest rotation falls out", "2026-05-29T09:00:00Z", 91),
+      makeEvent("evt_spy_newest", "SPY newest macro shock", "2026-05-29T15:00:00Z", 60),
+      makeEvent("evt_spy_third", "SPY third report", "2026-05-29T13:00:00Z", 72),
+      makeEvent("evt_spy_second", "SPY second report", "2026-05-29T14:00:00Z", 74),
+      makeEvent("evt_spy_fifth", "SPY fifth report", "2026-05-29T11:00:00Z", 89),
+      makeEvent("evt_spy_fourth", "SPY fourth report", "2026-05-29T12:00:00Z", 76),
+    ];
+    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
+      if (options?.segment) return envelope([]);
+      return envelope(spotlightEvents);
+    });
+
+    await renderLoadedApp();
+
+    const spotlight = screen.getByRole("heading", { name: "Watchlist spotlight" }).closest("section");
+    expect(spotlight).not.toBeNull();
+    const shownHeadlines = within(spotlight!).getAllByRole("button").map((button) => button.textContent);
+
+    expect(shownHeadlines).toEqual([
+      "SPY newest macro shock",
+      "SPY second report",
+      "SPY third report",
+      "SPY fourth report",
+      "SPY fifth report",
+    ]);
+    expect(within(spotlight!).queryByText("SPY oldest rotation falls out")).not.toBeInTheDocument();
+
+    fireEvent.click(within(spotlight!).getByRole("button", { name: "SPY fifth report" }));
+
+    await waitFor(() => expect(apiMock.event).toHaveBeenCalledWith("evt_spy_fifth"));
   });
 
   it("acknowledges alerts from the overview action queue", async () => {
