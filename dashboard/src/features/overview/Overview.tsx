@@ -142,8 +142,7 @@ function watchlistHits(state: DashboardState) {
       });
       return { entry, matches };
     })
-    .filter((item) => item.matches.length > 0)
-    .slice(0, 10);
+    .filter((item) => item.matches.length > 0);
 }
 
 function DigestNarrative({ content }: { content: string }) {

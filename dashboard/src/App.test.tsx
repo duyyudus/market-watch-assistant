@@ -807,6 +807,52 @@ describe("App data states", () => {
     await waitFor(() => expect(apiMock.event).toHaveBeenCalledWith("evt_spy_fifth"));
   });
 
+  it("shows every qualifying spotlight watchlist asset", async () => {
+    const watchlistEntries = Array.from({ length: 11 }, (_, index) => {
+      const assetNumber = index + 1;
+      return {
+        id: `watch_${assetNumber}`,
+        symbol: `ASSET${assetNumber}`,
+        name: `Spotlight Asset ${assetNumber}`,
+        entity_type: "stock",
+        tier: "S",
+        region: "us",
+        asset_class: "equity",
+        aliases: [],
+        enabled: true,
+      };
+    });
+    const spotlightEvents = watchlistEntries.map((entry, index) => ({
+      id: `evt_asset_${index + 1}`,
+      canonical_headline: `${entry.name} reports market-moving update`,
+      summary: `${entry.symbol} summary.`,
+      status: "reported",
+      regions: ["us"],
+      asset_classes: ["equity"],
+      affected_entities: [entry.name],
+      affected_tickers: [entry.symbol],
+      source_count: 1,
+      final_score: 70,
+      alert_level: "digest_only",
+      report_start_at: "2026-05-29T09:00:00Z",
+      report_end_at: "2026-05-29T10:00:00Z",
+      last_updated_at: "2026-05-29T10:05:00Z",
+    }));
+    apiMock.watchlist.mockResolvedValue(envelope(watchlistEntries));
+    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
+      if (options?.segment) return envelope([]);
+      return envelope(spotlightEvents);
+    });
+
+    await renderLoadedApp();
+
+    const spotlight = screen.getByRole("heading", { name: "Watchlist spotlight" }).closest("section");
+    expect(spotlight).not.toBeNull();
+    for (const entry of watchlistEntries) {
+      expect(within(spotlight!).getByText(entry.name)).toBeInTheDocument();
+    }
+  });
+
   it("acknowledges alerts from the overview action queue", async () => {
     await renderLoadedApp();
 
