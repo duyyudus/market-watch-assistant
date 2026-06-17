@@ -15,13 +15,15 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type { AlertDecision, BotCommand, CatalystReview, EventCluster, EventDetail } from "../../api";
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/EmptyState";
 import { SectionError } from "../../components/SectionError";
+import { EventDetailReadOnly } from "../events/EventDetailReadOnly";
 import { classNames } from "../../lib/classNames";
 import { scoreTone } from "../../lib/score";
 import { formatTime } from "../../lib/time";
@@ -37,6 +39,8 @@ type ActionItem =
   | { type: "alert"; id: string; alert: AlertDecision; event?: EventCluster }
   | { type: "investigation"; id: string; event: EventCluster }
   | { type: "catalyst"; id: string; catalyst: CatalystReview };
+type SpotlightAnchor = Pick<DOMRect, "bottom" | "height" | "left" | "top" | "width">;
+type SpotlightPopover = { event: EventCluster; anchor: SpotlightAnchor };
 
 // Decisions that result in a delivered alert the user can acknowledge.
 const ACKNOWLEDGEABLE_DECISIONS = new Set(["immediate_alert", "watchlist_batch"]);
@@ -363,6 +367,56 @@ function EventCard({
   );
 }
 
+function spotlightPopoverStyle(anchor: SpotlightAnchor) {
+  const margin = 16;
+  const gap = 8;
+  const preferredMaxHeight = 720;
+  const width = Math.min(560, Math.max(320, window.innerWidth - 32));
+  const left = Math.min(
+    Math.max(margin, anchor.left),
+    Math.max(margin, window.innerWidth - width - margin),
+  );
+  const spaceBelow = window.innerHeight - anchor.bottom - gap - margin;
+  const spaceAbove = anchor.top - gap - margin;
+  const opensAbove = spaceBelow < 360 && spaceAbove > spaceBelow;
+  const availableHeight = Math.max(120, Math.min(preferredMaxHeight, opensAbove ? spaceAbove : spaceBelow));
+  const top = opensAbove
+    ? Math.max(margin, anchor.top - gap - availableHeight)
+    : Math.min(anchor.bottom + gap, window.innerHeight - margin - availableHeight);
+  return { left, maxHeight: availableHeight, top, width };
+}
+
+function WatchlistEventPopover({
+  popover,
+  detail,
+}: {
+  popover: SpotlightPopover;
+  detail?: EventDetail;
+}) {
+  if (typeof document === "undefined") return null;
+  const popoverId = `watchlist-event-popover-${popover.event.id}`;
+  const style = spotlightPopoverStyle(popover.anchor);
+
+  return createPortal(
+    <div
+      aria-label={`${popover.event.canonical_headline} details`}
+      className="fixed z-50 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4 text-left shadow-2xl shadow-black/40"
+      data-watchlist-event-popover={popover.event.id}
+      id={popoverId}
+      role="dialog"
+      style={style}
+    >
+      <EventDetailReadOnly event={popover.event} eventDetail={detail} />
+      {detail ? null : (
+        <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs text-base-content/60">
+          Loading event details...
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
 export function Overview({
   state,
   errors,
@@ -389,6 +443,7 @@ export function Overview({
   openMaintenance: () => void;
 }) {
   const [activeSegment, setActiveSegment] = useState<Segment>("global");
+  const [spotlightPopover, setSpotlightPopover] = useState<SpotlightPopover | null>(null);
   const latestCompletedAt = state.status?.latest_job?.completed_at;
   const queueUnavailable = state.status?.command_queue_available === false;
 
@@ -454,6 +509,57 @@ export function Overview({
   const healthCounts = sourceHealthCounts(state);
   const degradedSources = healthCounts.degraded + healthCounts.failing;
   const spotlight = watchlistHits(state);
+  const activeSpotlightDetail = spotlightPopover
+    ? state.eventDetails[spotlightPopover.event.id]
+    : undefined;
+
+  function openSpotlightPopover(
+    event: EventCluster,
+    clickEvent: MouseEvent<HTMLButtonElement>,
+  ) {
+    const rect = clickEvent.currentTarget.getBoundingClientRect();
+    setSpotlightPopover({
+      event,
+      anchor: {
+        bottom: rect.bottom,
+        height: rect.height,
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+      },
+    });
+    if (!state.eventDetails[event.id]) {
+      loadEventDetail(event.id);
+    }
+  }
+
+  useEffect(() => {
+    if (!spotlightPopover) return undefined;
+    const activeEventId = spotlightPopover.event.id;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setSpotlightPopover(null);
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const insidePopover = Boolean(target.closest("[data-watchlist-event-popover]"));
+      const insideTrigger = Boolean(
+        target.closest(`[data-watchlist-event-trigger="${activeEventId}"]`),
+      );
+      if (!insidePopover && !insideTrigger) {
+        setSpotlightPopover(null);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [spotlightPopover]);
 
   if (errors.events || errors.alerts) {
     return (
@@ -600,9 +706,21 @@ export function Overview({
                 <div className="mt-3 space-y-2">
                   {matches.slice(0, SPOTLIGHT_EVENT_LIMIT).map((event) => (
                     <button
-                      className="w-full rounded-md border border-zinc-800/70 bg-zinc-950/40 px-3 py-2 text-left text-xs font-semibold leading-5 text-primary transition-colors hover:border-primary/40 hover:bg-zinc-900/70"
+                      aria-controls={
+                        spotlightPopover?.event.id === event.id
+                          ? `watchlist-event-popover-${event.id}`
+                          : undefined
+                      }
+                      aria-expanded={spotlightPopover?.event.id === event.id}
+                      className={classNames(
+                        "w-full rounded-md border bg-zinc-950/40 px-3 py-2 text-left text-xs font-semibold leading-5 text-primary transition-colors hover:border-primary/40 hover:bg-zinc-900/70",
+                        spotlightPopover?.event.id === event.id
+                          ? "border-primary/60 bg-primary/5"
+                          : "border-zinc-800/70",
+                      )}
+                      data-watchlist-event-trigger={event.id}
                       key={event.id}
-                      onClick={() => openEvent(event.id)}
+                      onClick={(clickEvent) => openSpotlightPopover(event, clickEvent)}
                       type="button"
                     >
                       {event.canonical_headline}
@@ -620,6 +738,13 @@ export function Overview({
           />
         )}
       </OverviewPanel>
+
+      {spotlightPopover ? (
+        <WatchlistEventPopover
+          detail={activeSpotlightDetail}
+          popover={spotlightPopover}
+        />
+      ) : null}
 
       <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/60 px-4 py-3 text-sm text-base-content/70">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

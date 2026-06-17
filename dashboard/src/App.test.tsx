@@ -805,6 +805,115 @@ describe("App data states", () => {
     fireEvent.click(within(spotlight!).getByRole("button", { name: "SPY fifth report" }));
 
     await waitFor(() => expect(apiMock.event).toHaveBeenCalledWith("evt_spy_fifth"));
+    expect(screen.getByRole("heading", { name: "Watchlist spotlight" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Event clusters" })).not.toBeInTheDocument();
+  });
+
+  it("opens watchlist spotlight event details in an overview popover", async () => {
+    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
+      if (options?.segment) return envelope([]);
+      return envelope([
+        {
+          id: "evt_1",
+          canonical_headline: "Fed signals a slower rate path",
+          summary: "Policy makers leaned less hawkish.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["S&P 500 ETF"],
+          affected_tickers: ["SPY"],
+          source_count: 2,
+          final_score: 84,
+          alert_level: "immediate_alert",
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+          last_updated_at: "2026-05-29T13:00:00Z",
+        },
+      ]);
+    });
+
+    await renderLoadedApp();
+
+    const spotlight = screen.getByRole("heading", { name: "Watchlist spotlight" }).closest("section");
+    expect(spotlight).not.toBeNull();
+
+    fireEvent.click(within(spotlight!).getByRole("button", { name: "Fed signals a slower rate path" }));
+
+    const popover = await screen.findByRole("dialog", {
+      name: "Fed signals a slower rate path details",
+    });
+
+    expect(apiMock.event).toHaveBeenCalledWith("evt_1");
+    expect(screen.getByRole("heading", { name: "Watchlist spotlight" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Event clusters" })).not.toBeInTheDocument();
+    expect(within(popover).getByText("Policy makers leaned less hawkish.")).toBeInTheDocument();
+    expect(within(popover).getByText("Event ID")).toBeInTheDocument();
+    expect(within(popover).getByText("evt_1")).toBeInTheDocument();
+    expect(within(popover).getByRole("heading", { name: "Scoring" })).toBeInTheDocument();
+    expect(within(popover).getByRole("heading", { name: "Timeline" })).toBeInTheDocument();
+    expect(within(popover).getByText("Less hawkish Fed path.")).toBeInTheDocument();
+    expect(within(popover).getByText("monitor duration exposure")).toBeInTheDocument();
+    expect(within(popover).getAllByText("SPY").length).toBeGreaterThan(0);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Fed signals a slower rate path details" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the watchlist spotlight popover inside the viewport near the bottom edge", async () => {
+    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
+      if (options?.segment) return envelope([]);
+      return envelope([
+        {
+          id: "evt_1",
+          canonical_headline: "Fed signals a slower rate path",
+          summary: "Policy makers leaned less hawkish.",
+          status: "reported",
+          regions: ["us"],
+          asset_classes: ["global_macro"],
+          affected_entities: ["S&P 500 ETF"],
+          affected_tickers: ["SPY"],
+          source_count: 2,
+          final_score: 84,
+          alert_level: "immediate_alert",
+          report_start_at: "2026-05-27T08:30:00Z",
+          report_end_at: "2026-05-30T09:00:00Z",
+          last_updated_at: "2026-05-29T13:00:00Z",
+        },
+      ]);
+    });
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(600);
+
+    await renderLoadedApp();
+
+    const spotlight = screen.getByRole("heading", { name: "Watchlist spotlight" }).closest("section");
+    expect(spotlight).not.toBeNull();
+    const button = within(spotlight!).getByRole("button", { name: "Fed signals a slower rate path" });
+    vi.spyOn(button, "getBoundingClientRect").mockReturnValue({
+      x: 220,
+      y: 540,
+      top: 540,
+      right: 780,
+      bottom: 580,
+      left: 220,
+      width: 560,
+      height: 40,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(button);
+
+    const popover = await screen.findByRole("dialog", {
+      name: "Fed signals a slower rate path details",
+    });
+    const top = Number.parseFloat(popover.style.top);
+    const maxHeight = Number.parseFloat(popover.style.maxHeight);
+
+    expect(top + maxHeight).toBeLessThanOrEqual(584);
   });
 
   it("shows every qualifying spotlight watchlist asset", async () => {
