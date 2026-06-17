@@ -108,6 +108,9 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     pending_commands: 0,
     running_commands: 0,
     command_queue_available: true,
+    worker_heartbeat_available: true,
+    worker_running: true,
+    worker_last_seen_at: "2026-05-29T13:01:00Z",
   });
   apiMock.sources.mockResolvedValue(
     envelope([
@@ -1107,6 +1110,29 @@ describe("App data states", () => {
     switchTo("sources");
     expect(await screen.findAllByText("Federal Reserve")).not.toHaveLength(0);
     expect(screen.getByText("API ok")).toBeInTheDocument();
+    expect(screen.getByText("Worker ok")).toBeInTheDocument();
+    expect(screen.queryByText("0 pending")).not.toBeInTheDocument();
+  });
+
+  it("shows worker offline status in the header", async () => {
+    mockSuccessfulLoad({
+      botStatus: vi.fn().mockResolvedValue({
+        mode: "shared_database",
+        latest_job: null,
+        latest_job_available: true,
+        pending_commands: 0,
+        running_commands: 0,
+        command_queue_available: true,
+        worker_heartbeat_available: true,
+        worker_running: false,
+        worker_last_seen_at: "2026-05-29T12:55:00Z",
+      }),
+    });
+
+    await renderLoadedApp();
+
+    expect(await screen.findByText("Worker offline")).toBeInTheDocument();
+    expect(screen.queryByText("0 pending")).not.toBeInTheDocument();
   });
 
   it("refreshes affected resources when live dashboard events arrive", async () => {
@@ -2027,7 +2053,10 @@ describe("App data states", () => {
     await renderLoadedApp();
     switchTo("alerts");
 
-    expect(await screen.findByText("1 unacknowledged")).toBeInTheDocument();
+    expect(
+      await within(screen.getByTestId("alert-row-alert_1")).findByText("unacknowledged"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("1 unacknowledged")).not.toBeInTheDocument();
     fireEvent.click(
       within(screen.getByTestId("alert-row-alert_1")).getByRole("button", {
         name: /acknowledge/i,

@@ -403,6 +403,9 @@ export type BotStatus = {
   pending_commands: number;
   running_commands: number;
   command_queue_available?: boolean;
+  worker_heartbeat_available?: boolean;
+  worker_running?: boolean | null;
+  worker_last_seen_at?: string | null;
 };
 
 export type FetchLog = {

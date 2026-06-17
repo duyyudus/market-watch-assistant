@@ -403,6 +403,14 @@ async def client():
                 },
             },
         )
+        worker_heartbeat = AppSetting(
+            key="worker.heartbeat",
+            value={
+                "last_seen_at": datetime.now(UTC).isoformat(),
+                "process": "worker",
+                "jobs": ["pipeline", "commands"],
+            },
+        )
         fetch_log = SourceFetchLog(
             id="fetch_1",
             source_id="src_1",
@@ -655,6 +663,7 @@ async def client():
                 command,
                 watch,
                 presets,
+                worker_heartbeat,
                 fetch_log,
                 cluster_item,
                 fallback_report_cluster_item,
@@ -716,6 +725,9 @@ async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient
     status = await client.get("/bot/status")
     assert status.status_code == 200
     assert status.json()["latest_job"]["id"] == "jobrun_1"
+    assert status.json()["worker_heartbeat_available"] is True
+    assert status.json()["worker_running"] is True
+    assert status.json()["worker_last_seen_at"] is not None
 
     sources = await client.get("/sources")
     assert sources.status_code == 200
@@ -1758,7 +1770,48 @@ async def test_bot_status_degrades_when_job_table_is_missing() -> None:
     assert response.json()["latest_job"] is None
     assert response.json()["latest_job_available"] is False
     assert response.json()["command_queue_available"] is False
+    assert response.json()["worker_heartbeat_available"] is False
+    assert response.json()["worker_running"] is None
     assert missing_session.rollbacks == 3
+
+
+@pytest.mark.asyncio
+async def test_bot_status_reports_stale_worker_heartbeat() -> None:
+    app.state.settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        api_auth_token="test-token",
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    stale_seen_at = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=5)
+    async with factory() as session:
+        session.add(
+            AppSetting(
+                key="worker.heartbeat",
+                value={"last_seen_at": stale_seen_at.isoformat(), "process": "worker"},
+            )
+        )
+        await session.commit()
+
+    async def override_session():
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as test_client:
+        response = await test_client.get("/bot/status")
+    app.dependency_overrides.clear()
+    await engine.dispose()
+
+    assert response.status_code == 200
+    assert response.json()["worker_heartbeat_available"] is True
+    assert response.json()["worker_running"] is False
+    assert response.json()["worker_last_seen_at"] == stale_seen_at.isoformat()
 
 
 @pytest.mark.asyncio

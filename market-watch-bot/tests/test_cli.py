@@ -23,6 +23,7 @@ from bot_worker.db.models import (
     AgentInvestigation,
     AlertDecisionRecord,
     AlertDeliveryRecord,
+    AppSetting,
     EventCluster,
     EventClusterItem,
     JobRun,
@@ -86,6 +87,58 @@ def test_cli_health_pipeline_does_not_require_database() -> None:
     assert result.exit_code == 0
     assert "pipeline jobs:" in result.output
     assert "retention cutoffs:" in result.output
+
+
+@pytest.mark.asyncio
+async def test_record_worker_heartbeat_upserts_app_setting() -> None:
+    class HeartbeatSession:
+        def __init__(self) -> None:
+            self.setting = None
+            self.added = []
+
+        async def get(self, model, key):
+            assert model is AppSetting
+            assert key == "worker.heartbeat"
+            return self.setting
+
+        def add(self, item):
+            self.added.append(item)
+            self.setting = item
+
+    session = HeartbeatSession()
+
+    await worker_cli.record_worker_heartbeat(session, jobs=["pipeline", "commands"])
+
+    assert len(session.added) == 1
+    assert session.setting.key == "worker.heartbeat"
+    assert session.setting.value["process"] == "worker"
+    assert session.setting.value["jobs"] == ["pipeline", "commands"]
+    assert "last_seen_at" in session.setting.value
+
+    first_setting = session.setting
+    await worker_cli.record_worker_heartbeat(session, jobs=["commands"])
+
+    assert session.setting is first_setting
+    assert session.setting.value["jobs"] == ["commands"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_worker_heartbeat_does_not_raise_when_update_fails(monkeypatch) -> None:
+    calls = []
+
+    async def fake_with_session(fn, *, settings, session_factory):
+        calls.append((fn, settings, session_factory))
+        raise RuntimeError("app_settings unavailable")
+
+    monkeypatch.setattr(worker_cli, "_with_session", fake_with_session)
+    session_factory = object()
+    settings = object()
+
+    await worker_cli.refresh_worker_heartbeat(session_factory, settings, jobs=["commands"])
+
+    assert len(calls) == 1
+    assert calls[0][1] is settings
+    assert calls[0][2] is session_factory
 
 
 def test_cli_source_add_rejects_unsupported_source_type(monkeypatch) -> None:

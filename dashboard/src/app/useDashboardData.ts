@@ -529,6 +529,15 @@ export function useDashboardData() {
     errorCount === 0 ? "API ok" : errorCount === apiResourceCount ? "API offline" : "API degraded";
   const apiBadgeTone =
     errorCount === 0 ? "success" : errorCount === apiResourceCount ? "error" : "warning";
+  const workerRunning = state.status?.worker_running;
+  const workerBadgeLabel =
+    workerRunning === true
+      ? "Worker ok"
+      : workerRunning === false
+        ? "Worker offline"
+        : "Worker unknown";
+  const workerBadgeTone =
+    workerRunning === true ? "success" : workerRunning === false ? "error" : "warning";
 
   async function queue(
     commandType: string,
@@ -732,6 +741,8 @@ export function useDashboardData() {
     errorCount,
     apiBadgeLabel,
     apiBadgeTone,
+    workerBadgeLabel,
+    workerBadgeTone,
     queue,
     trackCommand,
     trackedCommand,

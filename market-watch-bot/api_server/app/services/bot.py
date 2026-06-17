@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.app.schemas import BotCommandCreate, JobRunRead
-from common.db.models import BotCommand, JobRun
+from common.db.models import AppSetting, BotCommand, JobRun
+
+WORKER_HEARTBEAT_KEY = "worker.heartbeat"
+WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=60)
 
 
 async def latest_job_for_status(session: AsyncSession) -> tuple[JobRun | None, bool]:
@@ -32,6 +35,58 @@ async def bot_command_count(session: AsyncSession, command_status: str) -> tuple
     return int(count or 0), True
 
 
+def _parse_heartbeat_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+async def worker_heartbeat_status(
+    session: AsyncSession, *, now: datetime | None = None
+) -> dict[str, object]:
+    if not hasattr(session, "get"):
+        return {
+            "worker_heartbeat_available": False,
+            "worker_running": None,
+            "worker_last_seen_at": None,
+        }
+    try:
+        setting = await session.get(AppSetting, WORKER_HEARTBEAT_KEY)
+    except SQLAlchemyError:
+        await session.rollback()
+        return {
+            "worker_heartbeat_available": False,
+            "worker_running": None,
+            "worker_last_seen_at": None,
+        }
+    if setting is None or not isinstance(setting.value, dict):
+        return {
+            "worker_heartbeat_available": True,
+            "worker_running": False,
+            "worker_last_seen_at": None,
+        }
+    raw_last_seen = setting.value.get("last_seen_at")
+    last_seen_at = _parse_heartbeat_timestamp(raw_last_seen)
+    if last_seen_at is None:
+        return {
+            "worker_heartbeat_available": True,
+            "worker_running": False,
+            "worker_last_seen_at": raw_last_seen if isinstance(raw_last_seen, str) else None,
+        }
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    return {
+        "worker_heartbeat_available": True,
+        "worker_running": current - last_seen_at <= WORKER_HEARTBEAT_STALE_AFTER,
+        "worker_last_seen_at": raw_last_seen,
+    }
+
+
 async def get_bot_status(session: AsyncSession) -> dict[str, object]:
     latest_job, latest_job_available = await latest_job_for_status(session)
     pending_commands, pending_available = await bot_command_count(session, "pending")
@@ -43,6 +98,7 @@ async def get_bot_status(session: AsyncSession) -> dict[str, object]:
         "pending_commands": pending_commands,
         "running_commands": running_commands,
         "command_queue_available": pending_available and running_available,
+        **await worker_heartbeat_status(session),
     }
 
 

@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from bot_worker.cli.apps import worker_app
 from bot_worker.cli.common import _echo_json, _record_failed_job, _run, _settings, _with_session
-from bot_worker.db.models import DigestRecord, JobRun
+from bot_worker.db.models import AppSetting, DigestRecord, JobRun
 from bot_worker.db.session import make_session_factory
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.investigation import InvestigationConfig
@@ -34,8 +34,22 @@ from common.logging import WORKER_TASK_LOG_FILES, log_component, setup_logging
 
 COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25
+WORKER_HEARTBEAT_KEY = "worker.heartbeat"
 
 logger = logging.getLogger("bot_worker")
+
+
+async def record_worker_heartbeat(session, *, jobs: list[str]) -> None:
+    setting = await session.get(AppSetting, WORKER_HEARTBEAT_KEY)
+    value = {
+        "last_seen_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "process": "worker",
+        "jobs": jobs,
+    }
+    if setting is None:
+        session.add(AppSetting(key=WORKER_HEARTBEAT_KEY, value=value))
+        return
+    setting.value = value
 
 
 async def drain_bot_commands(session, settings) -> None:
@@ -79,7 +93,7 @@ async def run_pipeline_tick(session, settings) -> None:
     # (see _pipeline_loop) so their external sends / state are not rolled back.
 
 
-async def _command_loop(session_factory, settings, *, shutdown) -> None:
+async def _command_loop(session_factory, settings, *, jobs: list[str], shutdown) -> None:
     """Drain pending bot commands on a fixed cadence in their own transaction.
 
     Runs independently of :func:`_pipeline_loop` so user commands stay responsive while
@@ -92,6 +106,7 @@ async def _command_loop(session_factory, settings, *, shutdown) -> None:
         settings.bot, "command_poll_interval_seconds", COMMAND_POLL_INTERVAL_SECONDS
     )
     while not shutdown.is_set():
+        await refresh_worker_heartbeat(session_factory, settings, jobs=jobs)
         try:
             await _with_session(
                 lambda session: drain_bot_commands(session, settings),
@@ -103,6 +118,17 @@ async def _command_loop(session_factory, settings, *, shutdown) -> None:
             logger.exception("bot command drain failed: %s", exc)
         with suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(), timeout=poll_interval)
+
+
+async def refresh_worker_heartbeat(session_factory, settings, *, jobs: list[str]) -> None:
+    try:
+        await _with_session(
+            lambda session: record_worker_heartbeat(session, jobs=jobs),
+            settings=settings,
+            session_factory=session_factory,
+        )
+    except Exception as exc:  # noqa: BLE001 - liveness reporting must not block commands
+        logger.warning("worker heartbeat update failed: %s", exc)
 
 
 async def _pipeline_loop(session_factory, settings, *, shutdown) -> None:
@@ -208,6 +234,11 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
         setup_logging(settings, component="worker")
         logger.info("worker started; jobs=%s", ", ".join(jobs))
         session_factory = make_session_factory(settings)
+        await _with_session(
+            lambda session: record_worker_heartbeat(session, jobs=jobs),
+            settings=settings,
+            session_factory=session_factory,
+        )
         shutdown = asyncio.Event()
         running_loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -218,7 +249,7 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
         # here, so the two never ingest/cluster concurrently.
         tasks = [
             asyncio.create_task(
-                _command_loop(session_factory, settings, shutdown=shutdown)
+                _command_loop(session_factory, settings, jobs=jobs, shutdown=shutdown)
             ),
             asyncio.create_task(
                 _pipeline_loop(session_factory, settings, shutdown=shutdown)

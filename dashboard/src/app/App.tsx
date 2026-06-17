@@ -68,12 +68,13 @@ export function App() {
     errorCount,
     apiBadgeLabel,
     apiBadgeTone,
+    workerBadgeLabel,
+    workerBadgeTone,
     queue,
     trackCommand,
     trackedCommand,
     acknowledgeAlert,
     dismissAlert,
-    unacknowledgedAlerts,
     setSelectedEventId,
     setSelectedNewsId,
     loadNewsDetail,
@@ -186,12 +187,9 @@ export function App() {
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Badge tone={apiBadgeTone}>{apiBadgeLabel}</Badge>
+              <Badge tone={workerBadgeTone}>{workerBadgeLabel}</Badge>
               {state.status?.command_queue_available === false ? (
                 <Badge tone="warning">queue unavailable</Badge>
-              ) : null}
-              <Badge tone="info">{state.status?.pending_commands ?? 0} pending</Badge>
-              {unacknowledgedAlerts > 0 ? (
-                <Badge tone="warning">{unacknowledgedAlerts} unacknowledged</Badge>
               ) : null}
 
               <div className="dropdown dropdown-end dropdown-bottom">
