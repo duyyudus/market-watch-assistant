@@ -29,10 +29,11 @@ from common.db.models import (
 def _segment_filter(segment: str) -> ColumnElement[bool] | None:
     """Translate a dashboard market segment into a JSONB membership predicate.
 
-    Crypto and Vietnam are positive matches on the canonical region/asset-class
-    vocabulary; ``global`` is everything that is neither, so a quiet segment can
-    still surface its own clusters instead of being crowded out of a recency
-    window shared across all segments.
+    Crypto, Vietnam, and US are positive matches on the canonical region/asset-class
+    vocabulary, which are mutually exclusive; ``global`` is everything that is none of
+    those (i.e. non-US international/macro), so a quiet segment can still surface its
+    own clusters instead of being crowded out of a recency window shared across all
+    segments.
     """
     crypto = or_(
         EventCluster.asset_classes.contains(["crypto"]),
@@ -43,12 +44,18 @@ def _segment_filter(segment: str) -> ColumnElement[bool] | None:
         EventCluster.regions.contains(["vn"]),
         EventCluster.asset_classes.contains(["vietnam_equity"]),
     )
+    us = or_(
+        EventCluster.regions.contains(["us"]),
+        EventCluster.regions.contains(["usa"]),
+    )
     if segment == "crypto":
         return crypto
     if segment == "vietnam":
         return vietnam
+    if segment == "us":
+        return us
     if segment == "global":
-        return and_(not_(crypto), not_(vietnam))
+        return and_(not_(crypto), not_(vietnam), not_(us))
     return None
 
 

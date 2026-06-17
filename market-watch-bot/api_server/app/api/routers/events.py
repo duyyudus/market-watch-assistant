@@ -23,7 +23,7 @@ async def list_events(
     min_score: int | None = Query(None, ge=0, le=100),
     status_filter: str | None = Query(None, alias="status"),
     q: str | None = None,
-    segment: str | None = Query(None, pattern="^(global|vietnam|crypto)$"),
+    segment: str | None = Query(None, pattern="^(global|us|vietnam|crypto)$"),
 ) -> ListEnvelope[EventRead]:
     rows, total = await event_service.list_events(
         session,

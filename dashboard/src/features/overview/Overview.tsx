@@ -32,7 +32,7 @@ import type {
   TrackCommand,
 } from "../../types/dashboard";
 
-type Segment = "global" | "vietnam" | "crypto";
+type Segment = "global" | "us" | "vietnam" | "crypto";
 type ActionItem =
   | { type: "alert"; id: string; alert: AlertDecision; event?: EventCluster }
   | { type: "investigation"; id: string; event: EventCluster }
@@ -44,6 +44,7 @@ const INVESTIGATION_ACTION_STATUSES = new Set(["pending", "running", "investigat
 const WATCHLIST_TIERS = new Set(["tier-1", "tier1", "1", "s", "a"]);
 const SEGMENTS: Array<{ id: Segment; label: string }> = [
   { id: "global", label: "Global" },
+  { id: "us", label: "U.S." },
   { id: "vietnam", label: "Vietnam" },
   { id: "crypto", label: "Crypto" },
 ];

@@ -578,7 +578,7 @@ export function buildNewsPath(
   return `/news?${params.toString()}`;
 }
 
-export type EventSegment = "global" | "vietnam" | "crypto";
+export type EventSegment = "global" | "us" | "vietnam" | "crypto";
 
 export type EventQueryOptions = {
   offset: number;
