@@ -31,7 +31,7 @@ export type AlertSubTab = "decisions" | "settings";
 const EVENT_PAGE_SIZE = 100;
 const ALERT_PAGE_SIZE = 100;
 const OVERVIEW_SEGMENTS = ["global", "vietnam", "crypto"] as const;
-const OVERVIEW_SEGMENT_SIZE = 5;
+const OVERVIEW_SEGMENT_SIZE = 10;
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;

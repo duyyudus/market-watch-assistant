@@ -133,7 +133,7 @@ function watchlistHits(state: DashboardState) {
       return { entry, matches };
     })
     .filter((item) => item.matches.length > 0)
-    .slice(0, 3);
+    .slice(0, 10);
 }
 
 function DigestNarrative({ content }: { content: string }) {
@@ -204,7 +204,7 @@ function ActionQueue({
 
   return (
     <div className="space-y-3">
-      {items.slice(0, 5).map((item) => {
+      {items.slice(0, 10).map((item) => {
         if (item.type === "alert") {
           const title = item.alert.event?.headline ?? item.event?.canonical_headline ?? item.alert.reason;
           return (
@@ -553,7 +553,7 @@ export function Overview({
         </div>
         {selectedEvents.length > 0 ? (
           <div className="grid gap-3 xl:grid-cols-2">
-            {selectedEvents.map((event) => (
+            {selectedEvents.slice(0, 10).map((event) => (
               <EventCard
                 detail={state.eventDetails[event.id]}
                 event={event}
@@ -573,7 +573,7 @@ export function Overview({
 
       <OverviewPanel icon={Star} title="Watchlist spotlight">
         {spotlight.length > 0 ? (
-          <div className="grid gap-3 lg:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {spotlight.map(({ entry, matches }) => (
               <button
                 className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-4 text-left transition-colors hover:border-primary/40"
@@ -582,10 +582,10 @@ export function Overview({
                 type="button"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <div>
+                  <div className="flex items-baseline gap-2">
                     <div className="text-sm font-semibold text-zinc-100">{entry.name}</div>
-                    <div className="mt-1 text-xs text-base-content/60">
-                      {entry.symbol ?? entry.entity_type} · tier {entry.tier}
+                    <div className="text-xs text-base-content/60">
+                      {entry.symbol ?? entry.entity_type}
                     </div>
                   </div>
                   <Badge tone="info">{matches.length} hit{matches.length === 1 ? "" : "s"}</Badge>
