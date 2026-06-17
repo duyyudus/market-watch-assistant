@@ -337,9 +337,9 @@ async def client():
         )
         command = BotCommand(
             id="cmd_1",
-            command_type="pipeline.run",
+            command_type="source.quality.refresh",
             status="succeeded",
-            payload={"dry_run": True},
+            payload={},
             result={"event_clusters": 1},
             created_at=datetime(2026, 5, 29, 13, 2, tzinfo=UTC),
             completed_at=datetime(2026, 5, 29, 13, 3, tzinfo=UTC),
@@ -1352,14 +1352,14 @@ async def test_safe_configuration_and_command_endpoints(client: AsyncClient) -> 
     command = await client.post(
         "/bot/commands",
         headers=AUTH_HEADERS,
-        json={"command_type": "pipeline.run", "payload": {"dry_run": True}},
+        json={"command_type": "source.quality.refresh", "payload": {}},
     )
     assert command.status_code == 201
     assert command.json()["status"] == "pending"
 
     listed = await client.get("/bot/commands")
     assert listed.status_code == 200
-    assert listed.json()["items"][0]["command_type"] == "pipeline.run"
+    assert listed.json()["items"][0]["command_type"] == "source.quality.refresh"
 
     cancelled = await client.post(
         f"/bot/commands/{command.json()['id']}/cancel",
@@ -1764,8 +1764,8 @@ async def test_bot_status_degrades_when_job_table_is_missing() -> None:
 @pytest.mark.asyncio
 async def test_command_payload_validation_accepts_valid_payloads(client: AsyncClient) -> None:
     valid_commands = [
-        ("pipeline.run", {"dry_run": True}),
-        ("pipeline.run", {}),
+        ("digest.send", {"dry_run": True}),
+        ("source.quality.refresh", {}),
         ("source.fetch", {"source_id": "src_1"}),
         ("alert.dispatch", {"channel": "telegram", "limit": 10, "dry_run": True}),
         ("alert.dispatch", {}),
@@ -1801,8 +1801,8 @@ async def test_command_payload_validation_rejects_invalid_payloads(client: Async
         ("event.mark", {"event_id": "evt_1"}, "Missing required"),
         ("event.mark", {"event_id": "evt_1", "status": "invalid"}, "Invalid event status"),
         ("investigation.run_event", {}, "Missing required"),
-        ("pipeline.run", {"dry_run": "yes"}, "must be bool"),
-        ("pipeline.run", {"unknown_key": True}, "Unexpected payload key"),
+        ("digest.send", {"dry_run": "yes"}, "must be bool"),
+        ("digest.send", {"unknown_key": True}, "Unexpected payload key"),
         ("retention.run", {"extra": 1}, "Unexpected payload key"),
     ]
     for command_type, payload, _reason in invalid_commands:
@@ -1843,7 +1843,7 @@ async def test_creating_command_returns_503_when_table_missing() -> None:
         response = await test_client.post(
             "/bot/commands",
             headers=AUTH_HEADERS,
-            json={"command_type": "pipeline.run", "payload": {"dry_run": True}},
+            json={"command_type": "source.quality.refresh", "payload": {}},
         )
     app.dependency_overrides.clear()
 

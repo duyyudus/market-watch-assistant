@@ -102,7 +102,7 @@ The database uses PostgreSQL with the `pgvector` extension to enable vector embe
    - `EventScoreHistory`: Keeps historical records of score breakdown over time.
 
 3. **Actions & Automation**:
-   - `BotCommand`: In-database command queue storing task types (`pipeline.run`, `source.fetch`, `alert.dispatch`, etc.), statuses (`pending`, `running`, `succeeded`, `failed`), inputs, and results.
+   - `BotCommand`: In-database command queue storing task types (`source.fetch`, `alert.dispatch`, `event.recluster`, etc.), statuses (`pending`, `running`, `succeeded`, `failed`), inputs, and results.
    - `LLMAnalysisRun`: Cached records of LLM prompt/response pairs to avoid redundant token expenses.
    - `AgentInvestigation`: Records of deep research triggered on events or unexplained market movements using Brave search and LLM context synthesis.
    - `MarketMove` & `MissedCatalystReview`: Real-time price actions, window changes, and automatically generated review tasks for moves that don't align with any event.
@@ -118,7 +118,7 @@ The database uses PostgreSQL with the `pgvector` extension to enable vector embe
 The worker acts as the background system run loop and exposes a Typer CLI entry point (`market-watch`).
 
 ### The 12-Stage Ingestion Pipeline
-When a `pipeline.run` command is executed, the pipeline sequentially flows through the following stages:
+On each scheduled worker tick, the pipeline sequentially flows through the following stages:
 
 | Stage | Name | Description |
 | :--- | :--- | :--- |

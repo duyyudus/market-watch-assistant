@@ -621,7 +621,7 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
   apiMock.deleteWatchlistEntry.mockResolvedValue(undefined);
   apiMock.cancelCommand.mockResolvedValue({
     id: "cmd_cancelled",
-    command_type: "pipeline.run",
+    command_type: "source.quality.refresh",
     status: "cancelled",
     payload: {},
     created_at: "2026-05-29T13:00:00Z",
@@ -2184,8 +2184,8 @@ describe("Phase 3 command center", () => {
 
     await waitFor(() => expect(screen.getByText("Command queue unavailable")).toBeInTheDocument());
 
-    const liveButton = screen.getByRole("button", { name: /live run/i });
-    expect(liveButton).toBeDisabled();
+    const dispatchButton = screen.getByRole("button", { name: /preview dispatch/i });
+    expect(dispatchButton).toBeDisabled();
   });
 
   it("queues a source fetch command using source selector", async () => {
@@ -2288,25 +2288,6 @@ describe("Phase 3 command center", () => {
     });
   });
 
-  it("requires confirmation for live pipeline run", async () => {
-    await renderLoadedApp();
-    switchTo("commands");
-
-    const liveButton = await screen.findByRole("button", { name: /live run/i });
-    fireEvent.click(liveButton);
-
-    expect(apiMock.createCommand).not.toHaveBeenCalled();
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/run live pipeline/i)).toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole("button", { name: /execute/i }));
-
-    await waitFor(() =>
-      expect(apiMock.createCommand).toHaveBeenCalledWith("pipeline.run", { dry_run: false }),
-    );
-  });
-
   it("requires confirmation for retention run", async () => {
     await renderLoadedApp();
     switchTo("commands");
@@ -2325,7 +2306,7 @@ describe("Phase 3 command center", () => {
       envelope([
         {
           id: "cmd_1",
-          command_type: "pipeline.run",
+          command_type: "source.quality.refresh",
           status: "succeeded",
           payload: { dry_run: true },
           result: { clusters: 3 },

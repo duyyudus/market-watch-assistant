@@ -122,13 +122,13 @@ async def test_bot_command_claim_uses_skip_locked(real_session_factory) -> None:
             [
                 BotCommand(
                     id="cmd_real_db_1",
-                    command_type="pipeline.run",
+                    command_type="source.quality.refresh",
                     payload={"dry_run": True},
                     requested_by="real-db-test",
                 ),
                 BotCommand(
                     id="cmd_real_db_2",
-                    command_type="pipeline.run",
+                    command_type="source.quality.refresh",
                     payload={"dry_run": True},
                     requested_by="real-db-test",
                 ),

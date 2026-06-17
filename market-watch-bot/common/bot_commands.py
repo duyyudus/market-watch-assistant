@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 ALLOWED_COMMAND_TYPES = {
-    "pipeline.run",
     "source.fetch",
     "alert.dispatch",
     "alert.test_channel",
@@ -25,7 +24,6 @@ ALLOWED_COMMAND_TYPES = {
 EVENT_STATUSES = {"reported", "confirmed", "official", "stale", "false_signal", "merged"}
 
 PAYLOAD_VALIDATORS: dict[str, dict[str, dict[str, type]]] = {
-    "pipeline.run": {"optional": {"dry_run": bool}},
     "source.fetch": {"required": {"source_id": str}},
     "alert.dispatch": {"optional": {"channel": str, "limit": int, "dry_run": bool}},
     "alert.test_channel": {"required": {"channel_id": str}, "optional": {"message": str}},

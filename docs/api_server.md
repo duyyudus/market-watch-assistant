@@ -31,14 +31,14 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Worker as Bot Worker
 
-    UI->>API: POST /bot/commands { type: "pipeline.run" }
+    UI->>API: POST /bot/commands { type: "source.fetch" }
     API->>DB: INSERT INTO bot_commands (status='pending')
     API-->>UI: 201 Created (Command ID & pending status)
     
     loop Background Polling
         Worker->>DB: SELECT FOR UPDATE SKIP LOCKED
         DB-->>Worker: Claim pending command (status='running')
-        Worker->>Worker: Run Stage 1-12 Pipeline
+        Worker->>Worker: Execute command handler
         Worker->>DB: UPDATE bot_commands (status='succeeded', result=...)
     end
 

@@ -497,7 +497,7 @@ def test_cli_investigate_show_reports_result(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_tick_runs_command_drain_without_scheduled_pipeline(monkeypatch) -> None:
+async def test_drain_bot_commands_runs_without_scheduled_pipeline(monkeypatch) -> None:
     class Session:
         pass
 
@@ -569,12 +569,12 @@ async def test_worker_tick_runs_command_drain_without_scheduled_pipeline(monkeyp
     processed_commands = []
     pipeline_calls = []
 
-    async def fake_process_pending(session, *, settings, limit):
+    async def fake_process_pending(session, *, settings, limit, pipeline_lock=None):
         assert isinstance(session, Session)
         assert isinstance(settings, Settings)
         assert limit == 25
         processed_commands.append("cmd_1")
-        return [SimpleNamespace(id="cmd_1", command_type="pipeline.run", status="succeeded")]
+        return [SimpleNamespace(id="cmd_1", command_type="event.mark", status="succeeded")]
 
     async def fake_run_pipeline(*_args, **_kwargs):
         pipeline_calls.append("pipeline")
@@ -583,20 +583,15 @@ async def test_worker_tick_runs_command_drain_without_scheduled_pipeline(monkeyp
     monkeypatch.setattr(worker_cli, "process_pending_bot_commands", fake_process_pending)
     monkeypatch.setattr(worker_cli, "run_pipeline", fake_run_pipeline)
 
-    last_run = await worker_cli.run_worker_tick(
-        Session(),
-        Settings(),
-        last_pipeline_run_at=100.0,
-        now=101.0,
-    )
+    # The command drain runs on its own loop and never triggers the scheduled pipeline.
+    await worker_cli.drain_bot_commands(Session(), Settings())
 
     assert processed_commands == ["cmd_1"]
     assert pipeline_calls == []
-    assert last_run == 100.0
 
 
 @pytest.mark.asyncio
-async def test_worker_tick_runs_scheduled_pipeline_when_interval_elapsed(monkeypatch) -> None:
+async def test_run_pipeline_tick_runs_pipeline_and_investigations(monkeypatch) -> None:
     class Session:
         pass
 
@@ -665,12 +660,13 @@ async def test_worker_tick_runs_scheduled_pipeline_when_interval_elapsed(monkeyp
             min_modifier = -10
             max_modifier = 10
 
-    async def fake_process_pending(_session, *, settings, limit):
-        return []
+    pipeline_calls = []
+    investigation_calls = []
 
     async def fake_run_pipeline(session, **kwargs):
         assert isinstance(session, Session)
         assert kwargs["investigation_config"].enabled is True
+        pipeline_calls.append("pipeline")
         return {"status": "ok"}
 
     async def fake_run_pending(session, *, config, llm_config, limit):
@@ -678,24 +674,20 @@ async def test_worker_tick_runs_scheduled_pipeline_when_interval_elapsed(monkeyp
         assert config.enabled is True
         assert llm_config.enabled is True
         assert limit == 2
+        investigation_calls.append("investigation")
         return {"pending": 0, "completed": 0, "failed": 0}
 
     async def fake_record_job_run(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(worker_cli, "process_pending_bot_commands", fake_process_pending)
     monkeypatch.setattr(worker_cli, "run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(worker_cli, "run_pending_investigations", fake_run_pending)
     monkeypatch.setattr(worker_cli, "record_job_run", fake_record_job_run)
 
-    last_run = await worker_cli.run_worker_tick(
-        Session(),
-        Settings(),
-        last_pipeline_run_at=100.0,
-        now=401.0,
-    )
+    await worker_cli.run_pipeline_tick(Session(), Settings())
 
-    assert last_run == 401.0
+    assert pipeline_calls == ["pipeline"]
+    assert investigation_calls == ["investigation"]
 
 
 def test_cli_event_show_reports_event_details(monkeypatch) -> None:

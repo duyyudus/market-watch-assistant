@@ -23,7 +23,6 @@ from bot_worker.services.events import (
     split_event_cluster,
 )
 from bot_worker.services.investigation import run_event_investigation
-from bot_worker.services.jobs import record_job_run
 from bot_worker.services.market import (
     fetch_market_moves,
     fetch_market_moves_with_stats,
@@ -31,7 +30,6 @@ from bot_worker.services.market import (
     run_missed_catalyst_review,
     store_market_moves,
 )
-from bot_worker.services.pipeline import run_pipeline
 from bot_worker.services.retention import RetentionPolicy, retention_preview, run_retention
 from bot_worker.services.sources import fetch_source, refresh_source_quality_scores
 from bot_worker.services.watchlists import tier_for_entities, watchlist_entries
@@ -161,23 +159,6 @@ async def execute_bot_command(
     command_type = command.command_type
     if command_type not in ALLOWED_COMMAND_TYPES:
         raise ValueError(f"Unsupported bot command: {command_type}")
-
-    if command_type == "pipeline.run":
-        result = await run_pipeline(
-            session,
-            dry_run=bool(payload.get("dry_run", False)),
-            freshness_hours=settings.ingestion.rss_freshness_hours,
-            embedding_config=EmbeddingConfig.from_settings(settings),
-            llm_config=LLMConfig.from_settings(settings),
-            investigation_config=InvestigationConfig.from_settings(settings),
-            alert_delivery_config=AlertDeliveryConfig.from_settings(settings),
-            tracking_params=getattr(settings.ingestion, "tracking_params", None),
-            disclosure_noise_patterns=getattr(
-                settings.ingestion, "disclosure_noise_patterns", None
-            ),
-        )
-        await record_job_run(session, "pipeline", result)
-        return dict(result)
 
     if command_type == "source.fetch":
         source_id = str(payload["source_id"])

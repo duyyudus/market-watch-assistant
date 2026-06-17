@@ -34,23 +34,19 @@ COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25
 
 
-async def run_worker_tick(
-    session,
-    settings,
-    *,
-    last_pipeline_run_at: float,
-    now: float,
-) -> float:
+async def drain_bot_commands(session, settings) -> None:
+    """Claim and execute pending bot commands within the caller's transaction."""
     commands = await process_pending_bot_commands(
         session,
         settings=settings,
-        limit=getattr(settings.bot, "command_drain_limit", 25),
+        limit=getattr(settings.bot, "command_drain_limit", COMMAND_DRAIN_LIMIT),
     )
     for command in commands:
         typer.echo(f"bot_command: {command.id} {command.command_type} {command.status}")
-    if now - last_pipeline_run_at < settings.bot.polling_interval_seconds:
-        return last_pipeline_run_at
 
+
+async def run_pipeline_tick(session, settings) -> None:
+    """Run a scheduled pipeline pass plus pending investigations in one transaction."""
     result = await run_pipeline(
         session,
         freshness_hours=settings.ingestion.rss_freshness_hours,
@@ -76,8 +72,63 @@ async def run_worker_tick(
         await record_job_run(session, "agent_investigation", pending_result)
         typer.echo(f"agent_investigation: {pending_result}")
     # Digest delivery and operational checks run after this transaction commits
-    # (see the worker loop) so their external sends / state are not rolled back.
-    return now
+    # (see _pipeline_loop) so their external sends / state are not rolled back.
+
+
+async def _command_loop(session_factory, settings, *, shutdown) -> None:
+    """Drain pending bot commands on a fixed cadence in their own transaction.
+
+    Runs independently of :func:`_pipeline_loop` so user commands stay responsive while
+    a long pipeline tick is in flight. No command can trigger the pipeline, so the two
+    loops never run the pipeline concurrently.
+    """
+    poll_interval = getattr(
+        settings.bot, "command_poll_interval_seconds", COMMAND_POLL_INTERVAL_SECONDS
+    )
+    while not shutdown.is_set():
+        try:
+            await _with_session(
+                lambda session: drain_bot_commands(session, settings),
+                settings=settings,
+                session_factory=session_factory,
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed drain must not kill the worker
+            await _record_failed_job(session_factory, "bot_command", exc)
+            typer.echo(f"bot command drain failed: {exc}")
+        with suppress(TimeoutError):
+            await asyncio.wait_for(shutdown.wait(), timeout=poll_interval)
+
+
+async def _pipeline_loop(session_factory, settings, *, shutdown) -> None:
+    """Run the scheduled pipeline and post-commit deliveries on the polling interval."""
+    running_loop = asyncio.get_running_loop()
+    interval = settings.bot.polling_interval_seconds
+    last_pipeline_run_at = running_loop.time()
+    while not shutdown.is_set():
+        wait_remaining = last_pipeline_run_at + interval - running_loop.time()
+        if wait_remaining > 0:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(shutdown.wait(), timeout=wait_remaining)
+            continue
+        last_pipeline_run_at = running_loop.time()
+        try:
+            await _with_session(
+                lambda session: run_pipeline_tick(session, settings),
+                settings=settings,
+                session_factory=session_factory,
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed tick must not kill the worker
+            await _record_failed_job(session_factory, "pipeline", exc)
+            typer.echo(f"pipeline tick failed: {exc}")
+        else:
+            delivery_config = AlertDeliveryConfig.from_settings(settings)
+            if delivery_config.channel == "telegram":
+                with suppress(Exception):
+                    await deliver_pending_alerts(session_factory, delivery_config)
+            with suppress(Exception):
+                await maybe_send_daily_digest(session_factory, settings)
+            with suppress(Exception):
+                await run_operational_checks_in_transaction(session_factory, settings)
 
 
 async def maybe_send_daily_digest(session_factory, settings) -> None:
@@ -150,52 +201,23 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
         for sig in (signal.SIGTERM, signal.SIGINT):
             with suppress(NotImplementedError, RuntimeError):
                 running_loop.add_signal_handler(sig, shutdown.set)
-        last_pipeline_run_at = asyncio.get_running_loop().time()
-        while not shutdown.is_set():
-            now = asyncio.get_running_loop().time()
-            ran_pipeline = now - last_pipeline_run_at >= settings.bot.polling_interval_seconds
-
-            async def action(
-                session,
-                settings=settings,
-                last_pipeline_run_at=last_pipeline_run_at,
-                now=now,
-            ):
-                return await run_worker_tick(
-                    session,
-                    settings,
-                    last_pipeline_run_at=last_pipeline_run_at,
-                    now=now,
-                )
-
-            try:
-                last_pipeline_run_at = await _with_session(
-                    action,
-                    settings=settings,
-                    session_factory=session_factory,
-                )
-            except Exception as exc:  # noqa: BLE001 - a failed tick must not kill the worker
-                await _record_failed_job(session_factory, "pipeline", exc)
-                typer.echo(f"pipeline tick failed: {exc}")
-                # Back off until the next interval instead of hammering a broken run.
-                last_pipeline_run_at = now
-            else:
-                if ran_pipeline:
-                    delivery_config = AlertDeliveryConfig.from_settings(settings)
-                    if delivery_config.channel == "telegram":
-                        with suppress(Exception):
-                            await deliver_pending_alerts(session_factory, delivery_config)
-                    with suppress(Exception):
-                        await maybe_send_daily_digest(session_factory, settings)
-                    with suppress(Exception):
-                        await run_operational_checks_in_transaction(session_factory, settings)
-            try:
-                await asyncio.wait_for(
-                    shutdown.wait(),
-                    timeout=getattr(settings.bot, "command_poll_interval_seconds", 2),
-                )
-            except TimeoutError:
-                continue
+        # Command processing and the scheduled pipeline run on independent loops so a
+        # long pipeline tick never blocks command responsiveness. The pipeline runs only
+        # here, so the two never ingest/cluster concurrently.
+        tasks = [
+            asyncio.create_task(
+                _command_loop(session_factory, settings, shutdown=shutdown)
+            ),
+            asyncio.create_task(
+                _pipeline_loop(session_factory, settings, shutdown=shutdown)
+            ),
+        ]
+        try:
+            await shutdown.wait()
+        finally:
+            # Let each loop finish its current cycle, then exit on the shared event.
+            shutdown.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     _run(loop())
 @worker_app.command("status")

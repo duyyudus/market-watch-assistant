@@ -55,7 +55,7 @@ class RunningCommandSession:
 async def test_claim_pending_bot_command_marks_oldest_command_running() -> None:
     command = BotCommand(
         id="cmd_1",
-        command_type="pipeline.run",
+        command_type="source.quality.refresh",
         status="pending",
         payload={"dry_run": True},
         created_at=datetime(2026, 5, 29, tzinfo=UTC),
@@ -67,7 +67,7 @@ async def test_claim_pending_bot_command_marks_oldest_command_running() -> None:
     assert claimed is command
     assert claimed.status == "running"
     assert claimed.started_at is not None
-    assert "pipeline.run" in ALLOWED_COMMAND_TYPES
+    assert "source.quality.refresh" in ALLOWED_COMMAND_TYPES
 
 
 @pytest.mark.asyncio
@@ -75,14 +75,14 @@ async def test_reap_stale_running_bot_commands_marks_timed_out_commands_failed()
     now = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
     stale = BotCommand(
         id="cmd_stale",
-        command_type="pipeline.run",
+        command_type="source.quality.refresh",
         status="running",
         payload={},
         started_at=now - timedelta(minutes=11),
     )
     fresh = BotCommand(
         id="cmd_fresh",
-        command_type="pipeline.run",
+        command_type="source.quality.refresh",
         status="running",
         payload={},
         started_at=now - timedelta(minutes=2),
@@ -105,7 +105,7 @@ async def test_reap_stale_running_bot_commands_marks_timed_out_commands_failed()
 def test_complete_and_fail_bot_command_record_terminal_state() -> None:
     command = BotCommand(
         id="cmd_1",
-        command_type="pipeline.run",
+        command_type="source.quality.refresh",
         status="running",
         payload={"dry_run": True},
     )
@@ -117,7 +117,7 @@ def test_complete_and_fail_bot_command_record_terminal_state() -> None:
 
     failed = BotCommand(
         id="cmd_2",
-        command_type="pipeline.run",
+        command_type="source.quality.refresh",
         status="running",
         payload={"dry_run": False},
     )

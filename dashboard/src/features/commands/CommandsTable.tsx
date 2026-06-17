@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   Bell,
   Layers,
-  Play,
   Radio,
   RefreshCcw,
   Search,
@@ -105,30 +104,6 @@ export function CommandsTable({
   const commandCenter = !compact ? (
     <div className="space-y-3 mb-4">
       {migrationNotice}
-
-      {/* Pipeline commands */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 w-20">
-          Pipeline
-        </span>
-        <button
-          className="btn btn-sm btn-outline btn-warning"
-          disabled={queueUnavailable}
-          onClick={() =>
-            confirmThenQueue({
-              title: "Run live pipeline?",
-              description:
-                "This will run the full pipeline with real ingestion, clustering, scoring, and alert decisions. No dry-run protection.",
-              commandType: "pipeline.run",
-              payload: { dry_run: false },
-            })
-          }
-          type="button"
-        >
-          <Play className="h-3.5 w-3.5" />
-          Live run
-        </button>
-      </div>
 
       {/* Alert dispatch */}
       <div className="flex flex-wrap items-center gap-2">
