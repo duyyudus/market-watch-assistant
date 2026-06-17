@@ -34,6 +34,30 @@ async def news_item_tickers(session: AsyncSession, news_item_id: str) -> list[st
     return [row.ticker for row in rows if row.ticker]
 
 
+async def news_item_primary_subjects(
+    session: AsyncSession, news_item_id: str
+) -> tuple[list[str], list[str]]:
+    """Return (entity names, tickers) for the item's *primary-subject* mentions only.
+
+    These are the mentions the LLM flagged as the subject of the news (excluding
+    peers/investors/comparison mentions), and are what should feed a cluster's
+    affected_tickers/affected_entities.
+    """
+    rows = list(
+        (
+            await session.scalars(
+                select(NewsEntity).where(
+                    NewsEntity.news_item_id == news_item_id,
+                    NewsEntity.is_primary.is_(True),
+                )
+            )
+        ).all()
+    )
+    names = [row.normalized_name for row in rows]
+    tickers = [row.ticker for row in rows if row.ticker]
+    return names, tickers
+
+
 async def watchlist_entries(session: AsyncSession) -> list[WatchlistEntry]:
     if not hasattr(session, "scalars"):
         return []

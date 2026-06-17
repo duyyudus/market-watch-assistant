@@ -17,6 +17,7 @@ from common.db.models import (
     AlertSuppressionRule,
     AppSetting,
     BotCommand,
+    DigestRecord,
     EventCluster,
     EventClusterEmbedding,
     EventClusterItem,
@@ -623,6 +624,16 @@ async def client():
             status="completed",
             deleted_counts={"news": 10},
         )
+        digest = DigestRecord(
+            id="digest_1",
+            digest_type="daily",
+            window_start=datetime(2026, 5, 28, 13, 0, tzinfo=UTC),
+            window_end=datetime(2026, 5, 29, 13, 0, tzinfo=UTC),
+            content="[Daily Market Digest]\n\nUS / global_macro\n- 84 reported: Fed (2 sources)",
+            status="built",
+            event_count=1,
+            created_at=datetime(2026, 5, 29, 13, 5, tzinfo=UTC),
+        )
         session.add_all(
             [
                 source,
@@ -668,6 +679,7 @@ async def client():
                 alternate_exchange_market_move,
                 unrelated_market_move,
                 retention,
+                digest,
             ]
         )
         await session.commit()
@@ -780,6 +792,19 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
     assert uncapped.status_code == 200
     assert uncapped.json()["total"] >= 3
     assert [item["id"] for item in uncapped.json()["items"]] == ["evt_1"]
+
+
+@pytest.mark.asyncio
+async def test_latest_digest_endpoint_returns_most_recent_record(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/digests/latest")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "digest_1"
+    assert payload["digest_type"] == "daily"
+    assert payload["event_count"] == 1
+    assert "Daily Market Digest" in payload["content"]
 
 
 @pytest.mark.asyncio

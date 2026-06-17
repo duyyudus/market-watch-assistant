@@ -23,6 +23,7 @@ async def list_events(
     min_score: int | None = Query(None, ge=0, le=100),
     status_filter: str | None = Query(None, alias="status"),
     q: str | None = None,
+    segment: str | None = Query(None, pattern="^(global|vietnam|crypto)$"),
 ) -> ListEnvelope[EventRead]:
     rows, total = await event_service.list_events(
         session,
@@ -32,6 +33,7 @@ async def list_events(
         min_score=min_score,
         status_filter=status_filter,
         q=q,
+        segment=segment,
     )
     return ListEnvelope(items=[EventRead.model_validate(row) for row in rows], total=total)
 

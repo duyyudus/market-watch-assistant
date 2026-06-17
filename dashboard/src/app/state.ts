@@ -7,6 +7,7 @@ export const emptyState: DashboardState = {
   events: [],
   eventsTotal: 0,
   eventDetails: {},
+  overviewSegments: {},
   news: [],
   newsTotal: 0,
   newsDomains: [],
@@ -20,6 +21,9 @@ export const emptyState: DashboardState = {
   jobs: [],
   watchlist: [],
   commands: [],
+  catalystReviews: [],
+  catalystReviewsTotal: 0,
+  latestDigest: null,
   alertPolicy: null,
   presets: null,
 };

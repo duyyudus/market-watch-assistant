@@ -15,6 +15,7 @@ from bot_worker.db.models import (
 
 if TYPE_CHECKING:
     from bot_worker.services.alert_delivery import AlertDeliveryConfig, TelegramSender
+    from common.llm import LLMConfig
 
 type ReportTimeRange = tuple[datetime, datetime]
 
@@ -218,17 +219,33 @@ async def build_digest_record(
     until: datetime,
     threshold: int,
     limit: int = 50,
+    config: LLMConfig | None = None,
 ) -> DigestRecord:
     events = [
         event
         for event in await digest_preview(session, limit=limit, since=since, until=until)
         if event.final_score >= threshold
     ]
+    # Prefer an LLM narrative; the deterministic bulletin is the fallback when the
+    # LLM is disabled/unconfigured or the call fails.
+    content = format_digest_message(events, since=since, until=until)
+    if config is not None:
+        from bot_worker.services.llm import build_digest_narrative
+
+        narrative = await build_digest_narrative(
+            session,
+            events=events,
+            since=since,
+            until=until,
+            config=config,
+        )
+        if narrative:
+            content = narrative
     digest = DigestRecord(
         digest_type="daily",
         window_start=since,
         window_end=until,
-        content=format_digest_message(events, since=since, until=until),
+        content=content,
         status="built",
         event_count=len(events),
     )

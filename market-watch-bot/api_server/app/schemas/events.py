@@ -32,6 +32,19 @@ class EventRead(BaseModel):
     last_updated_at: datetime | None = None
 
 
+class DigestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    digest_type: str
+    window_start: datetime
+    window_end: datetime
+    content: str
+    status: str
+    event_count: int
+    created_at: datetime
+
+
 class EventTimelineItem(BaseModel):
     news_item_id: str
     title: str

@@ -4,6 +4,7 @@ import asyncio
 import re
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy import delete, select
@@ -23,6 +24,7 @@ from bot_worker.watchlist import WatchlistEntry, symbols_for_entities
 from common.llm import (
     CLASSIFY_PROMPT_VERSION,
     CLUSTER_DECISION_PROMPT_VERSION,
+    DIGEST_PROMPT_VERSION,
     PROMPT_VERSION,
     SCORE_PROMPT_VERSION,
     SUMMARY_PROMPT_VERSION,
@@ -31,6 +33,7 @@ from common.llm import (
     LLMClusterDecision,
     LLMConfig,
     build_cluster_decision_prompt,
+    build_digest_summary_prompt,
     build_event_analysis_prompt,
     build_event_score_prompt,
     build_event_summary_prompt,
@@ -397,6 +400,10 @@ def _entity_mention_exchange(value: object) -> str | None:
     return None
 
 
+def _entity_mention_is_primary(value: object) -> bool:
+    return bool(value.get("is_primary")) if isinstance(value, dict) else False
+
+
 def _classification_entities(
     *,
     item_id: str,
@@ -429,6 +436,7 @@ def _classification_entities(
                 ticker=ticker,
                 exchange=None if watch_ticker else _entity_mention_exchange(value),
                 confidence=confidence,
+                is_primary=_entity_mention_is_primary(value),
             )
         )
     attached_tickers = {entity.ticker for entity in entities if entity.ticker}
@@ -453,6 +461,8 @@ def _classification_entities(
                     raw_text=raw_text,
                     normalized_name=raw_text,
                     confidence=confidence,
+                    # The flat `tickers` list is the LLM's primary-subject symbol set.
+                    is_primary=True,
                 )
             )
         else:
@@ -464,6 +474,7 @@ def _classification_entities(
                     normalized_name=ticker,
                     ticker=ticker,
                     confidence=confidence,
+                    is_primary=True,
                 )
             )
     return entities
@@ -607,6 +618,52 @@ async def extract_entities_with_llm(
     return extracted
 
 
+async def backfill_primary_entity_flags(
+    session: AsyncSession,
+    *,
+    limit: int | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> int:
+    """Rebuild NewsEntity rows from cached classification results so `is_primary` is set.
+
+    Re-parses the persisted LLM classification (``LLMAnalysisRun.result``) for each news
+    item and re-derives its entity rows through the same parser as live extraction, which
+    now carries the primary-subject flag. Makes **no** new LLM calls. Returns the number
+    of news items rebuilt. The newest succeeded run wins when an item has several.
+    """
+    watch_entries = await watchlist_entries(session)
+    stmt = (
+        select(LLMAnalysisRun)
+        .where(
+            LLMAnalysisRun.target_type == "news_item",
+            LLMAnalysisRun.status == "succeeded",
+            LLMAnalysisRun.prompt_version == CLASSIFY_PROMPT_VERSION,
+        )
+        .order_by(LLMAnalysisRun.created_at.desc())
+    )
+    runs = list((await session.scalars(stmt)).all())
+    seen_items: set[str] = set()
+    rebuilt = 0
+    for index, run in enumerate(runs, start=1):
+        if progress is not None:
+            progress("rebuilding", index, len(runs))
+        item_id = run.target_id
+        if item_id in seen_items or not run.result:
+            continue
+        seen_items.add(item_id)
+        if limit is not None and rebuilt >= limit:
+            continue
+        entities = _classification_entities(
+            item_id=item_id, result=run.result, watch_entries=watch_entries
+        )
+        await session.execute(delete(NewsEntity).where(NewsEntity.news_item_id == item_id))
+        for entity in entities:
+            session.add(entity)
+        rebuilt += 1
+    await session.flush()
+    return rebuilt
+
+
 async def preview_entity_extraction(
     session: AsyncSession,
     *,
@@ -700,6 +757,77 @@ async def summarize_event_with_llm(
     run.usage = usage
     run.updated_at = utcnow()
     return run
+
+
+async def build_digest_narrative(
+    session: AsyncSession,
+    *,
+    events: list[EventCluster],
+    since: datetime,
+    until: datetime,
+    config: LLMConfig,
+    force: bool = False,
+) -> str | None:
+    """Generate a natural-language narrative for a digest window.
+
+    Returns the narrative text, or ``None`` when the LLM is disabled/unconfigured,
+    there are no events, or the call fails -- callers fall back to the deterministic
+    bulletin. The run is recorded (and cached per window) as an ``LLMAnalysisRun``.
+    """
+    if not config.enabled or not config.api_key or not events:
+        return None
+    target_id = f"daily:{until.astimezone(UTC).isoformat()}"
+    run = await _existing_llm_run(
+        session,
+        target_type="digest",
+        target_id=target_id,
+        config=config,
+        prompt_version=DIGEST_PROMPT_VERSION,
+    )
+    if run is not None and run.status == "succeeded" and not force:
+        cached = (run.result or {}).get("summary")
+        if cached:
+            return str(cached)
+    window_label = (
+        f"{since.astimezone(UTC):%Y-%m-%d %H:%M} - "
+        f"{until.astimezone(UTC):%Y-%m-%d %H:%M} UTC"
+    )
+    prompt = build_digest_summary_prompt(events, window_label=window_label)
+    snapshot = {
+        "window_start": since.astimezone(UTC).isoformat(),
+        "window_end": until.astimezone(UTC).isoformat(),
+        "event_count": len(events),
+        "event_ids": [event.id for event in events],
+    }
+    run = await _prepare_llm_run(
+        session,
+        existing_run=run,
+        target_type="digest",
+        target_id=target_id,
+        config=config,
+        prompt_version=DIGEST_PROMPT_VERSION,
+        prompt=prompt,
+        input_snapshot=snapshot,
+    )
+    await session.flush()
+    try:
+        result, usage = await llm_provider(config).summarize_digest(prompt)
+    except Exception as exc:  # noqa: BLE001 - fall back to the deterministic bulletin
+        run.status = "failed"
+        run.error_message = str(exc)
+        run.updated_at = utcnow()
+        return None
+    run.status = "succeeded"
+    run.result = result.model_dump()
+    run.usage = usage
+    run.updated_at = utcnow()
+    # Assemble topic-separated text: a lead paragraph, then one block per theme
+    # with the topic on its own line above its body, blank lines between blocks.
+    blocks = [result.lead]
+    blocks.extend(f"{section.topic}\n{section.body}" for section in result.sections)
+    return "\n\n".join(blocks)
+
+
 async def score_event_with_llm(
     session: AsyncSession,
     *,

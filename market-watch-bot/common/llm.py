@@ -21,6 +21,7 @@ SCORE_PROMPT_VERSION = "score-v1"
 SUMMARY_PROMPT_VERSION = "summarize-v1"
 CLUSTER_DECISION_PROMPT_VERSION = "cluster-decision-v1"
 INVESTIGATION_PROMPT_VERSION = "investigation-v1"
+DIGEST_PROMPT_VERSION = "digest-v1"
 MAX_CLASSIFICATION_RAW_CONTENT_CHARS = 8_000
 # Cap on extracted entities per item. Structured entity objects are token-heavy,
 # so unbounded lists can truncate the response past max_tokens; bounding the count
@@ -244,6 +245,28 @@ class LLMEventSummary(BaseModel):
     @field_validator("summary", "why_it_matters", "alert_message")
     @classmethod
     def normalize_summary_strings(cls, value: str) -> str:
+        return normalize_text(value)
+
+
+class LLMDigestSection(BaseModel):
+    # A short topic label (e.g. "Oil & Middle East") and its 1-3 sentence body.
+    topic: str = Field(min_length=1)
+    body: str = Field(min_length=1)
+
+    @field_validator("topic", "body")
+    @classmethod
+    def normalize_section(cls, value: str) -> str:
+        return normalize_text(value)
+
+
+class LLMDigestSummary(BaseModel):
+    # Structured so the digest is separated by topic rather than one wall of text.
+    lead: str = Field(min_length=1)
+    sections: list[LLMDigestSection] = Field(min_length=1)
+
+    @field_validator("lead")
+    @classmethod
+    def normalize_lead(cls, value: str) -> str:
         return normalize_text(value)
 
 
@@ -610,6 +633,48 @@ def build_event_summary_prompt(event: EventCluster) -> str:
     )
 
 
+def build_digest_summary_prompt(
+    events: list[EventCluster],
+    *,
+    window_label: str,
+) -> str:
+    event_lines = [
+        "- {score} | {region} | {asset} | {sources} src | {headline}".format(
+            score=event.final_score,
+            region=(event.regions or ["global"])[0],
+            asset=(event.asset_classes or ["market"])[0],
+            sources=event.source_count,
+            headline=normalize_text(event.canonical_headline),
+        )
+        for event in sorted(events, key=lambda item: item.final_score, reverse=True)
+    ]
+    return "\n".join(
+        [
+            "Write a daily market intelligence brief from the event clusters below.",
+            "Return only JSON matching the requested schema.",
+            "",
+            "Shape:",
+            "- 'lead': one short sentence on the day's overall market tone.",
+            "- 'sections': 2-5 entries, each a distinct theme/storyline (not a single",
+            "  event, not a source). Group related events together.",
+            "  - 'topic': a short 2-5 word label (e.g. 'Oil & Middle East',",
+            "    'SpaceX IPO', 'Vietnam equities'). No trailing punctuation.",
+            "  - 'body': 1-3 sentence natural-language summary of that theme.",
+            "",
+            "Rules:",
+            "- Cover only the most important developments; omit minor items.",
+            "- Plain prose in each body: no bullet lists or markdown.",
+            "- Always write in English regardless of the input language.",
+            "- Be factual and concise. Do not invent facts or figures not present below.",
+            "  Treat low source-count items as tentative.",
+            "",
+            f"Window: {window_label}",
+            f"Events ({len(event_lines)}), highest score first:",
+            *event_lines,
+        ]
+    )
+
+
 def build_event_score_prompt(
     event: EventCluster,
     *,
@@ -838,6 +903,19 @@ class OpenRouterChatProvider:
             ),
         )
         return LLMEventSummary.model_validate(result), usage
+
+    async def summarize_digest(self, prompt: str) -> tuple[LLMDigestSummary, dict[str, object]]:
+        result, usage = await self.complete_structured(
+            prompt=prompt,
+            schema_name="market_daily_digest",
+            schema_model=LLMDigestSummary,
+            system_message=(
+                "You write daily market intelligence briefs. Always respond in English "
+                "regardless of the input language. Produce a factual, caveated narrative "
+                "in plain prose - no bullet lists or markdown - and never invent facts."
+            ),
+        )
+        return LLMDigestSummary.model_validate(result), usage
 
     async def score_event(self, prompt: str) -> tuple[LLMEventScore, dict[str, object]]:
         result, usage = await self.complete_structured(

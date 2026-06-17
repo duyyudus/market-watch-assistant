@@ -193,6 +193,10 @@ class NewsEntity(Base):
     exchange: Mapped[str | None] = mapped_column(String(32))
     country: Mapped[str | None] = mapped_column(String(64))
     confidence: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    # True only when the LLM marked this mention as the primary subject of the item
+    # (vs. a peer/investor/comparison mention). Only primary mentions propagate to a
+    # cluster's affected_tickers/affected_entities.
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class EventCluster(Base):

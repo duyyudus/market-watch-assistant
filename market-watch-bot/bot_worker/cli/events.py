@@ -17,11 +17,13 @@ from bot_worker.db.models import (
 )
 from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.services import (
+    backfill_primary_entity_flags,
     compact_archived_events,
     digest_preview,
     event_report_time_range,
     format_report_time_range,
     recluster_recent_event_clusters,
+    recompute_affected_from_primary_entities,
 )
 from bot_worker.services.bot_commands import apply_event_score, score_event_cluster
 from bot_worker.services.events import merge_event_clusters, split_event_cluster
@@ -297,5 +299,45 @@ def event_mark(identifier: str, status: Annotated[str, typer.Option("--status")]
             raise typer.Exit(1)
         event.status = status
         _echo_json({"id": event.id, "status": event.status})
+
+    _run(_with_session(action))
+
+
+@event_app.command("backfill-affected")
+def event_backfill_affected(
+    apply: Annotated[bool, typer.Option("--apply")] = False,
+    confirm: Annotated[bool, typer.Option("--confirm")] = False,
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    skip_flags: Annotated[bool, typer.Option("--skip-flags")] = False,
+) -> None:
+    """Recompute affected_tickers/affected_entities from primary-subject mentions only.
+
+    First rebuilds NewsEntity rows from cached LLM classifications so the is_primary flag
+    is populated (no new LLM calls), then recomputes each cluster's affected_* to drop
+    comparison/peer mentions. Dry-run by default; pass --apply --confirm to mutate. Use
+    --skip-flags to only recompute clusters (when the flags are already backfilled).
+    """
+    if apply and not confirm:
+        typer.echo("Use --confirm with --apply to mutate stored data.")
+        raise typer.Exit(1)
+
+    def _progress(phase: str, done: int, total: int) -> None:
+        typer.echo(f"\r  {phase} {done}/{total}…", nl=False, err=True)
+        if done == total:
+            typer.echo("", err=True)
+
+    async def action(session):
+        rebuilt = 0
+        # Flag backfill rebuilds entity rows from cached results, so it only runs on apply;
+        # a dry run reports the cluster changes that the current flags would produce.
+        if not skip_flags and apply:
+            rebuilt = await backfill_primary_entity_flags(session, progress=_progress)
+        result = await recompute_affected_from_primary_entities(
+            session,
+            dry_run=not apply,
+            limit=limit,
+            progress=_progress,
+        )
+        _echo_json({"news_items_rebuilt": rebuilt, **result})
 
     _run(_with_session(action))

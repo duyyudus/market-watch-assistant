@@ -7,6 +7,7 @@ import {
   RefreshCcw,
   Search,
   ShieldAlert,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useState } from "react";
@@ -161,6 +162,39 @@ export function CommandsTable({
         >
           <Bell className="h-3.5 w-3.5" />
           Send alerts
+        </button>
+      </div>
+
+      {/* Digest */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 w-20">
+          Digest
+        </span>
+        <button
+          className="btn btn-sm btn-outline"
+          disabled={queueUnavailable}
+          onClick={() => queue("digest.send", { hours: 24, dry_run: true })}
+          type="button"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Build digest
+        </button>
+        <button
+          className="btn btn-sm btn-outline btn-warning"
+          disabled={queueUnavailable}
+          onClick={() =>
+            confirmThenQueue({
+              title: "Send daily digest?",
+              description:
+                "This builds the last 24h digest and dispatches it to Telegram. This action cannot be undone.",
+              commandType: "digest.send",
+              payload: { hours: 24, dry_run: false },
+            })
+          }
+          type="button"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Send digest
         </button>
       </div>
 

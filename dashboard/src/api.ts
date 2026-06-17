@@ -174,6 +174,17 @@ export type EventDetail = EventCluster & {
   market_moves: EventMarketMove[];
 };
 
+export type Digest = {
+  id: string;
+  digest_type: string;
+  window_start: string;
+  window_end: string;
+  content: string;
+  status: string;
+  event_count: number;
+  created_at: string;
+};
+
 export type NewsEntity = {
   id: string;
   entity_type: string;
@@ -567,11 +578,14 @@ export function buildNewsPath(
   return `/news?${params.toString()}`;
 }
 
+export type EventSegment = "global" | "vietnam" | "crypto";
+
 export type EventQueryOptions = {
   offset: number;
   pageSize: number;
   maxItems: number | null;
   minScore: number;
+  segment?: EventSegment | null;
 };
 
 export function buildEventsPath({
@@ -579,6 +593,7 @@ export function buildEventsPath({
   pageSize,
   maxItems,
   minScore,
+  segment,
 }: EventQueryOptions): string {
   const params = new URLSearchParams({
     limit: String(pageSize),
@@ -586,6 +601,7 @@ export function buildEventsPath({
   });
   if (maxItems !== null) params.set("max_items", String(maxItems));
   params.set("min_score", String(minScore));
+  if (segment) params.set("segment", segment);
   return `/events?${params.toString()}`;
 }
 
@@ -639,6 +655,7 @@ export const api = {
     },
   ) => request<ListEnvelope<EventCluster>>(buildEventsPath(options)),
   event: (id: string) => request<EventDetail>(`/events/${id}`),
+  digestLatest: () => request<Digest | null>("/digests/latest"),
   news: (limit = 100, domain?: string, offset = 0, filters?: NewsFilters) =>
     request<ListEnvelope<NewsItem>>(buildNewsPath(limit, domain, offset, filters)),
   newsDomains: () => request<ListEnvelope<string>>("/news/domains"),

@@ -18,6 +18,11 @@ class EventCandidate:
     asset_classes: list[str]
     published_at: datetime | None
     tickers: list[str] = field(default_factory=list)
+    # Primary-subject mentions only. `entities`/`tickers` carry every mention (used
+    # for clustering/merge overlap); the `primary_*` subsets are what define a
+    # cluster's affected_tickers/affected_entities so comparison mentions don't leak in.
+    primary_entities: list[str] = field(default_factory=list)
+    primary_tickers: list[str] = field(default_factory=list)
     watchlist_tier: str | None = None
     source_name: str = ""
     source_type: str = ""
@@ -31,6 +36,8 @@ class EventClusterDraft:
     item_decision_metadata: dict[str, dict[str, object]] = field(default_factory=dict)
     entities: set[str] = field(default_factory=set)
     tickers: set[str] = field(default_factory=set)
+    primary_entities: set[str] = field(default_factory=set)
+    primary_tickers: set[str] = field(default_factory=set)
     regions: set[str] = field(default_factory=set)
     asset_classes: set[str] = field(default_factory=set)
     source_count: int = 0
@@ -427,6 +434,8 @@ def _candidate_from_cluster_draft(cluster: EventClusterDraft) -> EventCandidate:
         source_score=cluster.top_source_score,
         entities=list(cluster.entities),
         tickers=list(cluster.tickers),
+        primary_entities=list(cluster.primary_entities),
+        primary_tickers=list(cluster.primary_tickers),
         region=next(iter(cluster.regions), "global"),
         asset_classes=list(cluster.asset_classes),
         published_at=None,
@@ -465,6 +474,8 @@ def cluster_candidates(candidates: list[EventCandidate]) -> list[EventClusterDra
         )
         target.entities.update(candidate.entities)
         target.tickers.update(candidate.tickers)
+        target.primary_entities.update(candidate.primary_entities)
+        target.primary_tickers.update(candidate.primary_tickers)
         target.regions.add(candidate.region)
         target.asset_classes.update(candidate.asset_classes)
         target.source_count += 1

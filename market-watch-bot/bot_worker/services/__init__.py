@@ -38,6 +38,7 @@ from bot_worker.services.events import (
     compact_archived_events,
     merge_event_clusters,
     recluster_recent_event_clusters,
+    recompute_affected_from_primary_entities,
     split_event_cluster,
     vector_cluster_candidates_for_item,
 )
@@ -67,6 +68,8 @@ from bot_worker.services.jobs import (
     record_job_run,
 )
 from bot_worker.services.llm import (
+    backfill_primary_entity_flags,
+    build_digest_narrative,
     classify_news_item_with_llm,
     enrich_event_clusters_with_llm,
     extract_entities_with_llm,
@@ -145,6 +148,8 @@ __all__ = [
     "enrich_event_clusters_with_llm",
     "event_report_time_range",
     "extract_entities_with_llm",
+    "backfill_primary_entity_flags",
+    "recompute_affected_from_primary_entities",
     "fetch_market_moves",
     "fetch_market_moves_with_stats",
     "fetch_source",
@@ -201,6 +206,7 @@ __all__ = [
     "set_source_enabled",
     "split_event_cluster",
     "store_market_moves",
+    "build_digest_narrative",
     "summarize_event_with_llm",
     "validate_embedding_dimensions",
     "vector_cluster_candidates_for_item",

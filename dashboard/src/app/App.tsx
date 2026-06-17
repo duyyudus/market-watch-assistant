@@ -69,6 +69,8 @@ export function App() {
     apiBadgeLabel,
     apiBadgeTone,
     queue,
+    trackCommand,
+    trackedCommand,
     acknowledgeAlert,
     dismissAlert,
     unacknowledgedAlerts,
@@ -182,7 +184,7 @@ export function App() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Badge tone={apiBadgeTone}>{apiBadgeLabel}</Badge>
               {state.status?.command_queue_available === false ? (
                 <Badge tone="warning">queue unavailable</Badge>
@@ -298,7 +300,23 @@ export function App() {
           </div>
           <DashboardErrorBoundary resetKey={`${view}:${alertSubTab}`}>
             {view === "overview" ? (
-              <Overview state={state} errors={resourceErrors} retry={() => load(true)} />
+              <Overview
+                state={state}
+                errors={resourceErrors}
+                retry={() => load(true)}
+                acknowledgeAlert={acknowledgeAlert}
+                loadEventDetail={(id) => void loadEventDetail(id)}
+                queue={queue}
+                trackCommand={trackCommand}
+                trackedCommand={trackedCommand}
+                openEvent={(id) => {
+                  setSelectedEventId(id);
+                  void loadEventDetail(id);
+                  setView("events");
+                }}
+                openSources={() => setView("sources")}
+                openMaintenance={() => setView("maintenance")}
+              />
             ) : view === "events" ? (
               <Events
                 events={filteredEvents}

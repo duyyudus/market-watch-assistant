@@ -7,7 +7,9 @@ import type {
   AlertSuppressionRule,
   BotCommand,
   BotStatus,
+  CatalystReview,
   ConfigurationPresets,
+  Digest,
   EventCluster,
   EventDetail,
   JobRun,
@@ -28,6 +30,8 @@ type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail" | "new
 export type AlertSubTab = "decisions" | "settings";
 const EVENT_PAGE_SIZE = 100;
 const ALERT_PAGE_SIZE = 100;
+const OVERVIEW_SEGMENTS = ["global", "vietnam", "crypto"] as const;
+const OVERVIEW_SEGMENT_SIZE = 5;
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -60,6 +64,8 @@ export function useDashboardData() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [liveUpdateError, setLiveUpdateError] = useState<string | null>(null);
   const [alertSubTab, setAlertSubTab] = useState<AlertSubTab>("decisions");
+  const [trackedCommand, setTrackedCommand] = useState<BotCommand | null>(null);
+  const trackTimer = useRef<number | null>(null);
   const loadingKeys = useRef(new Set<ResourceKey>());
   const resourceCache = useRef(createResourceCache({ ttlMs: 15_000 })).current;
   const eventsParams = `${eventsOffset}:${eventsMaxItems ?? "all"}:${eventsMinScore}`;
@@ -126,6 +132,15 @@ export function useDashboardData() {
       if (key === "commands") {
         return { ...current, commands: normalizeListResponse<BotCommand>(value).items };
       }
+      if (key === "catalysts") {
+        const response = normalizeListResponse<CatalystReview>(value);
+        return {
+          ...current,
+          catalystReviews: response.items,
+          catalystReviewsTotal: response.total,
+        };
+      }
+      if (key === "digestLatest") return { ...current, latestDigest: value as Digest | null };
       if (key === "alertPolicy") return { ...current, alertPolicy: value as AlertPolicy };
       if (key === "presets") return { ...current, presets: value as ConfigurationPresets };
       return current;
@@ -167,6 +182,8 @@ export function useDashboardData() {
       jobs: api.jobs,
       watchlist: api.watchlist,
       commands: api.commands,
+      catalysts: () => api.maintenanceCatalysts(10, 0),
+      digestLatest: api.digestLatest,
       alertPolicy: api.alertPolicy,
       presets: api.presets,
     }),
@@ -229,6 +246,41 @@ export function useDashboardData() {
     [resourceCache],
   );
 
+  const loadOverviewSegments = useCallback(
+    async (invalidate = false) => {
+      await Promise.all(
+        OVERVIEW_SEGMENTS.map(async (segment) => {
+          const key = `overview-segment:${segment}`;
+          if (invalidate) resourceCache.invalidate(key);
+          const result = await settle(
+            "events",
+            resourceCache.get(key, () =>
+              api.events({
+                offset: 0,
+                pageSize: OVERVIEW_SEGMENT_SIZE,
+                maxItems: OVERVIEW_SEGMENT_SIZE,
+                minScore: 0,
+                segment,
+              }),
+            ),
+          );
+          // A single segment failing is non-fatal: leave its panel empty rather
+          // than blanking the whole overview (the shared "events" load owns that).
+          if ("error" in result) return;
+          const response = normalizeListResponse<EventCluster>(result.value);
+          setState((current) => ({
+            ...current,
+            overviewSegments: {
+              ...current.overviewSegments,
+              [segment]: { items: response.items, total: response.total },
+            },
+          }));
+        }),
+      );
+    },
+    [resourceCache],
+  );
+
   const loadAlertDetail = useCallback(
     async (id: string, invalidate = false) => {
       const key = `alert:${id}`;
@@ -276,7 +328,16 @@ export function useDashboardData() {
   const load = useCallback(
     async (invalidate = false) => {
       const keysByView: Record<View, ListResourceKey[]> = {
-        overview: ["status", "events", "alerts"],
+        overview: [
+          "status",
+          "events",
+          "alerts",
+          "sourceHealth",
+          "watchlist",
+          "alertPolicy",
+          "catalysts",
+          "digestLatest",
+        ],
         events: ["status", "events"],
         news: ["status", "news", "newsDomains", "newsFilterOptions", "sources"],
         alerts:
@@ -290,13 +351,24 @@ export function useDashboardData() {
         maintenance: ["status"],
       };
       await loadResources(keysByView[view], invalidate);
+      if (view === "overview") void loadOverviewSegments(invalidate);
     },
-    [alertSubTab, loadResources, view],
+    [alertSubTab, loadOverviewSegments, loadResources, view],
   );
 
   useEffect(() => {
-    void loadResources(["status", "events", "alerts"]);
-  }, [loadResources]);
+    void loadResources([
+      "status",
+      "events",
+      "alerts",
+      "sourceHealth",
+      "watchlist",
+      "alertPolicy",
+      "catalysts",
+      "digestLatest",
+    ]);
+    void loadOverviewSegments();
+  }, [loadOverviewSegments, loadResources]);
 
   useEffect(() => {
     if (view !== "overview") void load();
@@ -380,10 +452,17 @@ export function useDashboardData() {
     return () => window.clearInterval(id);
   }, [autoRefreshMs, load]);
 
-  const selectedEvent = useMemo(
-    () => state.events.find((event) => event.id === selectedEventId) ?? state.events[0],
-    [selectedEventId, state.events],
-  );
+  const selectedEvent = useMemo(() => {
+    const fromWindow = state.events.find((event) => event.id === selectedEventId);
+    if (fromWindow) return fromWindow;
+    // Events opened from the overview's per-segment lists may sit outside the
+    // shared recency window, so fall back to those before the default.
+    for (const segment of Object.values(state.overviewSegments)) {
+      const match = segment.items.find((event) => event.id === selectedEventId);
+      if (match) return match;
+    }
+    return state.events[0];
+  }, [selectedEventId, state.events, state.overviewSegments]);
   const selectedEventDetail = selectedEvent ? state.eventDetails[selectedEvent.id] : undefined;
   const selectedNews = useMemo(
     () => state.news.find((item) => item.id === selectedNewsId) ?? null,
@@ -445,23 +524,68 @@ export function useDashboardData() {
       .includes(query.toLowerCase()),
   );
   const errorCount = Object.keys(resourceErrors).length;
-  const apiResourceCount = 12;
+  const apiResourceCount = 14;
   const apiBadgeLabel =
     errorCount === 0 ? "API ok" : errorCount === apiResourceCount ? "API offline" : "API degraded";
   const apiBadgeTone =
     errorCount === 0 ? "success" : errorCount === apiResourceCount ? "error" : "warning";
 
-  async function queue(commandType: string, payload: Record<string, unknown>) {
+  async function queue(
+    commandType: string,
+    payload: Record<string, unknown>,
+    options?: { navigate?: boolean },
+  ): Promise<BotCommand | null> {
     setActionError(null);
     try {
-      await api.createCommand(commandType, payload);
+      const command = await api.createCommand(commandType, payload);
       resourceCache.invalidate();
       await load(true);
-      setView("commands");
+      if (options?.navigate !== false) setView("commands");
+      return command;
     } catch (error) {
       setActionError(messageFromError(error, "Unable to queue command"));
+      return null;
     }
   }
+
+  // Poll a queued command until it reaches a terminal state, surfacing its live
+  // status (so callers that stay in place don't have to navigate to Commands) and
+  // refreshing overview resources once it succeeds.
+  const trackCommand = useCallback(
+    (command: BotCommand) => {
+      const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
+      if (trackTimer.current) window.clearInterval(trackTimer.current);
+      setTrackedCommand(command);
+      if (TERMINAL.has(command.status)) return;
+      const startedAt = Date.now();
+      const stop = () => {
+        if (trackTimer.current) window.clearInterval(trackTimer.current);
+        trackTimer.current = null;
+      };
+      trackTimer.current = window.setInterval(async () => {
+        try {
+          const items = normalizeListResponse<BotCommand>(await api.commands()).items;
+          const current = items.find((item) => item.id === command.id);
+          if (current) setTrackedCommand(current);
+          const done = current ? TERMINAL.has(current.status) : false;
+          if (done || Date.now() - startedAt > 90_000) {
+            stop();
+            if (current?.status === "succeeded") {
+              await loadResources(["digestLatest", "status"], true);
+            }
+            window.setTimeout(() => setTrackedCommand(null), 5_000);
+          }
+        } catch {
+          stop();
+        }
+      }, 3_000);
+    },
+    [loadResources],
+  );
+
+  useEffect(() => () => {
+    if (trackTimer.current) window.clearInterval(trackTimer.current);
+  }, []);
 
   async function acknowledgeAlert(id: string) {
     setActionError(null);
@@ -609,6 +733,8 @@ export function useDashboardData() {
     apiBadgeLabel,
     apiBadgeTone,
     queue,
+    trackCommand,
+    trackedCommand,
     acknowledgeAlert,
     dismissAlert,
     unacknowledgedAlerts,

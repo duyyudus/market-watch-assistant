@@ -5,7 +5,9 @@ import type {
   AlertSuppressionRule,
   BotCommand,
   BotStatus,
+  CatalystReview,
   ConfigurationPresets,
+  Digest,
   EventCluster,
   EventDetail,
   JobRun,
@@ -35,6 +37,7 @@ export type DashboardState = {
   events: EventCluster[];
   eventsTotal: number;
   eventDetails: Record<string, EventDetail>;
+  overviewSegments: Record<string, { items: EventCluster[]; total: number }>;
   news: NewsItem[];
   newsTotal: number;
   newsDomains: string[];
@@ -51,6 +54,9 @@ export type DashboardState = {
   jobs: JobRun[];
   watchlist: WatchlistEntry[];
   commands: BotCommand[];
+  catalystReviews: CatalystReview[];
+  catalystReviewsTotal: number;
+  latestDigest: Digest | null;
   alertPolicy: AlertPolicy | null;
   presets: ConfigurationPresets | null;
 };
@@ -72,9 +78,17 @@ export type ResourceKey =
   | "jobs"
   | "watchlist"
   | "commands"
+  | "catalysts"
+  | "digestLatest"
   | "alertPolicy"
   | "presets";
 
 export type ResourceErrors = Partial<Record<ResourceKey, string>>;
 
-export type QueueCommand = (type: string, payload: Record<string, unknown>) => Promise<void>;
+export type QueueCommand = (
+  type: string,
+  payload: Record<string, unknown>,
+  options?: { navigate?: boolean },
+) => Promise<BotCommand | null>;
+
+export type TrackCommand = (command: BotCommand) => void;

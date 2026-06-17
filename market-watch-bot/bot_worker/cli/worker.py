@@ -112,6 +112,7 @@ async def maybe_send_daily_digest(session_factory, settings) -> None:
                 since=window_start.astimezone(UTC),
                 until=window_end_utc,
                 threshold=settings.alerts.digest_threshold,
+                config=LLMConfig.from_settings(settings),
             )
         else:
             digest = existing

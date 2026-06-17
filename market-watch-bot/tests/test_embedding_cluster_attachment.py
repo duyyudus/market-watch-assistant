@@ -9,6 +9,7 @@ from bot_worker.db.models import (
     EventClusterEmbedding,
     EventClusterItem,
     LLMAnalysisRun,
+    NewsEntity,
     NewsItemEmbedding,
     NormalizedNewsItem,
 )
@@ -16,6 +17,15 @@ from bot_worker.embeddings import EmbeddingConfig
 from bot_worker.events import EventCandidate, EventClusterDraft, VectorClusterCandidate
 from bot_worker.llm import LLMConfig
 from bot_worker.services.llm import LLMClusterOutcome
+
+
+async def _fake_primary_from_patched(session, news_item_id: str) -> tuple[list[str], list[str]]:
+    """Mirror the patched entity/ticker fakes: these pre-primary tests treat every
+    extracted mention as a primary subject, so affected_* stays populated as before."""
+    return (
+        await event_services.news_item_entities(session, news_item_id),
+        await event_services.news_item_tickers(session, news_item_id),
+    )
 
 
 class ScalarRows:
@@ -178,6 +188,117 @@ class FakeVectorQuerySession:
         )
 
 
+class FakeRecomputeSession:
+    """Routes the recompute queries: clusters, then per-cluster member ids, then each
+    member's primary NewsEntity rows (returned in iteration order)."""
+
+    def __init__(
+        self,
+        clusters: list[EventCluster],
+        members: dict[str, list[str]],
+        primary_rows: dict[str, list[NewsEntity]],
+    ) -> None:
+        self.clusters = clusters
+        self._members_seq = [members.get(cluster.id, []) for cluster in clusters]
+        self._rows_seq = [
+            primary_rows.get(news_item_id, [])
+            for cluster in clusters
+            for news_item_id in members.get(cluster.id, [])
+        ]
+        self.flushes = 0
+
+    async def scalars(self, stmt):
+        text = str(stmt).lower()
+        if "watchlist_entities" in text:
+            return ScalarRows([])
+        if "event_cluster_items" in text:
+            return ScalarRows(self._members_seq.pop(0))
+        if "news_entities" in text:
+            return ScalarRows(self._rows_seq.pop(0))
+        return ScalarRows(self.clusters)
+
+    async def flush(self) -> None:
+        self.flushes += 1
+
+
+@pytest.mark.asyncio
+async def test_recompute_affected_from_primary_entities_drops_comparison_mentions() -> None:
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="SpaceX market cap tops $2 trillion on trading debut",
+        status="reported",
+        regions=["us"],
+        asset_classes=["equity"],
+        # Polluted with comparison mega-caps from before the primary-subject filter.
+        affected_entities=["Alphabet", "Amazon", "Apple", "SpaceX"],
+        affected_tickers=["AAPL", "AMZN", "GOOGL"],
+        source_count=1,
+        top_source_score=80,
+    )
+    session = FakeRecomputeSession(
+        clusters=[cluster],
+        members={"evt_1": ["news_1"]},
+        primary_rows={
+            "news_1": [
+                NewsEntity(
+                    news_item_id="news_1",
+                    entity_type="market_entity",
+                    raw_text="SpaceX",
+                    normalized_name="SpaceX",
+                    is_primary=True,
+                )
+            ]
+        },
+    )
+
+    result = await event_services.recompute_affected_from_primary_entities(
+        session, dry_run=False
+    )
+
+    assert result["clusters_changed"] == 1
+    assert cluster.affected_entities == ["SpaceX"]
+    assert cluster.affected_tickers == []
+
+
+@pytest.mark.asyncio
+async def test_recompute_affected_from_primary_entities_dry_run_does_not_mutate() -> None:
+    cluster = EventCluster(
+        id="evt_1",
+        canonical_headline="SpaceX market cap tops $2 trillion",
+        status="reported",
+        regions=["us"],
+        asset_classes=["equity"],
+        affected_entities=["Apple", "SpaceX"],
+        affected_tickers=["AAPL"],
+        source_count=1,
+        top_source_score=80,
+    )
+    session = FakeRecomputeSession(
+        clusters=[cluster],
+        members={"evt_1": ["news_1"]},
+        primary_rows={
+            "news_1": [
+                NewsEntity(
+                    news_item_id="news_1",
+                    entity_type="market_entity",
+                    raw_text="SpaceX",
+                    normalized_name="SpaceX",
+                    is_primary=True,
+                )
+            ]
+        },
+    )
+
+    result = await event_services.recompute_affected_from_primary_entities(session, dry_run=True)
+
+    assert result["clusters_changed"] == 1
+    assert result["mode"] == "dry_run"
+    # Unchanged on disk.
+    assert cluster.affected_entities == ["Apple", "SpaceX"]
+    assert cluster.affected_tickers == ["AAPL"]
+    assert session.flushes == 0
+
+
 @pytest.mark.asyncio
 async def test_vector_cluster_candidates_use_typed_vector_param_and_config_filters() -> None:
     session = FakeVectorQuerySession()
@@ -268,6 +389,7 @@ async def test_build_event_clusters_attaches_embedding_match(monkeypatch) -> Non
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -334,6 +456,7 @@ async def test_build_event_clusters_creates_new_cluster_when_vector_match_is_not
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -375,6 +498,7 @@ async def test_build_event_clusters_uses_empty_entities_without_title_word_fallb
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     stats = await services.build_event_clusters(session)
 
@@ -407,6 +531,7 @@ async def test_build_event_clusters_populates_affected_tickers_from_news_entitie
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     stats = await services.build_event_clusters(session)
 
@@ -502,6 +627,7 @@ async def test_build_event_clusters_attaches_gray_zone_match_when_llm_confirms(
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -574,6 +700,7 @@ async def test_build_event_clusters_does_not_attach_gray_zone_match_when_llm_rej
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -632,6 +759,7 @@ async def test_build_event_clusters_attaches_ambiguous_batch_candidate_when_llm_
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "resolve_llm_cluster_decision",
@@ -683,6 +811,7 @@ async def test_build_event_clusters_splits_ambiguous_batch_candidate_when_llm_un
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "resolve_llm_cluster_decision",
@@ -744,6 +873,7 @@ async def test_build_event_clusters_skips_llm_for_below_gray_zone_similarity(
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
     monkeypatch.setattr(
         event_services,
         "vector_cluster_candidates_for_item",
@@ -832,6 +962,7 @@ async def test_recluster_recent_event_clusters_merges_duplicate_clusters_with_cl
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     result = await services.recluster_recent_event_clusters(
         session,
@@ -874,6 +1005,7 @@ async def test_recluster_recent_event_clusters_reembeds_surviving_clusters(monke
     monkeypatch.setattr(event_services, "vector_item_neighbors", fake_vector_item_neighbors)
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     result = await services.recluster_recent_event_clusters(
         session,
@@ -909,6 +1041,7 @@ async def test_recluster_recent_event_clusters_dry_run_does_not_mutate(monkeypat
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     result = await services.recluster_recent_event_clusters(
         session,
@@ -1044,6 +1177,7 @@ async def test_recluster_recent_event_clusters_splits_false_merge_without_orphan
 
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     result = await services.recluster_recent_event_clusters(
         session,
@@ -1089,6 +1223,7 @@ async def test_recluster_threads_llm_config_into_arbitration(monkeypatch) -> Non
     )
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     config = LLMConfig(enabled=True, api_key="secret")
     result = await services.recluster_recent_event_clusters(
@@ -1268,6 +1403,7 @@ async def test_recluster_builds_vector_neighbors_when_vector_signal_requested(mo
     monkeypatch.setattr(event_services, "vector_item_neighbors", fake_vector_item_neighbors)
     monkeypatch.setattr(event_services, "news_item_entities", fake_news_item_entities)
     monkeypatch.setattr(event_services, "news_item_tickers", fake_news_item_tickers)
+    monkeypatch.setattr(event_services, "news_item_primary_subjects", _fake_primary_from_patched)
 
     await services.recluster_recent_event_clusters(
         session,

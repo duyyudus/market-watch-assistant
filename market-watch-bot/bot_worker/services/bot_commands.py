@@ -219,6 +219,7 @@ async def execute_bot_command(
             until=until,
             threshold=settings.alerts.digest_threshold,
             limit=int(payload.get("limit", 50)),
+            config=LLMConfig.from_settings(settings),
         )
         if bool(payload.get("dry_run", False)):
             return {

@@ -14,11 +14,15 @@ from bot_worker.db.models import (
     NormalizedNewsItem,
 )
 from bot_worker.llm import (
+    CLASSIFY_PROMPT_VERSION,
     PROMPT_VERSION,
     LLMAnalysis,
     LLMClassification,
     LLMClusterDecision,
     LLMConfig,
+    LLMDigestSection,
+    LLMDigestSummary,
+    LLMEntityMention,
     LLMEventScore,
     LLMEventSummary,
 )
@@ -789,6 +793,143 @@ async def test_extract_entities_with_llm_persists_news_entities_without_watchlis
     assert btc.ticker == "BTC"
 
 
+class FakeBackfillSession:
+    def __init__(self, runs: list[LLMAnalysisRun]) -> None:
+        self.runs = runs
+        self.added: list[object] = []
+        self.deleted: list[object] = []
+
+    async def scalars(self, stmt):
+        if "watchlist_entities" in str(stmt).lower():
+            return ScalarRows([])
+        return ScalarRows(self.runs)
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def execute(self, stmt):
+        self.deleted.append(stmt)
+        return ExecuteRows([])
+
+    async def flush(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_backfill_primary_entity_flags_rederives_from_cached_run() -> None:
+    run = LLMAnalysisRun(
+        target_type="news_item",
+        target_id="news_1",
+        provider="openrouter",
+        model="openai/gpt-4.1-mini",
+        prompt_version=CLASSIFY_PROMPT_VERSION,
+        prompt_hash="hash",
+        status="succeeded",
+        result=LLMClassification(
+            item_type="market_news",
+            actionability="low",
+            event_type="ipo",
+            region="us",
+            asset_classes=["equity"],
+            entities=[
+                LLMEntityMention(name="SpaceX", is_primary=True),
+                LLMEntityMention(name="Apple", ticker="AAPL", is_primary=False),
+            ],
+            tickers=[],
+            confidence=80,
+            rationale="SpaceX is the subject.",
+        ).model_dump(),
+    )
+    session = FakeBackfillSession([run])
+
+    rebuilt = await services.backfill_primary_entity_flags(session)
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    by_name = {entity.normalized_name: entity for entity in entities}
+    assert rebuilt == 1
+    assert session.deleted  # stale rows are cleared before re-inserting
+    assert by_name["SpaceX"].is_primary is True
+    assert by_name["Apple"].is_primary is False
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_flags_only_primary_subjects(monkeypatch) -> None:
+    # A "SpaceX tops $2T, bigger than Apple & Amazon" story: SpaceX is the subject,
+    # the mega-caps are comparison mentions and must not be flagged primary.
+    item = news_item("news_1", "SpaceX market cap tops $2 trillion on trading debut")
+    session = FakeEntityExtractionSession([item])
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="low",
+                    event_type="ipo",
+                    region="us",
+                    asset_classes=["equity"],
+                    entities=[
+                        LLMEntityMention(name="SpaceX", is_primary=True),
+                        LLMEntityMention(name="Apple", ticker="AAPL", is_primary=False),
+                        LLMEntityMention(name="Amazon", ticker="AMZN", is_primary=False),
+                    ],
+                    tickers=[],
+                    confidence=80,
+                    rationale="SpaceX is the subject; mega-caps are comparison only.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    count = await services.extract_entities_with_llm(
+        session,
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    entities = [value for value in session.added if isinstance(value, NewsEntity)]
+    by_name = {entity.normalized_name: entity for entity in entities}
+    assert count == 1
+    assert by_name["SpaceX"].is_primary is True
+    assert by_name["Apple"].is_primary is False
+    assert by_name["Amazon"].is_primary is False
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_flags_flat_ticker_list_as_primary(monkeypatch) -> None:
+    # The flat `tickers` list is documented as the primary-subject symbols.
+    item = news_item("news_1", "Bitcoin options are coming to Nasdaq")
+    session = FakeEntityExtractionSession([item])
+
+    class FakeProvider:
+        async def classify_news_item(self, _prompt: str):
+            return (
+                LLMClassification(
+                    item_type="market_news",
+                    actionability="medium",
+                    event_type="exchange_product",
+                    region="crypto",
+                    asset_classes=["crypto"],
+                    entities=[],
+                    tickers=["BTC"],
+                    confidence=86,
+                    rationale="Bitcoin is the subject.",
+                ),
+                {"total_tokens": 60},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    await services.extract_entities_with_llm(session, config=LLMConfig(enabled=True, api_key="key"))
+
+    btc = next(
+        value
+        for value in session.added
+        if isinstance(value, NewsEntity) and value.normalized_name == "BTC"
+    )
+    assert btc.is_primary is True
+
+
 @pytest.mark.asyncio
 async def test_extract_entities_with_llm_does_not_persist_long_ticker_phrases(
     monkeypatch,
@@ -1118,6 +1259,69 @@ async def test_summarize_event_records_summary_prompt_version(monkeypatch) -> No
     assert run is not None
     assert run.prompt_version == "summarize-v1"
     assert run.result["digest_bullets"] == ["Crude rose on supply risk."]
+
+
+@pytest.mark.asyncio
+async def test_build_digest_narrative_records_run_and_returns_prose(monkeypatch) -> None:
+    events = [
+        EventCluster(
+            id="evt_1",
+            canonical_headline="Oil jumps on supply risk",
+            final_score=84,
+            source_count=4,
+            top_source_score=85,
+            status="reported",
+            regions=["global"],
+            asset_classes=["global_macro"],
+        ),
+    ]
+    session = FakeTargetSession(None)
+
+    class FakeProvider:
+        async def summarize_digest(self, _prompt: str):
+            return (
+                LLMDigestSummary(
+                    lead="Markets leaned risk-off as oil spiked.",
+                    sections=[
+                        LLMDigestSection(
+                            topic="Oil & Middle East",
+                            body="Crude rose on a supply-risk report.",
+                        ),
+                    ],
+                ),
+                {"total_tokens": 120},
+            )
+
+    monkeypatch.setattr(llm_services, "llm_provider", lambda _config: FakeProvider())
+
+    narrative = await llm_services.build_digest_narrative(
+        session,
+        events=events,
+        since=datetime(2026, 6, 15, 13, 0, tzinfo=UTC),
+        until=datetime(2026, 6, 16, 13, 0, tzinfo=UTC),
+        config=LLMConfig(enabled=True, api_key="key"),
+    )
+
+    assert narrative is not None
+    # Lead paragraph, then a topic block separated by a blank line.
+    assert narrative.startswith("Markets leaned risk-off as oil spiked.")
+    assert "\n\nOil & Middle East\nCrude rose on a supply-risk report." in narrative
+    run = session.added[0]
+    assert run.target_type == "digest"
+    assert run.prompt_version == "digest-v1"
+    assert run.status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_build_digest_narrative_disabled_returns_none() -> None:
+    narrative = await llm_services.build_digest_narrative(
+        FakeTargetSession(None),
+        events=[EventCluster(id="evt_1", canonical_headline="x", final_score=84, source_count=1)],
+        since=datetime(2026, 6, 15, 13, 0, tzinfo=UTC),
+        until=datetime(2026, 6, 16, 13, 0, tzinfo=UTC),
+        config=LLMConfig(enabled=False, api_key=None),
+    )
+    assert narrative is None
 
 
 @pytest.mark.asyncio

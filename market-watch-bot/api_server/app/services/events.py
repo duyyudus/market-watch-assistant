@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ColumnElement
 
@@ -11,6 +11,7 @@ from api_server.app.services.query import apply_pagination, count_for
 from common.db.models import (
     AgentInvestigation,
     BotCommand,
+    DigestRecord,
     EventCluster,
     EventClusterItem,
     EventScoreHistory,
@@ -25,6 +26,32 @@ from common.db.models import (
 )
 
 
+def _segment_filter(segment: str) -> ColumnElement[bool] | None:
+    """Translate a dashboard market segment into a JSONB membership predicate.
+
+    Crypto and Vietnam are positive matches on the canonical region/asset-class
+    vocabulary; ``global`` is everything that is neither, so a quiet segment can
+    still surface its own clusters instead of being crowded out of a recency
+    window shared across all segments.
+    """
+    crypto = or_(
+        EventCluster.asset_classes.contains(["crypto"]),
+        EventCluster.regions.contains(["crypto"]),
+    )
+    vietnam = or_(
+        EventCluster.regions.contains(["vietnam"]),
+        EventCluster.regions.contains(["vn"]),
+        EventCluster.asset_classes.contains(["vietnam_equity"]),
+    )
+    if segment == "crypto":
+        return crypto
+    if segment == "vietnam":
+        return vietnam
+    if segment == "global":
+        return and_(not_(crypto), not_(vietnam))
+    return None
+
+
 async def list_events(
     session: AsyncSession,
     *,
@@ -34,6 +61,7 @@ async def list_events(
     min_score: int | None,
     status_filter: str | None,
     q: str | None,
+    segment: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     report_ranges = _report_range_subquery()
     report_end_at = report_ranges.c.report_end_at
@@ -57,6 +85,10 @@ async def list_events(
         stmt = stmt.where(EventCluster.final_score >= min_score)
     if q:
         stmt = stmt.where(EventCluster.canonical_headline.ilike(f"%{q}%"))
+    if segment:
+        segment_predicate = _segment_filter(segment)
+        if segment_predicate is not None:
+            stmt = stmt.where(segment_predicate)
     matching_total = await count_for(session, stmt)
     total = min(matching_total, max_items) if max_items is not None else matching_total
     if offset >= total:
@@ -306,6 +338,11 @@ async def get_event_detail(session: AsyncSession, event: EventCluster) -> dict[s
         ],
     }
     return EventDetailRead.model_validate(payload).model_dump()
+
+
+async def get_latest_digest(session: AsyncSession) -> DigestRecord | None:
+    stmt = select(DigestRecord).order_by(DigestRecord.created_at.desc()).limit(1)
+    return (await session.scalars(stmt)).first()
 
 
 async def list_digest_preview(session: AsyncSession, *, limit: int) -> list[EventCluster]:

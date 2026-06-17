@@ -44,6 +44,8 @@ const apiMock = vi.hoisted(() => ({
   alertPolicy: vi.fn(),
   updateAlertPolicy: vi.fn(),
   presets: vi.fn(),
+  maintenanceCatalysts: vi.fn(),
+  digestLatest: vi.fn(),
 }));
 
 class MockEventSource {
@@ -544,6 +546,32 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       ],
     },
   });
+  apiMock.maintenanceCatalysts.mockResolvedValue(
+    envelope([
+      {
+        id: "cat_1",
+        asset_symbol: "BTC",
+        asset_class: "crypto",
+        move_window: "1h",
+        price_change_pct: -4.2,
+        volume_change_pct: 38.5,
+        detected_event_cluster_id: null,
+        status: "pending",
+        agent_summary: "Large BTC move without a confirmed catalyst.",
+        created_at: "2026-05-29T13:20:00Z",
+      },
+    ]),
+  );
+  apiMock.digestLatest.mockResolvedValue({
+    id: "digest_1",
+    digest_type: "daily",
+    window_start: "2026-05-28T13:00:00Z",
+    window_end: "2026-05-29T13:00:00Z",
+    content: "[Daily Market Digest]\nWindow: ...\n\nUS / global_macro\n- 84 reported: Fed signals a slower rate path (2 sources)",
+    status: "built",
+    event_count: 1,
+    created_at: "2026-05-29T13:05:00Z",
+  });
   apiMock.createSource.mockResolvedValue({
     id: "src_2",
     name: "CoinDesk",
@@ -698,13 +726,173 @@ describe("App data states", () => {
     await renderLoadedApp();
 
     expect(apiMock.botStatus).toHaveBeenCalledTimes(1);
-    expect(apiMock.events).toHaveBeenCalledTimes(1);
+    // 1 shared recency window + 1 per market segment (global/vietnam/crypto).
+    expect(apiMock.events).toHaveBeenCalledTimes(4);
+    expect(apiMock.events).toHaveBeenCalledWith(expect.objectContaining({ segment: "crypto" }));
     expect(apiMock.alerts).toHaveBeenCalledTimes(1);
+    expect(apiMock.sourceHealth).toHaveBeenCalledTimes(1);
+    expect(apiMock.watchlist).toHaveBeenCalledTimes(1);
+    expect(apiMock.alertPolicy).toHaveBeenCalledTimes(1);
+    expect(apiMock.maintenanceCatalysts).toHaveBeenCalledWith(10, 0);
     expect(apiMock.sources).not.toHaveBeenCalled();
     expect(apiMock.news).not.toHaveBeenCalled();
-    expect(apiMock.watchlist).not.toHaveBeenCalled();
     expect(apiMock.alertChannels).not.toHaveBeenCalled();
     expect(apiMock.presets).not.toHaveBeenCalled();
+  });
+
+  it("renders overview synthesis, actions, watchlist, and coverage", async () => {
+    await renderLoadedApp();
+
+    expect(await screen.findByRole("heading", { name: "Needs you now" })).toBeInTheDocument();
+    expect(screen.getAllByText("Fed signals a slower rate path").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /acknowledge Fed signals a slower rate path/i })).toBeInTheDocument();
+    expect(screen.getByText("Unexplained BTC move")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Daily synthesis" })).toBeInTheDocument();
+    expect(screen.getByText(/US \/ global_macro/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Top events" })).toBeInTheDocument();
+    expect(await screen.findByText("SPY")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Watchlist spotlight" })).toBeInTheDocument();
+    expect(screen.getByText("S&P 500 ETF")).toBeInTheDocument();
+    expect(screen.getByText(/Coverage:/)).toBeInTheDocument();
+    expect(screen.getByText(/1 healthy/)).toBeInTheDocument();
+  });
+
+  it("acknowledges alerts from the overview action queue", async () => {
+    await renderLoadedApp();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /acknowledge Fed signals a slower rate path/i,
+      }),
+    );
+
+    await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
+  });
+
+  it("filters overview top events by market segment", async () => {
+    const cryptoEvent = {
+      id: "evt_crypto",
+      canonical_headline: "ETF outflows pressure BTC",
+      summary: "Bitcoin sold off as ETF outflows accelerated.",
+      status: "reported",
+      regions: ["global"],
+      asset_classes: ["crypto"],
+      affected_entities: ["Bitcoin"],
+      affected_tickers: ["BTC"],
+      source_count: 12,
+      final_score: 82,
+      alert_level: "immediate_alert",
+      report_start_at: "2026-05-29T12:00:00Z",
+      report_end_at: "2026-05-29T12:30:00Z",
+      last_updated_at: "2026-05-29T13:00:00Z",
+    };
+    const vnEvent = {
+      id: "evt_vn",
+      canonical_headline: "VN banks edge higher after SBV commentary",
+      summary: "Vietnam banking shares gained after policy comments.",
+      status: "reported",
+      regions: ["vietnam"],
+      asset_classes: ["vietnam_equity"],
+      affected_entities: ["Vietcombank"],
+      affected_tickers: ["VCB"],
+      source_count: 4,
+      final_score: 58,
+      alert_level: "digest_only",
+      report_start_at: "2026-05-29T11:00:00Z",
+      report_end_at: "2026-05-29T11:30:00Z",
+      last_updated_at: "2026-05-29T11:45:00Z",
+    };
+    // Segments are filtered server-side, so the mock returns per-segment results.
+    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
+      if (options?.segment === "crypto") return envelope([cryptoEvent]);
+      if (options?.segment === "vietnam") return envelope([vnEvent]);
+      if (options?.segment === "global") return envelope([]);
+      return envelope([cryptoEvent, vnEvent]);
+    });
+    await renderLoadedApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Crypto" }));
+
+    expect(screen.getByText("ETF outflows pressure BTC")).toBeInTheDocument();
+    expect(screen.queryByText("VN banks edge higher after SBV commentary")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Vietnam" }));
+
+    expect(screen.getByText("VN banks edge higher after SBV commentary")).toBeInTheDocument();
+    expect(screen.queryByText("ETF outflows pressure BTC")).not.toBeInTheDocument();
+  });
+
+  it("shows the overview caught-up state when there are no action items", async () => {
+    apiMock.alerts.mockResolvedValue(envelope([]));
+    apiMock.events.mockResolvedValue(
+      envelope([
+        {
+          id: "evt_quiet",
+          canonical_headline: "Quiet global session",
+          summary: "No urgent events crossed alert thresholds.",
+          status: "reported",
+          regions: ["global"],
+          asset_classes: ["global_macro"],
+          affected_entities: [],
+          affected_tickers: [],
+          source_count: 1,
+          final_score: 32,
+          alert_level: "digest_only",
+          report_start_at: "2026-05-29T11:00:00Z",
+          report_end_at: "2026-05-29T11:30:00Z",
+          last_updated_at: "2026-05-29T11:45:00Z",
+        },
+      ]),
+    );
+    apiMock.maintenanceCatalysts.mockResolvedValue(envelope([]));
+
+    await renderLoadedApp();
+
+    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+  });
+
+  it("rebuilds the digest from the synthesis panel when one exists", async () => {
+    apiMock.createCommand.mockResolvedValue({
+      id: "cmd_digest",
+      command_type: "digest.send",
+      status: "pending",
+      payload: {},
+    });
+
+    await renderLoadedApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: /rebuild/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("digest.send", {
+        hours: 24,
+        dry_run: true,
+      }),
+    );
+    // Stays on the overview instead of jumping to the Commands page.
+    expect(screen.getByRole("heading", { name: "Daily synthesis" })).toBeInTheDocument();
+  });
+
+  it("builds a digest on demand from the overview empty state", async () => {
+    apiMock.digestLatest.mockResolvedValue(null);
+    apiMock.createCommand.mockResolvedValue({
+      id: "cmd_digest",
+      command_type: "digest.send",
+      status: "pending",
+      payload: {},
+    });
+
+    await renderLoadedApp();
+
+    expect(await screen.findByText("No digest yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /build digest now/i }));
+
+    await waitFor(() =>
+      expect(apiMock.createCommand).toHaveBeenCalledWith("digest.send", {
+        hours: 24,
+        dry_run: true,
+      }),
+    );
   });
 
   it("renders successful dashboard data", async () => {
@@ -1111,7 +1299,7 @@ describe("App data states", () => {
 
     await renderLoadedApp();
 
-    expect(await screen.findByText("No priority events yet")).toBeInTheDocument();
+    expect(await screen.findByText("No Global events")).toBeInTheDocument();
     switchTo("news");
     expect(screen.getByText("No normalized news yet")).toBeInTheDocument();
   });

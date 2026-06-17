@@ -52,6 +52,7 @@ from bot_worker.services.llm import (
 )
 from bot_worker.services.watchlists import (
     news_item_entities,
+    news_item_primary_subjects,
     news_item_tickers,
     tier_for_entities,
     watchlist_entries,
@@ -296,8 +297,8 @@ async def _attach_news_item_to_cluster(
     *,
     item: NormalizedNewsItem,
     cluster: EventCluster,
-    entities: list[str],
-    tickers: list[str],
+    primary_entities: list[str],
+    primary_tickers: list[str],
     similarity: float,
     watch_entries: list[WatchlistEntry],
     decision_metadata: dict[str, object] | None = None,
@@ -319,8 +320,8 @@ async def _attach_news_item_to_cluster(
     cluster.last_updated_at = utcnow()
     cluster.regions = sorted(set(cluster.regions or []) | {item.region})
     cluster.asset_classes = sorted(set(cluster.asset_classes or []) | set(item.asset_classes))
-    cluster.affected_entities = sorted(set(cluster.affected_entities or []) | set(entities))
-    cluster.affected_tickers = sorted(set(cluster.affected_tickers or []) | set(tickers))
+    cluster.affected_entities = sorted(set(cluster.affected_entities or []) | set(primary_entities))
+    cluster.affected_tickers = sorted(set(cluster.affected_tickers or []) | set(primary_tickers))
     cluster.source_count += 1
     if item.source_score >= 75:
         cluster.high_quality_source_count = int(cluster.high_quality_source_count or 0) + 1
@@ -350,6 +351,9 @@ async def _candidate_from_item(
     matches = match_watchlist(f"{item.title} {item.snippet or ''}", watch_entries)
     stored_entities = await news_item_entities(session, item.id)
     stored_tickers = await news_item_tickers(session, item.id)
+    stored_primary_entities, stored_primary_tickers = await news_item_primary_subjects(
+        session, item.id
+    )
     entities = stored_entities or [match.name for match in matches]
     # Tickers come from two safe sources: tickers the LLM attached to entities, and
     # watchlist symbols resolved from the LLM-recognized entity names (e.g.
@@ -359,12 +363,26 @@ async def _candidate_from_item(
     tickers = sorted(
         set(stored_tickers) | set(symbols_for_entities(stored_entities, watch_entries))
     )
+    # Primary-subject subsets drive affected_*. When the LLM extracted entities, only
+    # its primary picks count (a "SpaceX tops Apple/Amazon" story has no primary AAPL).
+    # With no extraction at all, the title's watchlist matches are the de-facto subject.
+    if stored_entities:
+        primary_entities = stored_primary_entities
+        primary_tickers = sorted(
+            set(stored_primary_tickers)
+            | set(symbols_for_entities(stored_primary_entities, watch_entries))
+        )
+    else:
+        primary_entities = entities
+        primary_tickers = tickers
     return EventCandidate(
         news_id=item.id,
         title=item.title,
         source_score=item.source_score,
         entities=entities,
         tickers=tickers,
+        primary_entities=primary_entities,
+        primary_tickers=primary_tickers,
         region=item.region,
         asset_classes=item.asset_classes,
         published_at=item.published_at,
@@ -382,6 +400,8 @@ def _draft_candidate(draft: EventClusterDraft) -> EventCandidate:
         source_score=draft.top_source_score,
         entities=list(draft.entities),
         tickers=list(draft.tickers),
+        primary_entities=list(draft.primary_entities),
+        primary_tickers=list(draft.primary_tickers),
         region=next(iter(draft.regions), "global"),
         asset_classes=list(draft.asset_classes),
         published_at=None,
@@ -396,8 +416,8 @@ def _draft_cluster(draft: EventClusterDraft) -> EventCluster:
         canonical_headline=draft.canonical_headline,
         regions=sorted(draft.regions),
         asset_classes=sorted(draft.asset_classes),
-        affected_entities=sorted(draft.entities),
-        affected_tickers=sorted(draft.tickers),
+        affected_entities=sorted(draft.primary_entities),
+        affected_tickers=sorted(draft.primary_tickers),
         source_count=draft.source_count,
         high_quality_source_count=draft.high_quality_source_count,
         top_source_score=draft.top_source_score,
@@ -422,6 +442,8 @@ def _add_candidate_to_draft_with_metadata(
     draft.item_decision_metadata[candidate.news_id] = metadata
     draft.entities.update(candidate.entities)
     draft.tickers.update(candidate.tickers)
+    draft.primary_entities.update(candidate.primary_entities)
+    draft.primary_tickers.update(candidate.primary_tickers)
     draft.regions.add(candidate.region)
     draft.asset_classes.update(candidate.asset_classes)
     draft.source_count += 1
@@ -715,6 +737,8 @@ def _combine_drafts(members: list[EventClusterDraft]) -> EventClusterDraft:
         base.item_decision_metadata.update(other.item_decision_metadata)
         base.entities |= other.entities
         base.tickers |= other.tickers
+        base.primary_entities |= other.primary_entities
+        base.primary_tickers |= other.primary_tickers
         base.regions |= other.regions
         base.asset_classes |= other.asset_classes
         base.source_count += other.source_count
@@ -784,8 +808,8 @@ def _update_cluster_from_draft(
     cluster.status = "reported"
     cluster.regions = sorted(draft.regions)
     cluster.asset_classes = sorted(draft.asset_classes)
-    cluster.affected_entities = sorted(draft.entities)
-    cluster.affected_tickers = sorted(draft.tickers)
+    cluster.affected_entities = sorted(draft.primary_entities)
+    cluster.affected_tickers = sorted(draft.primary_tickers)
     cluster.source_count = draft.source_count
     cluster.high_quality_source_count = draft.high_quality_source_count
     cluster.top_source_score = draft.top_source_score
@@ -869,6 +893,59 @@ def _match_drafts_to_clusters(
         else:
             assignments.append((None, draft))
     return assignments, claimed
+
+
+async def recompute_affected_from_primary_entities(
+    session: AsyncSession,
+    *,
+    dry_run: bool = True,
+    limit: int | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> dict[str, int | str]:
+    """Rebuild every cluster's affected_tickers/affected_entities from its members'
+    primary-subject mentions only, dropping comparison/peer mentions that leaked in
+    before the primary-subject filter existed. Makes no LLM calls. Dry-run by default.
+    """
+    watch_entries = await watchlist_entries(session)
+    stmt = select(EventCluster).order_by(EventCluster.last_updated_at.desc())
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    clusters = list((await session.scalars(stmt)).all())
+    changed = 0
+    for index, cluster in enumerate(clusters, start=1):
+        if progress is not None:
+            progress("recomputing", index, len(clusters))
+        member_ids = list(
+            (
+                await session.scalars(
+                    select(EventClusterItem.news_item_id).where(
+                        EventClusterItem.event_cluster_id == cluster.id
+                    )
+                )
+            ).all()
+        )
+        primary_entities: set[str] = set()
+        primary_tickers: set[str] = set()
+        for news_item_id in member_ids:
+            names, tickers = await news_item_primary_subjects(session, news_item_id)
+            primary_entities.update(names)
+            primary_tickers.update(tickers)
+            primary_tickers.update(symbols_for_entities(names, watch_entries))
+        new_entities = sorted(primary_entities)
+        new_tickers = sorted(primary_tickers)
+        if new_entities == cluster.affected_entities and new_tickers == cluster.affected_tickers:
+            continue
+        changed += 1
+        if not dry_run:
+            cluster.affected_entities = new_entities
+            cluster.affected_tickers = new_tickers
+    if not dry_run:
+        await session.flush()
+    return {
+        "clusters_scanned": len(clusters),
+        "clusters_changed": changed,
+        "mode": "dry_run" if dry_run else "applied",
+    }
 
 
 async def recluster_recent_event_clusters(
@@ -1113,8 +1190,8 @@ async def build_event_clusters(
                     session,
                     item=item,
                     cluster=cluster,
-                    entities=entities,
-                    tickers=tickers,
+                    primary_entities=candidate.primary_entities,
+                    primary_tickers=candidate.primary_tickers,
                     similarity=vector_candidate.similarity,
                     watch_entries=watch_entries,
                     decision_metadata={
@@ -1160,8 +1237,8 @@ async def build_event_clusters(
                     session,
                     item=item,
                     cluster=cluster,
-                    entities=entities,
-                    tickers=tickers,
+                    primary_entities=candidate.primary_entities,
+                    primary_tickers=candidate.primary_tickers,
                     similarity=vector_candidate.similarity,
                     watch_entries=watch_entries,
                     decision_metadata={
@@ -1200,8 +1277,8 @@ async def build_event_clusters(
             last_updated_at=first_seen,
             regions=sorted(draft.regions),
             asset_classes=sorted(draft.asset_classes),
-            affected_entities=sorted(draft.entities),
-            affected_tickers=sorted(draft.tickers),
+            affected_entities=sorted(draft.primary_entities),
+            affected_tickers=sorted(draft.primary_tickers),
             source_count=draft.source_count,
             high_quality_source_count=draft.high_quality_source_count,
             top_source_score=draft.top_source_score,
