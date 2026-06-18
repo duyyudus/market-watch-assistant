@@ -359,12 +359,12 @@ export function useDashboardData() {
         news: ["status", "news", "newsDomains", "newsFilterOptions", "sources"],
         alerts:
           alertSubTab === "settings"
-            ? ["status", "alertChannels", "alertSuppressionRules", "presets"]
+            ? ["status", "alertPolicy", "alertChannels", "alertSuppressionRules", "presets"]
             : ["status", "alerts"],
         sources: ["status", "sources", "sourceHealth", "presets"],
         watchlist: ["status", "watchlist", "presets"],
         commands: ["status", "commands", "sources", "events"],
-        operations: ["status", "jobs", "alerts", "alertPolicy"],
+        operations: ["status", "jobs", "alerts"],
         maintenance: ["status"],
       };
       await loadResources(keysByView[view], invalidate);

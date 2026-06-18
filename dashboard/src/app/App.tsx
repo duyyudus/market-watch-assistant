@@ -392,6 +392,8 @@ export function App() {
                   }
                 }}
                 onSelectAlert={(id) => setSelectedAlertId(id)}
+                alertPolicy={state.alertPolicy}
+                alertPolicyError={resourceErrors.alertPolicy}
                 channels={state.alertChannels}
                 rules={state.alertSuppressionRules}
                 reload={() => load(true)}
@@ -430,7 +432,6 @@ export function App() {
                 jobs={state.jobs}
                 alerts={state.alerts}
                 errors={resourceErrors}
-                alertPolicy={state.alertPolicy}
                 queue={queue}
                 retry={() => load(true)}
               />

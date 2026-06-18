@@ -1,6 +1,7 @@
 import type {
   AlertChannel,
   AlertDecision,
+  AlertPolicy,
   AlertSuppressionRule,
   ConfigurationPresets,
   EventDetail,
@@ -36,6 +37,8 @@ export function Alerts({
   retryAlerts,
   retrySelectedAlertDetail,
   onSelectAlert,
+  alertPolicy,
+  alertPolicyError,
   channels,
   rules,
   reload,
@@ -61,6 +64,8 @@ export function Alerts({
   retryAlerts: () => Promise<void>;
   retrySelectedAlertDetail: () => Promise<void>;
   onSelectAlert: (id: string) => void;
+  alertPolicy: AlertPolicy | null;
+  alertPolicyError?: string;
   channels: AlertChannel[];
   rules: AlertSuppressionRule[];
   reload: () => Promise<void>;
@@ -92,7 +97,14 @@ export function Alerts({
           retryDetail={retrySelectedAlertDetail}
         />
       ) : (
-        <AlertSettingsTab channels={channels} rules={rules} reload={reload} presets={presets} />
+        <AlertSettingsTab
+          alertPolicy={alertPolicy}
+          alertPolicyError={alertPolicyError}
+          channels={channels}
+          rules={rules}
+          reload={reload}
+          presets={presets}
+        />
       )}
     </div>
   );

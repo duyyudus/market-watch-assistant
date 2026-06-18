@@ -2071,9 +2071,10 @@ describe("App data states", () => {
     expect(screen.getByLabelText("Aliases")).toHaveValue("SPY, S&P 500, SPDR");
   });
 
-  it("saves alert policy settings from operations", async () => {
+  it("saves alert policy settings from alerts settings", async () => {
     await renderLoadedApp();
-    switchTo("operations");
+    switchTo("alerts");
+    fireEvent.click(screen.getByRole("button", { name: /settings/i }));
 
     fireEvent.change(screen.getByLabelText("Immediate threshold"), { target: { value: "85" } });
     fireEvent.change(screen.getByLabelText("Watchlist threshold"), { target: { value: "60" } });
@@ -2091,6 +2092,7 @@ describe("App data states", () => {
         default_channel: "telegram",
       }),
     );
+    await waitFor(() => expect(apiMock.alertPolicy).toHaveBeenCalledTimes(2));
   });
 
   it("manages delivery controls", async () => {
@@ -2104,6 +2106,7 @@ describe("App data states", () => {
     // Switch to settings sub-tab to make inputs visible in DOM
     fireEvent.click(screen.getByRole("button", { name: /settings/i }));
     const channelType = await screen.findByLabelText("Channel type");
+    expect(apiMock.alertPolicy).toHaveBeenCalledTimes(1);
     fireEvent.change(channelType, { target: { value: "webhook" } });
 
     fireEvent.change(screen.getByLabelText("Channel name"), { target: { value: "Webhook" } });
