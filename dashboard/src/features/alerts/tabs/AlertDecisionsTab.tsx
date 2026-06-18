@@ -31,8 +31,6 @@ export function AlertDecisionsTab({
   eventError,
   retry,
   retryDetail,
-  acknowledge,
-  dismiss,
   onSelectAlert,
 }: {
   alerts: AlertDecision[];
@@ -52,8 +50,6 @@ export function AlertDecisionsTab({
   eventError?: string;
   retry: () => Promise<void>;
   retryDetail: () => Promise<void>;
-  acknowledge: (id: string) => Promise<void>;
-  dismiss: (id: string) => Promise<void>;
   onSelectAlert: (id: string) => void;
 }) {
   const pageStart = total > 0 ? Math.min(offset + 1, total) : 0;
@@ -113,8 +109,6 @@ export function AlertDecisionsTab({
           rows={alerts}
           error={error}
           retry={retry}
-          acknowledge={acknowledge}
-          dismiss={dismiss}
           selectedAlertId={selectedAlertId}
           onSelectAlert={onSelectAlert}
           showDecisionColumn={false}

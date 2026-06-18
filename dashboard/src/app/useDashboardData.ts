@@ -30,6 +30,10 @@ type ListResourceKey = Exclude<ResourceKey, "alertDetail" | "eventDetail" | "new
 export type AlertSubTab = "decisions" | "settings";
 const EVENT_PAGE_SIZE = 100;
 const ALERT_PAGE_SIZE = 100;
+// The overview "Needs you now" feed fetches its own page of immediate alerts, fixed at
+// offset 0 with an immediate-only decision filter, so it never inherits the Alerts-tab
+// pagination/filter state.
+const OVERVIEW_ALERT_PAGE_SIZE = 100;
 const OVERVIEW_SEGMENTS = ["global", "us", "vietnam", "crypto"] as const;
 const OVERVIEW_SEGMENT_SIZE = 10;
 
@@ -113,6 +117,12 @@ export function useDashboardData() {
         const response = normalizeListResponse<AlertDecision>(value);
         return { ...current, alerts: response.items, alertsTotal: response.total };
       }
+      if (key === "overviewAlerts") {
+        return {
+          ...current,
+          overviewAlerts: normalizeListResponse<AlertDecision>(value).items,
+        };
+      }
       if (key === "alertChannels") {
         return {
           ...current,
@@ -176,6 +186,13 @@ export function useDashboardData() {
           pageSize: ALERT_PAGE_SIZE,
           maxItems: alertsMaxItems,
           decision: alertsDecision,
+        }),
+      overviewAlerts: () =>
+        api.alerts({
+          offset: 0,
+          pageSize: OVERVIEW_ALERT_PAGE_SIZE,
+          maxItems: OVERVIEW_ALERT_PAGE_SIZE,
+          decision: "immediate_alert",
         }),
       alertChannels: api.alertChannels,
       alertSuppressionRules: api.alertSuppressionRules,
@@ -331,7 +348,7 @@ export function useDashboardData() {
         overview: [
           "status",
           "events",
-          "alerts",
+          "overviewAlerts",
           "sourceHealth",
           "watchlist",
           "alertPolicy",
@@ -360,7 +377,7 @@ export function useDashboardData() {
     void loadResources([
       "status",
       "events",
-      "alerts",
+      "overviewAlerts",
       "sourceHealth",
       "watchlist",
       "alertPolicy",
@@ -423,7 +440,7 @@ export function useDashboardData() {
       };
       const refreshAlerts = () => {
         setLiveUpdateError(null);
-        void loadResources(["status", "alerts"], true);
+        void loadResources(["status", "alerts", "overviewAlerts"], true);
       };
       const refreshJobs = () => {
         setLiveUpdateError(null);
@@ -596,40 +613,6 @@ export function useDashboardData() {
     if (trackTimer.current) window.clearInterval(trackTimer.current);
   }, []);
 
-  async function acknowledgeAlert(id: string) {
-    setActionError(null);
-    try {
-      const alert = await api.acknowledgeAlert(id);
-      resourceCache.invalidate(`alert:${id}`);
-      setState((current) => ({
-        ...current,
-        alertDetails: { ...current.alertDetails, [id]: alert },
-      }));
-      await loadResources(["alerts"], true);
-    } catch (error) {
-      setActionError(messageFromError(error, "Unable to acknowledge alert"));
-    }
-  }
-
-  async function dismissAlert(id: string) {
-    setActionError(null);
-    try {
-      const alert = await api.dismissAlert(id);
-      resourceCache.invalidate(`alert:${id}`);
-      setState((current) => ({
-        ...current,
-        alertDetails: { ...current.alertDetails, [id]: alert },
-      }));
-      await loadResources(["alerts"], true);
-    } catch (error) {
-      setActionError(messageFromError(error, "Unable to update alert"));
-    }
-  }
-
-  const unacknowledgedAlerts = state.alerts.filter(
-    (alert) => alert.decision === "immediate_alert" && !alert.acknowledged_at,
-  ).length;
-
   const updateNewsLimit = useCallback((limit: number) => {
     setNewsLimit(limit);
     setNewsOffset(0);
@@ -746,9 +729,6 @@ export function useDashboardData() {
     queue,
     trackCommand,
     trackedCommand,
-    acknowledgeAlert,
-    dismissAlert,
-    unacknowledgedAlerts,
     setSelectedEventId,
     setSelectedNewsId,
     loadNewsDetail,

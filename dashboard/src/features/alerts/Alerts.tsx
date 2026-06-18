@@ -35,8 +35,6 @@ export function Alerts({
   eventDetailError,
   retryAlerts,
   retrySelectedAlertDetail,
-  acknowledge,
-  dismiss,
   onSelectAlert,
   channels,
   rules,
@@ -62,8 +60,6 @@ export function Alerts({
   eventDetailError?: string;
   retryAlerts: () => Promise<void>;
   retrySelectedAlertDetail: () => Promise<void>;
-  acknowledge: (id: string) => Promise<void>;
-  dismiss: (id: string) => Promise<void>;
   onSelectAlert: (id: string) => void;
   channels: AlertChannel[];
   rules: AlertSuppressionRule[];
@@ -87,8 +83,6 @@ export function Alerts({
           setDecision={setDecision}
           setOffset={setOffset}
           retry={retryAlerts}
-          acknowledge={acknowledge}
-          dismiss={dismiss}
           selectedAlertId={selectedAlertId}
           onSelectAlert={onSelectAlert}
           selectedAlertDetail={selectedAlertDetail}

@@ -743,10 +743,6 @@ export const api = {
     }),
   deleteAlertSuppressionRule: (id: string) =>
     request<void>(`/alert-suppression-rules/${id}`, { method: "DELETE" }),
-  acknowledgeAlert: (id: string) =>
-    request<AlertDecision>(`/alerts/${id}/acknowledge`, { method: "POST" }),
-  dismissAlert: (id: string) =>
-    request<AlertDecision>(`/alerts/${id}/dismiss`, { method: "POST" }),
   createCommand: (command_type: string, payload: Record<string, unknown>) =>
     request<BotCommand>("/bot/commands", {
       method: "POST",

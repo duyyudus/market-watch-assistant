@@ -15,6 +15,7 @@ export const emptyState: DashboardState = {
   newsDetails: {},
   alerts: [],
   alertsTotal: 0,
+  overviewAlerts: [],
   alertDetails: {},
   alertChannels: [],
   alertSuppressionRules: [],

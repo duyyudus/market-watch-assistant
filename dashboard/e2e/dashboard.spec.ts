@@ -176,14 +176,6 @@ async function installApiMocks(page: Page) {
       return route.fulfill({ status: 204, body: "" });
     }
     if (method === "GET" && path === "/alerts") return json(route, envelope(alerts));
-    if (method === "POST" && path === "/alerts/alert_1/acknowledge") {
-      alerts[0] = { ...alerts[0], acknowledged_at: "2026-05-29T13:06:00Z" };
-      return json(route, alerts[0]);
-    }
-    if (method === "POST" && path === "/alerts/alert_1/dismiss") {
-      alerts[0] = { ...alerts[0], suppression_reason: "dismissed" };
-      return json(route, alerts[0]);
-    }
     if (method === "GET" && path === "/bot/commands") return json(route, envelope(commands));
     if (method === "POST" && path === "/bot/commands") {
       const payload = await request.postDataJSON();
@@ -257,11 +249,7 @@ test("can create edit and delete watchlist entries", async ({ page }) => {
   await expect(page.getByText("SPY Trust")).not.toBeVisible();
 });
 
-test("can acknowledge alerts and queue manual commands", async ({ page }) => {
-  await page.getByRole("button", { name: "Alerts" }).click();
-  await page.getByRole("button", { name: "Acknowledge" }).click();
-  await expect(page.getByText("acknowledged", { exact: true })).toBeVisible();
-
+test("can queue manual commands", async ({ page }) => {
   await page.getByRole("button", { name: "Commands" }).click();
   await page.getByRole("button", { name: "Preview dispatch" }).click();
 

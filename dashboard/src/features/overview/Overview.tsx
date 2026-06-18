@@ -40,10 +40,15 @@ type ActionItem =
   | { type: "investigation"; id: string; event: EventCluster }
   | { type: "catalyst"; id: string; catalyst: CatalystReview };
 type SpotlightAnchor = Pick<DOMRect, "bottom" | "height" | "left" | "top" | "width">;
-type SpotlightPopover = { event: EventCluster; anchor: SpotlightAnchor };
+// `event` is the base cluster when already loaded (watchlist hits, or an alert whose
+// event is in the events page). When absent, the popover renders off the fetched
+// EventDetail, which is a superset of EventCluster.
+type SpotlightPopover = { eventId: string; event?: EventCluster; anchor: SpotlightAnchor };
 
-// Decisions that result in a delivered alert the user can acknowledge.
-const ACKNOWLEDGEABLE_DECISIONS = new Set(["immediate_alert", "watchlist_batch"]);
+// "Needs you now" surfaces immediate alerts as read-only cards (no acknowledgement
+// step) within a rolling window keyed off the event's report time, so the panel
+// reflects the reporting period and self-clears to "all caught up" once it lapses.
+const ALERT_ACTION_WINDOW_MS = 48 * 60 * 60 * 1000;
 const INVESTIGATION_ACTION_STATUSES = new Set(["pending", "running", "investigating", "failed"]);
 const WATCHLIST_TIERS = new Set(["tier-1", "tier1", "1", "s", "a"]);
 const SPOTLIGHT_EVENT_LIMIT = 5;
@@ -58,13 +63,19 @@ function lowerValues(values: Array<string | null | undefined>) {
   return values.filter(Boolean).map((value) => value!.toLowerCase());
 }
 
-function needsAcknowledgement(alert: AlertDecision) {
-  return ACKNOWLEDGEABLE_DECISIONS.has(alert.decision) && !alert.acknowledged_at;
-}
-
 function isInvestigationAction(event: EventCluster) {
   const status = event.latest_investigation?.status?.toLowerCase();
   return status ? INVESTIGATION_ACTION_STATUSES.has(status) : false;
+}
+
+function alertReportTimestamp(alert: AlertDecision) {
+  return new Date(alert.event?.report_end_at ?? alert.event?.report_start_at ?? 0).getTime();
+}
+
+function isRecentImmediateAlert(alert: AlertDecision, now: number) {
+  if (alert.decision !== "immediate_alert") return false;
+  const ts = alertReportTimestamp(alert);
+  return ts > 0 && now - ts <= ALERT_ACTION_WINDOW_MS;
 }
 
 function relativeAge(value?: string | null) {
@@ -176,33 +187,56 @@ function OverviewPanel({
   icon: Icon,
   action,
   children,
+  fill = false,
 }: {
   title: string;
   icon: typeof Activity;
   action?: ReactNode;
   children: ReactNode;
+  // When true, the panel stretches with its grid row (matching a taller sibling) and
+  // the body flexes to fill, so an absolutely-positioned scroll child can occupy the
+  // full height. Gated to xl, where the two-column overview grid exists.
+  fill?: boolean;
 }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-zinc-800/80 bg-zinc-900/60 shadow-lg shadow-black/10">
+    <section
+      className={classNames(
+        "overflow-hidden rounded-lg border border-zinc-800/80 bg-zinc-900/60 shadow-lg shadow-black/10",
+        fill && "xl:flex xl:flex-col",
+      )}
+    >
       <div className="flex items-center gap-2 border-b border-zinc-800/60 bg-zinc-900/40 px-5 py-4">
         <Icon className="h-4 w-4 text-primary" />
         <h2 className="text-sm font-bold uppercase tracking-widest text-zinc-200">{title}</h2>
         {action ? <div className="ml-auto">{action}</div> : null}
       </div>
-      <div className="p-5">{children}</div>
+      <div
+        className={classNames(
+          "p-5",
+          // min-h floors the row at ~5 alert cards so a short sibling can't shrink the
+          // list below a useful size; a taller sibling still grows it past the floor.
+          fill && "xl:relative xl:flex-1 xl:p-0 xl:min-h-[27rem]",
+        )}
+      >
+        {children}
+      </div>
     </section>
   );
 }
 
 function ActionQueue({
   items,
-  acknowledgeAlert,
   openEvent,
+  openEventPopover,
   openMaintenance,
 }: {
   items: ActionItem[];
-  acknowledgeAlert: (id: string) => Promise<void>;
   openEvent: (id: string) => void;
+  openEventPopover: (
+    eventId: string,
+    baseEvent: EventCluster | undefined,
+    clickEvent: MouseEvent<HTMLButtonElement>,
+  ) => void;
   openMaintenance: () => void;
 }) {
   if (items.length === 0) {
@@ -216,15 +250,13 @@ function ActionQueue({
   }
 
   return (
-    <div className="space-y-3">
-      {items.slice(0, 10).map((item) => {
+    <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1 xl:absolute xl:inset-5 xl:max-h-none">
+      {items.map((item) => {
         if (item.type === "alert") {
-          const title = item.alert.event?.headline ?? item.event?.canonical_headline ?? item.alert.reason;
+          const title =
+            item.alert.event?.headline ?? item.event?.canonical_headline ?? item.alert.reason;
           return (
-            <div
-              className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3"
-              key={item.id}
-            >
+            <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3" key={item.id}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
@@ -234,30 +266,24 @@ function ActionQueue({
                   <div className="mt-1 text-xs text-base-content/60">
                     {item.alert.decision.replace(/_/g, " ")} · score{" "}
                     {item.alert.event?.final_score ?? item.event?.final_score ?? "-"} ·{" "}
-                    {formatTime(item.alert.sent_at ?? item.alert.created_at)}
+                    {formatTime(
+                      item.alert.event?.report_end_at ??
+                        item.alert.sent_at ??
+                        item.alert.created_at,
+                    )}
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  {item.event ? (
-                    <button
-                      className="btn btn-xs btn-ghost"
-                      onClick={() => openEvent(item.event!.id)}
-                      type="button"
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      Event
-                    </button>
-                  ) : null}
-                  <button
-                    aria-label={`Acknowledge ${title}`}
-                    className="btn btn-xs btn-outline btn-primary"
-                    onClick={() => void acknowledgeAlert(item.alert.id)}
-                    type="button"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Ack
-                  </button>
-                </div>
+                <button
+                  className="btn btn-xs btn-ghost"
+                  data-watchlist-event-trigger={item.alert.event_cluster_id}
+                  onClick={(clickEvent) =>
+                    openEventPopover(item.alert.event_cluster_id, item.event, clickEvent)
+                  }
+                  type="button"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  Event
+                </button>
               </div>
             </div>
           );
@@ -394,19 +420,22 @@ function WatchlistEventPopover({
   detail?: EventDetail;
 }) {
   if (typeof document === "undefined") return null;
-  const popoverId = `watchlist-event-popover-${popover.event.id}`;
+  const popoverId = `watchlist-event-popover-${popover.eventId}`;
   const style = spotlightPopoverStyle(popover.anchor);
+  // EventDetail extends EventCluster, so the fetched detail doubles as the base once
+  // loaded — and is the only source when the alert's event isn't in the events page.
+  const baseEvent = detail ?? popover.event;
 
   return createPortal(
     <div
-      aria-label={`${popover.event.canonical_headline} details`}
+      aria-label={`${baseEvent?.canonical_headline ?? "Event"} details`}
       className="fixed z-50 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4 text-left shadow-2xl shadow-black/40"
-      data-watchlist-event-popover={popover.event.id}
+      data-watchlist-event-popover={popover.eventId}
       id={popoverId}
       role="dialog"
       style={style}
     >
-      <EventDetailReadOnly event={popover.event} eventDetail={detail} />
+      {baseEvent ? <EventDetailReadOnly event={baseEvent} eventDetail={detail} /> : null}
       {detail ? null : (
         <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs text-base-content/60">
           Loading event details...
@@ -421,7 +450,6 @@ export function Overview({
   state,
   errors,
   retry,
-  acknowledgeAlert,
   loadEventDetail,
   queue,
   trackCommand,
@@ -433,7 +461,6 @@ export function Overview({
   state: DashboardState;
   errors: ResourceErrors;
   retry: () => Promise<void>;
-  acknowledgeAlert: (id: string) => Promise<void>;
   loadEventDetail: (id: string) => void;
   queue: QueueCommand;
   trackCommand: TrackCommand;
@@ -457,19 +484,19 @@ export function Overview({
     if (command) trackCommand(command);
   }
 
-  const unacknowledgedAlerts = useMemo(
-    () => state.alerts.filter(needsAcknowledgement),
-    [state.alerts],
-  );
   const actionItems = useMemo<ActionItem[]>(() => {
+    const now = Date.now();
     const eventById = new Map(state.events.map((event) => [event.id, event]));
     return [
-      ...unacknowledgedAlerts.map((alert) => ({
-        type: "alert" as const,
-        id: `alert:${alert.id}`,
-        alert,
-        event: eventById.get(alert.event_cluster_id),
-      })),
+      ...state.overviewAlerts
+        .filter((alert) => isRecentImmediateAlert(alert, now))
+        .sort((left, right) => alertReportTimestamp(right) - alertReportTimestamp(left))
+        .map((alert) => ({
+          type: "alert" as const,
+          id: `alert:${alert.id}`,
+          alert,
+          event: eventById.get(alert.event_cluster_id),
+        })),
       ...state.events.filter(isInvestigationAction).map((event) => ({
         type: "investigation" as const,
         id: `investigation:${event.id}`,
@@ -483,7 +510,7 @@ export function Overview({
         )
         .map((catalyst) => ({ type: "catalyst" as const, id: `catalyst:${catalyst.id}`, catalyst })),
     ];
-  }, [state.catalystReviews, state.events, unacknowledgedAlerts]);
+  }, [state.overviewAlerts, state.catalystReviews, state.events]);
   // Each segment is fetched server-side (top results for that market), so a quiet
   // segment surfaces its own clusters instead of being crowded out of the shared
   // recency window. Sort the returned set by score for a "top events" ordering.
@@ -510,16 +537,18 @@ export function Overview({
   const degradedSources = healthCounts.degraded + healthCounts.failing;
   const spotlight = watchlistHits(state);
   const activeSpotlightDetail = spotlightPopover
-    ? state.eventDetails[spotlightPopover.event.id]
+    ? state.eventDetails[spotlightPopover.eventId]
     : undefined;
 
-  function openSpotlightPopover(
-    event: EventCluster,
+  function openEventPopover(
+    eventId: string,
+    baseEvent: EventCluster | undefined,
     clickEvent: MouseEvent<HTMLButtonElement>,
   ) {
     const rect = clickEvent.currentTarget.getBoundingClientRect();
     setSpotlightPopover({
-      event,
+      eventId,
+      event: baseEvent,
       anchor: {
         bottom: rect.bottom,
         height: rect.height,
@@ -528,14 +557,14 @@ export function Overview({
         width: rect.width,
       },
     });
-    if (!state.eventDetails[event.id]) {
-      loadEventDetail(event.id);
+    if (!state.eventDetails[eventId]) {
+      loadEventDetail(eventId);
     }
   }
 
   useEffect(() => {
     if (!spotlightPopover) return undefined;
-    const activeEventId = spotlightPopover.event.id;
+    const activeEventId = spotlightPopover.eventId;
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") setSpotlightPopover(null);
@@ -561,11 +590,11 @@ export function Overview({
     };
   }, [spotlightPopover]);
 
-  if (errors.events || errors.alerts) {
+  if (errors.events || errors.overviewAlerts) {
     return (
       <SectionError
         title="Overview unavailable"
-        message={errors.events ?? errors.alerts ?? "Overview resources failed to load"}
+        message={errors.events ?? errors.overviewAlerts ?? "Overview resources failed to load"}
         retry={retry}
       />
     );
@@ -574,11 +603,11 @@ export function Overview({
   return (
     <div className="space-y-5">
       <div className="grid gap-5 xl:grid-cols-[1.35fr_1fr]">
-        <OverviewPanel icon={ShieldCheck} title="Needs you now">
+        <OverviewPanel fill icon={ShieldCheck} title="Needs you now">
           <ActionQueue
-            acknowledgeAlert={acknowledgeAlert}
             items={actionItems}
             openEvent={openEvent}
+            openEventPopover={openEventPopover}
             openMaintenance={openMaintenance}
           />
         </OverviewPanel>
@@ -707,20 +736,20 @@ export function Overview({
                   {matches.slice(0, SPOTLIGHT_EVENT_LIMIT).map((event) => (
                     <button
                       aria-controls={
-                        spotlightPopover?.event.id === event.id
+                        spotlightPopover?.eventId === event.id
                           ? `watchlist-event-popover-${event.id}`
                           : undefined
                       }
-                      aria-expanded={spotlightPopover?.event.id === event.id}
+                      aria-expanded={spotlightPopover?.eventId === event.id}
                       className={classNames(
                         "w-full rounded-md border bg-zinc-950/40 px-3 py-2 text-left text-xs font-semibold leading-5 text-primary transition-colors hover:border-primary/40 hover:bg-zinc-900/70",
-                        spotlightPopover?.event.id === event.id
+                        spotlightPopover?.eventId === event.id
                           ? "border-primary/60 bg-primary/5"
                           : "border-zinc-800/70",
                       )}
                       data-watchlist-event-trigger={event.id}
                       key={event.id}
-                      onClick={(clickEvent) => openSpotlightPopover(event, clickEvent)}
+                      onClick={(clickEvent) => openEventPopover(event.id, event, clickEvent)}
                       type="button"
                     >
                       {event.canonical_headline}

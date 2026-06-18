@@ -48,6 +48,9 @@ export type DashboardState = {
   newsDetails: Record<string, NewsDetail>;
   alerts: AlertDecision[];
   alertsTotal: number;
+  // Dedicated recent-immediate-alert feed for the overview "Needs you now" panel,
+  // fetched independently of the Alerts-tab pagination/filter state.
+  overviewAlerts: AlertDecision[];
   alertDetails: Record<string, AlertDecision>;
   alertChannels: AlertChannel[];
   alertSuppressionRules: AlertSuppressionRule[];
@@ -72,6 +75,7 @@ export type ResourceKey =
   | "newsFilterOptions"
   | "newsDetail"
   | "alerts"
+  | "overviewAlerts"
   | "alertDetail"
   | "alertChannels"
   | "alertSuppressionRules"

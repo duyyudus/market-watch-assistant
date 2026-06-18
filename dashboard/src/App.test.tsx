@@ -25,8 +25,6 @@ const apiMock = vi.hoisted(() => ({
   createAlertSuppressionRule: vi.fn(),
   updateAlertSuppressionRule: vi.fn(),
   deleteAlertSuppressionRule: vi.fn(),
-  acknowledgeAlert: vi.fn(),
-  dismissAlert: vi.fn(),
   jobs: vi.fn(),
   watchlist: vi.fn(),
   commands: vi.fn(),
@@ -656,22 +654,6 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     config: { hours: 6 },
     enabled: true,
   });
-  apiMock.acknowledgeAlert.mockResolvedValue({
-    id: "alert_1",
-    event_cluster_id: "evt_1",
-    decision: "immediate_alert",
-    reason: "score_above_immediate_threshold",
-    channel: "telegram",
-    acknowledged_at: "2026-05-29T14:00:00Z",
-    event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
-  });
-  apiMock.dismissAlert.mockResolvedValue({
-    id: "alert_1",
-    event_cluster_id: "evt_1",
-    decision: "immediate_alert",
-    reason: "score_above_immediate_threshold",
-    suppression_reason: "dismissed",
-  });
   Object.assign(apiMock, overrides);
 }
 
@@ -748,7 +730,6 @@ describe("App data states", () => {
 
     expect(await screen.findByRole("heading", { name: "Needs you now" })).toBeInTheDocument();
     expect(screen.getAllByText("Fed signals a slower rate path").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /acknowledge Fed signals a slower rate path/i })).toBeInTheDocument();
     expect(screen.getByText("Unexplained BTC move")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Daily synthesis" })).toBeInTheDocument();
     expect(screen.getByText(/US \/ global_macro/)).toBeInTheDocument();
@@ -965,16 +946,77 @@ describe("App data states", () => {
     }
   });
 
-  it("acknowledges alerts from the overview action queue", async () => {
+  it("surfaces recent immediate alerts read-only in the action queue without acknowledgement", async () => {
+    const reportEnd = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    // event_cluster_id intentionally not in the loaded events page, to prove the Event
+    // button renders off the alert's own event_cluster_id rather than a loaded event.
+    apiMock.alerts.mockResolvedValue(
+      envelope([
+        {
+          id: "alert_recent",
+          event_cluster_id: "evt_unloaded",
+          decision: "immediate_alert",
+          reason: "score_above_immediate_threshold",
+          score_breakdown: { final_score: 84 },
+          channel: "telegram",
+          sent_at: "2026-05-29T13:05:00Z",
+          created_at: "2026-05-29T13:05:00Z",
+          event: {
+            id: "evt_unloaded",
+            headline: "Unloaded immediate alert",
+            final_score: 84,
+            report_start_at: reportEnd,
+            report_end_at: reportEnd,
+          },
+          latest_delivery_status: "sent",
+          acknowledged_at: null,
+        },
+      ]),
+    );
     await renderLoadedApp();
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: /acknowledge Fed signals a slower rate path/i,
-      }),
-    );
+    const actionQueue = screen.getByRole("heading", { name: "Needs you now" }).closest("section")!;
+    expect(within(actionQueue).getByText("Unloaded immediate alert")).toBeInTheDocument();
+    expect(within(actionQueue).queryByRole("button", { name: /ack/i })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
+    fireEvent.click(within(actionQueue).getByRole("button", { name: /event/i }));
+    await waitFor(() => expect(apiMock.event).toHaveBeenCalledWith("evt_unloaded"));
+    // Opens an inline detail popover rather than navigating to the events view.
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Needs you now" })).toBeInTheDocument();
+  });
+
+  it("omits stale immediate alerts from the action queue", async () => {
+    const staleReportEnd = new Date(Date.now() - 96 * 60 * 60 * 1000).toISOString();
+    apiMock.alerts.mockResolvedValue(
+      envelope([
+        {
+          id: "alert_stale",
+          event_cluster_id: "evt_1",
+          decision: "immediate_alert",
+          reason: "score_above_immediate_threshold",
+          score_breakdown: { final_score: 84 },
+          channel: "telegram",
+          sent_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          event: {
+            id: "evt_1",
+            headline: "Fed signals a slower rate path",
+            final_score: 84,
+            report_start_at: staleReportEnd,
+            report_end_at: staleReportEnd,
+          },
+          latest_delivery_status: "sent",
+          acknowledged_at: null,
+        },
+      ]),
+    );
+    await renderLoadedApp();
+
+    const actionQueue = screen.getByRole("heading", { name: "Needs you now" }).closest("section")!;
+    expect(
+      within(actionQueue).queryByText("Fed signals a slower rate path"),
+    ).not.toBeInTheDocument();
   });
 
   it("filters overview top events by market segment", async () => {
@@ -1142,7 +1184,9 @@ describe("App data states", () => {
     apiMock.alerts.mockClear();
     act(() => MockEventSource.instances[0].emit("alert.created", { id: "alert_2" }));
 
-    await waitFor(() => expect(apiMock.alerts).toHaveBeenCalledTimes(1));
+    // A live alert event refreshes both the Alerts-tab list and the overview's
+    // dedicated immediate-alert feed, so api.alerts is hit once per feed.
+    await waitFor(() => expect(apiMock.alerts).toHaveBeenCalledTimes(2));
   });
 
   it("shows live update connection errors", async () => {
@@ -2049,21 +2093,13 @@ describe("App data states", () => {
     );
   });
 
-  it("acknowledges alerts and manages delivery controls", async () => {
+  it("manages delivery controls", async () => {
     await renderLoadedApp();
     switchTo("alerts");
 
-    expect(
-      await within(screen.getByTestId("alert-row-alert_1")).findByText("unacknowledged"),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("1 unacknowledged")).not.toBeInTheDocument();
-    fireEvent.click(
-      within(screen.getByTestId("alert-row-alert_1")).getByRole("button", {
-        name: /acknowledge/i,
-      }),
+    await within(await screen.findByTestId("alert-row-alert_1")).findByText(
+      "Fed signals a slower rate path",
     );
-
-    await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
 
     // Switch to settings sub-tab to make inputs visible in DOM
     fireEvent.click(screen.getByRole("button", { name: /settings/i }));
@@ -2199,20 +2235,6 @@ describe("App data states", () => {
     );
   });
 
-  it("shows alert action errors", async () => {
-    apiMock.acknowledgeAlert.mockRejectedValueOnce(new Error("alert update failed"));
-    await renderLoadedApp();
-    switchTo("alerts");
-
-    fireEvent.click(
-      within(await screen.findByTestId("alert-row-alert_1")).getByRole("button", {
-        name: /acknowledge/i,
-      }),
-    );
-
-    expect(await screen.findByText("alert update failed")).toBeInTheDocument();
-  });
-
   it("formats alert decisions with every underscore replaced", async () => {
     apiMock.alerts.mockResolvedValue(
       envelope([
@@ -2253,7 +2275,7 @@ describe("App data states", () => {
       within(detailPanel).getAllByText(formatTime("2026-05-29T14:00:00Z")).length,
     ).toBeGreaterThan(0);
     expect(within(detailPanel).getByText("Related news")).toBeInTheDocument();
-    expect(within(detailPanel).getByText("BLS · seed · 88")).toBeInTheDocument();
+    expect(await within(detailPanel).findByText("BLS · seed · 88")).toBeInTheDocument();
     expect(within(detailPanel).getByText("final score")).toBeInTheDocument();
     expect(within(detailPanel).getAllByText("61").length).toBeGreaterThan(0);
     expect(apiMock.alert).toHaveBeenCalledWith("alert_2");
@@ -2274,77 +2296,6 @@ describe("App data states", () => {
     expect(apiMock.event).toHaveBeenCalledWith("evt_1");
   });
 
-  it("dismisses alerts and updates state", async () => {
-    await renderLoadedApp();
-    switchTo("alerts");
-
-    expect((await screen.findAllByText("unacknowledged")).length).toBeGreaterThan(0);
-
-    // Setup mock for subsequent reload
-    apiMock.alerts.mockResolvedValue(
-      envelope([
-        {
-          id: "alert_1",
-          event_cluster_id: "evt_1",
-          decision: "immediate_alert",
-          reason: "score_above_immediate_threshold",
-          channel: "telegram",
-          sent_at: "2026-05-29T13:05:00Z",
-          created_at: "2026-05-29T13:05:00Z",
-          event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
-          latest_delivery_status: "sent",
-          acknowledged_at: "2026-05-29T14:00:00Z",
-          suppression_reason: "dismissed",
-        },
-      ]),
-    );
-
-    fireEvent.click(
-      within(screen.getByTestId("alert-row-alert_1")).getByRole("button", { name: /dismiss/i }),
-    );
-
-    await waitFor(() => expect(apiMock.dismissAlert).toHaveBeenCalledWith("alert_1"));
-    expect(await screen.findByText("dismissed")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /acknowledge/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
-  });
-
-  it("acknowledges alerts and hides buttons", async () => {
-    await renderLoadedApp();
-    switchTo("alerts");
-
-    expect((await screen.findAllByText("unacknowledged")).length).toBeGreaterThan(0);
-
-    // Setup mock for subsequent reload
-    apiMock.alerts.mockResolvedValue(
-      envelope([
-        {
-          id: "alert_1",
-          event_cluster_id: "evt_1",
-          decision: "immediate_alert",
-          reason: "score_above_immediate_threshold",
-          channel: "telegram",
-          sent_at: "2026-05-29T13:05:00Z",
-          created_at: "2026-05-29T13:05:00Z",
-          event: { id: "evt_1", headline: "Fed signals a slower rate path", final_score: 84 },
-          latest_delivery_status: "sent",
-          acknowledged_at: "2026-05-29T14:00:00Z",
-          suppression_reason: null,
-        },
-      ]),
-    );
-
-    fireEvent.click(
-      within(screen.getByTestId("alert-row-alert_1")).getByRole("button", {
-        name: /acknowledge/i,
-      }),
-    );
-
-    await waitFor(() => expect(apiMock.acknowledgeAlert).toHaveBeenCalledWith("alert_1"));
-    expect(await screen.findByText("acknowledged")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /acknowledge/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
-  });
 });
 
 describe("compareValues utility", () => {

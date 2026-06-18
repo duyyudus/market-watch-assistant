@@ -73,8 +73,6 @@ export function App() {
     queue,
     trackCommand,
     trackedCommand,
-    acknowledgeAlert,
-    dismissAlert,
     setSelectedEventId,
     setSelectedNewsId,
     loadNewsDetail,
@@ -302,7 +300,6 @@ export function App() {
                 state={state}
                 errors={resourceErrors}
                 retry={() => load(true)}
-                acknowledgeAlert={acknowledgeAlert}
                 loadEventDetail={(id) => void loadEventDetail(id)}
                 queue={queue}
                 trackCommand={trackCommand}
@@ -394,8 +391,6 @@ export function App() {
                     await loadEventDetail(selectedAlert.event_cluster_id, true);
                   }
                 }}
-                acknowledge={acknowledgeAlert}
-                dismiss={dismissAlert}
                 onSelectAlert={(id) => setSelectedAlertId(id)}
                 channels={state.alertChannels}
                 rules={state.alertSuppressionRules}
