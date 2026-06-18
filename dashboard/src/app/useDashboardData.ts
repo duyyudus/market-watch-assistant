@@ -364,8 +364,7 @@ export function useDashboardData() {
         sources: ["status", "sources", "sourceHealth", "presets"],
         watchlist: ["status", "watchlist", "presets"],
         commands: ["status", "commands", "sources", "events"],
-        operations: ["status", "jobs", "alerts"],
-        maintenance: ["status"],
+        maintenance: ["status", "jobs"],
       };
       await loadResources(keysByView[view], invalidate);
       if (view === "overview") void loadOverviewSegments(invalidate);
@@ -410,11 +409,7 @@ export function useDashboardData() {
   useEffect(() => {
     if (previousAlertsParams.current !== alertsParams) {
       previousAlertsParams.current = alertsParams;
-      if (
-        view === "alerts" ||
-        view === "overview" ||
-        view === "operations"
-      ) {
+      if (view === "alerts" || view === "overview") {
         void loadResources(["alerts"], true);
       }
     }

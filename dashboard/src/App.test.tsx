@@ -706,6 +706,42 @@ describe("App theme", () => {
   });
 });
 
+describe("App navigation", () => {
+  it("removes Operations from the view selector", async () => {
+    await renderLoadedApp();
+
+    const viewSelector = screen.getByRole("combobox", { name: "View" });
+
+    expect(
+      within(viewSelector).queryByRole("option", { name: "Operations" }),
+    ).not.toBeInTheDocument();
+    expect(within(viewSelector).getByRole("option", { name: "Maintenance" })).toBeInTheDocument();
+  });
+
+  it("shows job history as a Maintenance tab", async () => {
+    await renderLoadedApp();
+    switchTo("maintenance");
+
+    fireEvent.click(await screen.findByRole("button", { name: /job history/i }));
+
+    expect(await screen.findByText("pipeline")).toBeInTheDocument();
+    expect(screen.getByText("success")).toBeInTheDocument();
+    expect(apiMock.jobs).toHaveBeenCalled();
+  });
+
+  it("constrains the Maintenance job history panel width", async () => {
+    await renderLoadedApp();
+    switchTo("maintenance");
+
+    fireEvent.click(await screen.findByRole("button", { name: /job history/i }));
+
+    const panel = await screen.findByRole("region", { name: "Job history" });
+
+    expect(panel).toHaveClass("max-w-4xl");
+    expect(panel).toHaveClass("w-full");
+  });
+});
+
 describe("App data states", () => {
   it("loads only overview resources on initial render", async () => {
     await renderLoadedApp();

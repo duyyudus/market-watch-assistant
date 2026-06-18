@@ -4,7 +4,6 @@ import {
   Database,
   Newspaper,
   Radio,
-  Settings,
   Star,
   TerminalSquare,
   Wrench,
@@ -21,8 +20,6 @@ export const nav: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "sources", label: "Sources", icon: Radio },
   { id: "watchlist", label: "Watchlist", icon: Star },
   { id: "commands", label: "Commands", icon: TerminalSquare },
-  { id: "operations", label: "Operations", icon: Settings },
   { id: "maintenance", label: "Maintenance", icon: Wrench },
 ];
-
 

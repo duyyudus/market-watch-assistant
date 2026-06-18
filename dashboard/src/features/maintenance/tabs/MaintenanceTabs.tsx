@@ -1,4 +1,5 @@
 export { FetchLogsTab } from "./FetchLogsTab";
+export { JobHistoryTab } from "./JobHistoryTab";
 export { ScoreHistoryTab } from "./ScoreHistoryTab";
 export { CatalystsTab } from "./CatalystsTab";
 export { EmbeddingsTab } from "./EmbeddingsTab";

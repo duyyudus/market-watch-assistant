@@ -26,7 +26,6 @@ export type View =
   | "sources"
   | "watchlist"
   | "commands"
-  | "operations"
   | "maintenance";
 
 

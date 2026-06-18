@@ -7,12 +7,11 @@ import { Panel } from "../components/Panel";
 import { Alerts } from "../features/alerts/Alerts";
 import { CommandsTable } from "../features/commands/CommandsTable";
 import { Events } from "../features/events/Events";
+import { Maintenance } from "../features/maintenance/Maintenance";
 import { NewsTable } from "../features/news/NewsTable";
-import { Operations } from "../features/operations/Operations";
 import { Overview } from "../features/overview/Overview";
 import { SourcesTable } from "../features/sources/SourcesTable";
 import { WatchlistTable } from "../features/watchlist/WatchlistTable";
-import { Maintenance } from "../features/maintenance/Maintenance";
 import { classNames } from "../lib/classNames";
 import type { View } from "../types/dashboard";
 import { nav } from "./navigation";
@@ -427,16 +426,12 @@ export function App() {
                   events={state.events}
                 />
               </Panel>
-            ) : view === "operations" ? (
-              <Operations
+            ) : (
+              <Maintenance
                 jobs={state.jobs}
-                alerts={state.alerts}
                 errors={resourceErrors}
-                queue={queue}
                 retry={() => load(true)}
               />
-            ) : (
-              <Maintenance />
             )}
           </DashboardErrorBoundary>
         </section>

@@ -1,11 +1,24 @@
-import { Activity, Brain, DollarSign, Layers, Sliders, Sparkles, Timer, Trash } from "lucide-react";
+import {
+  Activity,
+  Brain,
+  DollarSign,
+  History,
+  Layers,
+  Sliders,
+  Sparkles,
+  Timer,
+  Trash,
+} from "lucide-react";
 import { useState } from "react";
 
+import type { JobRun } from "../../api";
 import { FeatureTabs } from "../../components/FeatureTabs";
+import type { ResourceErrors } from "../../types/dashboard";
 import {
   CatalystsTab,
   EmbeddingsTab,
   FetchLogsTab,
+  JobHistoryTab,
   LLMCostsTab,
   LLMRunsTab,
   PipelineMetricsTab,
@@ -15,6 +28,7 @@ import {
 
 type Tab =
   | "fetch-logs"
+  | "job-history"
   | "score-history"
   | "catalysts"
   | "embeddings"
@@ -25,6 +39,7 @@ type Tab =
 
 const MAINTENANCE_TABS = [
   { id: "fetch-logs", label: "Fetch Logs", icon: Activity },
+  { id: "job-history", label: "Job History", icon: History },
   { id: "score-history", label: "Score History", icon: Sliders },
   { id: "catalysts", label: "Catalysts", icon: Sparkles },
   { id: "embeddings", label: "Embeddings Coverage", icon: Layers },
@@ -34,7 +49,15 @@ const MAINTENANCE_TABS = [
   { id: "retention", label: "Retention Logs", icon: Trash },
 ] satisfies Array<{ id: Tab; label: string; icon: typeof Activity }>;
 
-export function Maintenance() {
+export function Maintenance({
+  jobs,
+  errors,
+  retry,
+}: {
+  jobs: JobRun[];
+  errors: ResourceErrors;
+  retry: () => Promise<void>;
+}) {
   const [activeTab, setActiveTab] = useState<Tab>("fetch-logs");
 
   return (
@@ -43,6 +66,9 @@ export function Maintenance() {
 
       <div className="transition-all duration-300">
         {activeTab === "fetch-logs" && <FetchLogsTab />}
+        {activeTab === "job-history" && (
+          <JobHistoryTab rows={jobs} error={errors.jobs} retry={retry} />
+        )}
         {activeTab === "score-history" && <ScoreHistoryTab />}
         {activeTab === "catalysts" && <CatalystsTab />}
         {activeTab === "embeddings" && <EmbeddingsTab />}
