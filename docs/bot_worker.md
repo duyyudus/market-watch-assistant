@@ -1,7 +1,7 @@
 # Bot Worker & Ingestion Pipeline Overview
 
-**Last Updated:** June 14, 2026  
-**Latest Commit:** `808545f9080fe9d4fce526e2730aa1366c98e668`
+**Last Updated:** June 19, 2026  
+**Latest Commit:** `24f74c0fa88230d741f8b0397cb4056776c4614d`
 
 ---
 
@@ -11,10 +11,17 @@ The **Bot Worker** ([bot_worker](../market-watch-bot/bot_worker)) is a standalon
 ---
 
 ## 2. In-Database Decoupled Command execution
-The Bot Worker continuously runs a background loop when started with `market-watch worker start`. 
-- It polls the `bot_commands` table for tasks in `pending` status using `process_pending_bot_commands()` in [bot_commands.py](../market-watch-bot/bot_worker/services/bot_commands.py).
-- A row lock (`SELECT FOR UPDATE SKIP LOCKED`) ensures concurrent worker processes do not execute the same command.
-- Once claimed, the worker updates the command status to `running`, runs the job synchronously, and saves the final result/error message.
+When started with `market-watch worker start`, the Bot Worker ([worker.py](../market-watch-bot/bot_worker/cli/worker.py)) runs **two independent asyncio loops** so user commands stay responsive while a long pipeline tick is in flight:
+
+- **Pipeline loop** (`_pipeline_loop`): runs `run_pipeline` plus pending investigations on the polling interval in one transaction, with post-commit deliveries.
+- **Command loop** (`_command_loop`): on a separate cadence (`command_poll_interval_seconds`) drains pending `bot_commands` in their own transaction via `drain_bot_commands` → `process_pending_bot_commands()` in [bot_commands.py](../market-watch-bot/bot_worker/services/bot_commands.py).
+
+No command can trigger the pipeline, so the two loops never run the pipeline concurrently.
+
+- A row lock (`SELECT FOR UPDATE SKIP LOCKED`) ensures concurrent worker processes do not execute the same command. Once claimed, the worker sets the command status to `running`, runs the handler, and saves the final result/error message.
+- Recognized command types include `source.fetch`, `source.quality.refresh`, `alert.dispatch`, `alert.test_channel`, `digest.send`, `event.rescore`, `event.mark`, `event.recluster`, `event.merge`, `event.split`, `event.compact_archived`, `investigation.run_event`, `market.fetch`, `catalyst.review`, and `retention.preview`/`retention.run`.
+- **Liveness:** each loop periodically writes a `worker.heartbeat` `AppSetting` (`record_worker_heartbeat`); the API server reports it stale after 60s.
+- **Component-scoped logging:** each task sets the `log_component` contextvar (`pipeline` / `command`), routing its records to dedicated `worker-pipeline.log` / `worker-command.log` files (see [logging.py](../market-watch-bot/common/logging.py)).
 
 ---
 

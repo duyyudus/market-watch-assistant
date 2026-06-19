@@ -1,7 +1,7 @@
 # React Dashboard Overview
 
-**Last Updated:** June 14, 2026  
-**Latest Commit:** `808545f9080fe9d4fce526e2730aa1366c98e668`
+**Last Updated:** June 19, 2026  
+**Latest Commit:** `24f74c0fa88230d741f8b0397cb4056776c4614d`
 
 ---
 
@@ -32,10 +32,10 @@ Due to the decoupled nature of the backend worker processes, the dashboard uses 
 The client source is organized into feature folders under [src/features/](../dashboard/src/features):
 
 ### Overview (`overview/`)
-Displays aggregate statistics (e.g. news sources count, active alerts, coverage stats) and visualizes pipeline run status logs.
+The landing dashboard: system health and worker heartbeat liveness, the latest daily digest, and **per-segment spotlight event ranking**. Top events are fetched server-side per market segment — `global`, `us`, `vietnam`, and `crypto` (`EventSegment` in `api.ts`, loaded by `loadOverviewSegments`) — each with its own display limit.
 
 ### Events (`events/`)
-An interactive event explorer displaying:
+An interactive event explorer (paginated, filterable, and sortable) displaying:
 - **Events Timeline**: Lists active event clusters with scores, headline titles, and regions.
 - **News Item Adjacency**: Lists matching news articles linked to the cluster, highlighting lexical or semantic similarity scores.
 - **Score History**: Visual breakdown of event metrics over time.
@@ -46,7 +46,9 @@ An interactive event explorer displaying:
 A structured grid of normalized news items. Users can click on items to view raw HTML, full-text extraction statuses, and entity relationships.
 
 ### Alerts (`alerts/`)
-Lists alert decisions with acknowledge/dismiss actions, and administers alert channels (e.g. Telegram links) and suppression rules.
+A tabbed view (`AlertTabs`):
+- **Decisions tab**: Paginated/filterable list of alert decisions with acknowledge/dismiss actions and a detail panel.
+- **Settings tab**: Houses the alert policy, alert channels (e.g. Telegram links), and suppression rules (`tabs/settings/` — `AlertPolicyPanel`, `AlertChannelsPanel`, `AlertSuppressionRulesPanel`), migrated here from the former settings/maintenance surface.
 
 ### Watchlist (`watchlist/`)
 Allows users to add, edit, or disable asset symbols, aliases, regions, and tier levels (S, A, B, C, D) which feed the scoring engine.
@@ -57,8 +59,8 @@ Tooling for RSS/scraper administration:
 - **Health Indicators**: Tracks latencies, daily item volumes, and consecutive errors.
 - **Preview Tool**: Allows inputting URLs to preview feed parsing and full-text extractions in real-time.
 
-### Operations & Control (`operations/` / `commands/`)
-An operational console for manually launching worker tasks (e.g., executing a full pipeline, running missed catalyst reviews, or reclustering historical news).
+### Commands (`commands/`)
+A manual command console for launching worker tasks (e.g. executing a full pipeline, running missed catalyst reviews, or reclustering historical news) via `CommandsTable`, plus a `CommandHistoryTable` for past runs.
 
 ### Maintenance (`maintenance/`)
-Surfaces pipeline run metrics, LLM token usage and estimated costs, embedding coverage audits, and data-retention logs pulled from the `/maintenance` router.
+Consolidated operational view (`MaintenanceTabs`) that absorbed the former standalone operations panel. Tabs cover pipeline metrics, fetch logs, job history, score history, embedding coverage, LLM runs and costs, missed-catalyst review, and retention audits — pulled largely from the `/maintenance` router.

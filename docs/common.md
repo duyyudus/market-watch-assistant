@@ -1,7 +1,7 @@
 # Database & Shared Common Layer Overview
 
-**Last Updated:** June 14, 2026  
-**Latest Commit:** `808545f9080fe9d4fce526e2730aa1366c98e668`
+**Last Updated:** June 19, 2026  
+**Latest Commit:** `24f74c0fa88230d741f8b0397cb4056776c4614d`
 
 ---
 
@@ -43,3 +43,12 @@ Shared utilities handle data scrubbing and integrations:
 
 - **HTML Normalization (`normalize.py` / `crawler.py` / `rss.py`)**: Scrubs HTML tags, removes tracking parameters from links, detects boilerplate text patterns, and parses XML feeds.
 - **Symbol Resolution (`market_symbol_resolver.py`)**: Translates LLM-extracted names or aliases into index codes or trading tickers across the configured providers (Hyperliquid for global, CoinGecko/Binance for crypto, the VN market service for Vietnam), caching outcomes in `MarketSymbolResolution`.
+
+---
+
+## 6. Component-Based Logging (`common/logging.py`)
+Logging routes records to per-component files using the `log_component` contextvar (asyncio copies it per task):
+
+- Top-level components map to files via `COMPONENT_LOG_FILES` (`api` → `api.log`, `cli` → `cli.log`, `worker` → `worker.log`).
+- Within the single worker process, each concurrent task sets its own component so `WORKER_TASK_LOG_FILES` splits output into `worker-pipeline.log` and `worker-command.log`.
+- uvicorn's loggers (`uvicorn`, `uvicorn.error`, `uvicorn.access`) are folded into the API file, and a `ComponentStampFilter` stamps a `component` field on each record (JSON file output and the `[component]` segment of console lines) so records stay attributable even when components share a file.

@@ -1,7 +1,7 @@
 # FastAPI API Server Overview
 
-**Last Updated:** June 14, 2026  
-**Latest Commit:** `808545f9080fe9d4fce526e2730aa1366c98e668`
+**Last Updated:** June 19, 2026  
+**Latest Commit:** `24f74c0fa88230d741f8b0397cb4056776c4614d`
 
 ---
 
@@ -60,15 +60,15 @@ All routers are mounted at the root (there is **no** global `/api` prefix); each
 | Route Group | Path Prefix | Description |
 | :--- | :--- | :--- |
 | **Health Router** | `/health`, `/ready` | Liveness and readiness probes used by Docker healthchecks ([health.py](../market-watch-bot/api_server/app/api/routers/health.py)). |
-| **Bot Router** | `/bot` | Queue, list, cancel commands, and check the current worker run status ([bot.py](../market-watch-bot/api_server/app/api/routers/bot.py)). |
+| **Bot Router** | `/bot` | Queue, list, and inspect commands, and read worker run status including heartbeat liveness/staleness ([bot.py](../market-watch-bot/api_server/app/api/routers/bot.py)). Manual `event.recluster` / `event.split` / `event.merge` / `event.rescore` actions are queued here as bot commands. |
 | **Jobs Router** | `/jobs` | Inspect background `JobRun` history and execution outcomes ([jobs.py](../market-watch-bot/api_server/app/api/routers/jobs.py)). |
 | **News Router** | `/news` | Browse normalized news items, query domains, and view entity tags ([news.py](../market-watch-bot/api_server/app/api/routers/news.py)). |
-| **Events Router** | `/events` | Timelines, details, score history, an SSE live stream (`/events/stream`), and manual recluster/split/merge triggers ([events.py](../market-watch-bot/api_server/app/api/routers/events.py)). |
+| **Events Router** | `/events` | Read-only timelines, event detail, score history (`/score-history/{id}`), and an SSE live stream (`/events/stream`). Mutations (recluster/split/merge/rescore) are issued via the Bot Router as queued commands ([events.py](../market-watch-bot/api_server/app/api/routers/events.py)). |
 | **Alerts Router** | `/alerts` | Alert decisions, acknowledge/dismiss, plus alert channels and suppression rules ([alerts.py](../market-watch-bot/api_server/app/api/routers/alerts.py)). |
 | **Digests Router** | `/digests` | Preview and inspect aggregated daily/weekly digest records ([digests.py](../market-watch-bot/api_server/app/api/routers/digests.py)). |
 | **Market Router** | `/market` | Query recorded market moves and price-action windows ([market.py](../market-watch-bot/api_server/app/api/routers/market.py)). |
 | **Investigations Router** | `/investigations` | List agentic investigation runs and their synthesized findings ([investigations.py](../market-watch-bot/api_server/app/api/routers/investigations.py)). |
 | **Watchlist Router** | `/watchlist` | Create, update, and delete watch entries and symbols ([watchlist.py](../market-watch-bot/api_server/app/api/routers/watchlist.py)). |
-| **Settings Router** | `/settings` | Read/update the alert policy and scoring presets ([settings.py](../market-watch-bot/api_server/app/api/routers/settings.py)). |
+| **Settings Router** | `/settings` | Read/update the alert policy (`/settings/alert-policy`) and read configuration/scoring presets (`/settings/presets`) ([settings.py](../market-watch-bot/api_server/app/api/routers/settings.py)). |
 | **Sources Router** | `/sources` | Manage news sources, trigger fetches, and preview article text extraction ([sources.py](../market-watch-bot/api_server/app/api/routers/sources.py)). |
 | **Maintenance Router** | `/maintenance` | Pull metrics, view LLM tokens and costs, audit embeddings coverage, and review logs ([maintenance.py](../market-watch-bot/api_server/app/api/routers/maintenance.py)). |

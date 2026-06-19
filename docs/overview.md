@@ -1,7 +1,7 @@
 # Market Watch Assistant - Architecture & Component Overview
 
-**Last Updated:** June 14, 2026  
-**Latest Commit:** `808545f9080fe9d4fce526e2730aa1366c98e668`
+**Last Updated:** June 19, 2026  
+**Latest Commit:** `24f74c0fa88230d741f8b0397cb4056776c4614d`
 
 
 ## 1. Introduction
@@ -36,11 +36,13 @@ graph TD
     subgraph DataStore [Database Layer]
         DB[(PostgreSQL + pgvector)]
         CommandQueue[Bot Commands Queue Table]
+        Heartbeat[worker.heartbeat AppSetting]
     end
 
     %% Backend Worker
-    subgraph Worker [Background Processing Layer]
-        BotWorker[Bot Worker Process]
+    subgraph Worker [Bot Worker Process - Two Independent Loops]
+        PipelineLoop[Pipeline Loop]
+        CommandLoop[Command Loop]
         Pipeline[12-Stage Ingestion Pipeline]
         Clustering[Clustering & LLM Arbitration]
         Investigation[Agentic Investigations]
@@ -59,15 +61,19 @@ graph TD
     UI -- "HTTPS / REST (with VITE_API_AUTH_TOKEN)" --> API
     API -- "MUTATING Operations (Requires Bearer Auth)" --> Auth
     API -- "Queries & Command Inserts" --> DB
-    BotWorker -- "Polls & updates status" --> CommandQueue
-    BotWorker -- "Data read/write" --> DB
-    
-    BotWorker -- "Triggers" --> Pipeline
+    API -- "Reads liveness/staleness" --> Heartbeat
+
+    CommandLoop -- "Drains (FOR UPDATE SKIP LOCKED)" --> CommandQueue
+    PipelineLoop -- "Runs on polling interval" --> Pipeline
+    PipelineLoop -- "Schedules pending" --> Investigation
+    PipelineLoop & CommandLoop -- "Write liveness" --> Heartbeat
+    Pipeline -- "Data read/write" --> DB
+
     Pipeline -- "Fetch raw news" --> RSS
     Pipeline -- "Embed & Analyze" --> LLM
     Pipeline -- "Fetch prices" --> Markets
     Pipeline -- "Dispatch notifications" --> Telegram
-    
+
     Investigation -- "Web Search" --> Brave
     Investigation -- "Contextual Analysis" --> LLM
 ```
@@ -78,6 +84,8 @@ A key architectural design principle is **strict decoupling**:
 - The API Server never calls worker pipelines directly during the HTTP request cycle.
 - Instead, the API Server queues mutations or tasks by inserting a record into the `bot_commands` table.
 - The Bot Worker continuously polls `bot_commands` for pending entries, locks them (using `SELECT FOR UPDATE SKIP LOCKED` database row locks to prevent duplicate executions), runs the execution, and saves the results/errors back to the command record.
+- The worker runs the scheduled pipeline and the command drain as **two independent asyncio loops** in their own transactions, so user-issued commands stay responsive even while a long pipeline tick is in flight (no command can trigger the pipeline, so the two loops never run it concurrently).
+- The worker periodically writes a `worker.heartbeat` `AppSetting`; the API server treats it as stale after 60s so the dashboard can surface worker liveness.
 - The React Dashboard polls the bot status and command queue to display job execution progress to the user.
 
 ---
@@ -159,11 +167,12 @@ Duplicate, stale, and low-quality "noise" penalties multiply down the result. Th
 > For a detailed guide on API routing architecture, CORS configuration, write security middlewares, and schemas, see [FastAPI API Server](./api_server.md).
 
 Exposes REST endpoints configured into route groups:
-- `/bot/status` and `/bot/commands`: Polling status and queue commands.
+- `/bot/status` and `/bot/commands`: Worker liveness (with heartbeat staleness) and the queue/poll command surface. Manual `event.recluster` / `event.split` / `event.merge` / `event.rescore` operations are issued as queued bot commands here, not as direct events endpoints.
 - `/sources`: Configure and view ingestion feeds.
-- `/events` and `/news`: Browse normalized data structures.
-- `/alerts` and `/alert-channels`: Administer Telegram links and suppression rules.
+- `/events` and `/news`: Browse normalized data structures, including the `/events/stream` SSE feed.
+- `/alerts`, `/alert-channels`, and `/alert-suppression-rules`: Acknowledge/dismiss decisions and administer Telegram links and suppression rules.
 - `/watchlist`: Edit asset symbols and priority tiers.
+- `/settings`: Read/update the alert policy and read scoring/configuration presets.
 - `/maintenance`: Manage pipeline metrics, LLM run costs, and database retention logs.
 
 *Security*: Mutating requests (`POST`, `PATCH`, `PUT`, `DELETE`) require a Bearer Authentication token matching the backend `API_AUTH_TOKEN`.
@@ -174,13 +183,16 @@ Exposes REST endpoints configured into route groups:
 
 Built with Vite, TypeScript, Tailwind CSS, and daisyUI.
 - **State Management (`src/app/state.ts` / `useDashboardData.ts`)**: Custom hooks orchestrate polling schedules to fetch the bot's health, commands queue, jobs history, and event feeds.
+- **Navigation** (`src/app/navigation.ts`) exposes eight views: `overview`, `events`, `news`, `alerts`, `sources`, `watchlist`, `commands`, and `maintenance`.
 - **Features Structure**:
-  - `overview`: System health, running tasks, and latest event charts.
-  - `events`: Interactive clusters timeline, showing article components, scores, market moves, and active investigations.
+  - `overview`: System health, worker heartbeat, daily digest, and per-segment spotlight event ranking across the global / US / Vietnam / crypto market segments.
+  - `events`: Interactive clusters timeline (paginated/filtered/sorted) showing article components, scores, market moves, and active investigations.
   - `news`: Tabulated feed of raw articles, full-text extractions, and extracted entities.
+  - `alerts`: Alert decisions plus a settings tab housing the alert policy, channels, and suppression rules (migrated here from the old settings/maintenance surface).
   - `watchlist`: Edit ticker associations and priority tiers.
   - `sources`: Source health trackers, check status, polling logs, and feed preview tooling.
-  - `operations`: Manual trigger control panel for command insertions.
+  - `commands`: Manual command console (queue/inspect bot commands) plus command history.
+  - `maintenance`: Consolidated operational tabs — pipeline metrics, fetch logs, job history, score history, embedding coverage, LLM runs/costs, missed-catalyst review, and retention audits.
 
 ---
 
