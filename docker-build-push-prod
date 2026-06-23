@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
+: "${REGISTRY_REF:?Set REGISTRY_REF in .env}"
+: "${PROD_VITE_API_BASE_URL:?Set PROD_VITE_API_BASE_URL in .env}"
+: "${VITE_API_AUTH_TOKEN:?Set VITE_API_AUTH_TOKEN in .env}"
+
+export REGISTRY_REF
+export VITE_API_BASE_URL="${PROD_VITE_API_BASE_URL}"
+export VITE_API_AUTH_TOKEN
+BUILD_NUMBER=$(git rev-list --count HEAD)
+export BUILD_NUMBER
+echo "Build number: ${BUILD_NUMBER}"
+docker compose -f docker-compose.yml build && docker compose -f docker-compose.yml push

@@ -74,6 +74,46 @@ def test_load_settings_reads_coingecko_api_key_from_process_env(
     assert settings.coingecko_api_key == "process-coingecko-key"
 
 
+def test_load_settings_ignores_redundant_api_base_url(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app",
+                "API_BASE_URL=https://api.example.test",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
+
+    assert "api_base_url" not in Settings.model_fields
+    assert not hasattr(settings, "api_base_url")
+
+
+def test_load_settings_reads_api_cors_configuration(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app",
+                "API_CORS_ORIGINS=http://localhost:3040,https://dashboard.example.test",
+                r"API_CORS_ORIGIN_REGEX=^https?://dashboard\.example\.test(:\d+)?$",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
+
+    assert settings.api_cors_origins == [
+        "http://localhost:3040",
+        "https://dashboard.example.test",
+    ]
+    assert settings.api_cors_origin_regex == r"^https?://dashboard\.example\.test(:\d+)?$"
+
+
 def test_load_settings_requires_database_url(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="DATABASE_URL"):
         load_settings(env_file=tmp_path / "missing.env", settings_file=tmp_path / "missing.yml")

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
+: "${LOCAL_VITE_API_BASE_URL:=http://localhost:8030}"
+: "${VITE_API_BASE_URL:=${LOCAL_VITE_API_BASE_URL}}"
+: "${VITE_API_AUTH_TOKEN:=}"
+export VITE_API_BASE_URL
+export VITE_API_AUTH_TOKEN
+BUILD_NUMBER=$(git rev-list --count HEAD)
+export BUILD_NUMBER
+echo "Build number: ${BUILD_NUMBER}"
+echo "Dashboard API base URL: ${VITE_API_BASE_URL}"
+docker compose down && docker compose -f docker-compose.yml build && docker compose up -d

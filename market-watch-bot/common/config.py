@@ -11,6 +11,11 @@ from pydantic import BaseModel, Field
 
 DEFAULT_DATABASE_URL = ""
 SUPPORTED_SOURCE_TYPES = ("rss", "google-rss", "crawler")
+DEFAULT_API_CORS_ORIGIN_REGEX = (
+    r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+    r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"
+    r"192\.168\.\d{1,3}\.\d{1,3}):(5173|3040)$"
+)
 
 
 def validate_source_type(value: str) -> str:
@@ -264,9 +269,11 @@ class Settings(BaseModel):
     coingecko_api_key: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
-    api_base_url: str = "http://localhost:8000"
     redis_url: str | None = None
-    api_cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    api_cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173"]
+    )
+    api_cors_origin_regex: str | None = DEFAULT_API_CORS_ORIGIN_REGEX
     app: AppConfig = Field(default_factory=AppConfig)
     bot: BotConfig = Field(default_factory=BotConfig)
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
@@ -309,10 +316,10 @@ def _read_env(path: Path) -> dict[str, str]:
             "COINGECKO_API_KEY",
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_CHAT_ID",
-            "API_BASE_URL",
             "API_AUTH_TOKEN",
             "REDIS_URL",
             "API_CORS_ORIGINS",
+            "API_CORS_ORIGIN_REGEX",
         }
     }
     return {**file_values, **process_values}
@@ -324,6 +331,7 @@ def load_settings(
     yaml_data = _read_yaml(Path(settings_file))
     env_data = _read_env(Path(env_file))
     origins = env_data.get("API_CORS_ORIGINS")
+    origin_regex = env_data.get("API_CORS_ORIGIN_REGEX")
     database_url = env_data.get("DATABASE_URL", DEFAULT_DATABASE_URL)
     if not database_url:
         raise ValueError("DATABASE_URL must be set in the environment or .env")
@@ -336,8 +344,8 @@ def load_settings(
         "coingecko_api_key": env_data.get("COINGECKO_API_KEY"),
         "telegram_bot_token": env_data.get("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": env_data.get("TELEGRAM_CHAT_ID"),
-        "api_base_url": env_data.get("API_BASE_URL", "http://localhost:8000"),
         "redis_url": env_data.get("REDIS_URL"),
+        "api_cors_origin_regex": origin_regex or DEFAULT_API_CORS_ORIGIN_REGEX,
     }
     if origins:
         merged["api_cors_origins"] = [

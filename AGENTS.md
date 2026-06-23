@@ -157,8 +157,8 @@ docker compose up --build
   untracked.
 - `DATABASE_URL` is required by `common.config.load_settings()`.
 - Relevant backend environment variables include `DATABASE_URL`, `OPENROUTER_API_KEY`,
-  `BRAVE_SEARCH_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `API_BASE_URL`,
-  `API_AUTH_TOKEN`, `REDIS_URL`, and `API_CORS_ORIGINS`.
+  `BRAVE_SEARCH_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `API_AUTH_TOKEN`,
+  `REDIS_URL`, and `API_CORS_ORIGINS`.
 - API mutating requests require `API_AUTH_TOKEN`; the dashboard can provide it with
   `VITE_API_AUTH_TOKEN`.
 - Dashboard environment variables include `VITE_API_BASE_URL` and

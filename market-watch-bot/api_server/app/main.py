@@ -25,19 +25,20 @@ async def _lifespan(api: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    if settings is None:
+        try:
+            settings = load_settings()
+        except ValueError as exc:
+            if "DATABASE_URL" not in str(exc):
+                raise
+            settings = Settings()
+
     api = FastAPI(title="Market Watch API", version="0.1.0", lifespan=_lifespan)
-    if settings is not None:
-        api.state.settings = settings
+    api.state.settings = settings
     api.add_middleware(
         CORSMiddleware,
-        allow_origins=(
-            settings.api_cors_origins if settings is not None else ["http://localhost:5173"]
-        ),
-        allow_origin_regex=(
-            r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
-            r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"
-            r"192\.168\.\d{1,3}\.\d{1,3}):5173$"
-        ),
+        allow_origins=settings.api_cors_origins,
+        allow_origin_regex=settings.api_cors_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

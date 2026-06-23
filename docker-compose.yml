@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: bot-worker
+    image: ${REGISTRY_REF:+${REGISTRY_REF}/}market-watch-assistant-bot-worker:latest
     volumes:
       - ./market-watch-bot/settings.yml:/app/market-watch-bot/settings.yml:ro
       - ./market-watch-bot/.env:/app/market-watch-bot/.env:ro
@@ -21,12 +22,13 @@ services:
       context: .
       dockerfile: Dockerfile
       target: api-server
+    image: ${REGISTRY_REF:+${REGISTRY_REF}/}market-watch-assistant-api-server:latest
     volumes:
       - ./market-watch-bot/settings.yml:/app/market-watch-bot/settings.yml:ro
       - ./market-watch-bot/.env:/app/market-watch-bot/.env:ro
       - ./market-watch-bot/.log:/app/market-watch-bot/.log
     ports:
-      - "8000:8000"
+      - "8030:8000"
     healthcheck:
       test:
         [
@@ -49,10 +51,11 @@ services:
       dockerfile: Dockerfile
       target: dashboard
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8030}
         VITE_API_AUTH_TOKEN: ${VITE_API_AUTH_TOKEN:-}
+    image: ${REGISTRY_REF:+${REGISTRY_REF}/}market-watch-assistant-dashboard:latest
     ports:
-      - "5173:80"
+      - "3040:80"
     depends_on:
       api-server:
         condition: service_healthy

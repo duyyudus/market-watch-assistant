@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import api_server.app.services.watchlist as watchlist_service
 from api_server.app.db import Base, get_session
-from api_server.app.main import app
+from api_server.app.main import app, create_app
 from common.config import Settings
 from common.db.models import (
     AgentInvestigation,
@@ -1294,9 +1294,65 @@ async def test_ready_returns_503_when_database_check_fails() -> None:
 @pytest.mark.asyncio
 async def test_private_network_dashboard_origin_is_allowed(client: AsyncClient) -> None:
     response = await client.get("/health", headers={"Origin": "http://192.168.28.40:5173"})
+    docker_response = await client.get(
+        "/health", headers={"Origin": "http://192.168.28.40:3040"}
+    )
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://192.168.28.40:5173"
+    assert docker_response.status_code == 200
+    assert (
+        docker_response.headers["access-control-allow-origin"]
+        == "http://192.168.28.40:3040"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cors_origin_regex_is_configurable() -> None:
+    test_app = create_app(
+        Settings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            api_cors_origin_regex=r"^https?://dashboard\.example\.test(:\d+)?$",
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://test"
+    ) as test_client:
+        response = await test_client.get(
+            "/health", headers={"Origin": "https://dashboard.example.test:9443"}
+        )
+
+    assert response.status_code == 200
+    assert (
+        response.headers["access-control-allow-origin"]
+        == "https://dashboard.example.test:9443"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cors_origin_regex_is_loaded_for_default_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_server.app.main.load_settings",
+        lambda: Settings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            api_cors_origin_regex=r"^https?://ops-dashboard\.example\.test(:\d+)?$",
+        ),
+    )
+    test_app = create_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://test"
+    ) as test_client:
+        response = await test_client.get(
+            "/health", headers={"Origin": "https://ops-dashboard.example.test:9443"}
+        )
+
+    assert response.status_code == 200
+    assert (
+        response.headers["access-control-allow-origin"]
+        == "https://ops-dashboard.example.test:9443"
+    )
 
 
 @pytest.mark.asyncio
