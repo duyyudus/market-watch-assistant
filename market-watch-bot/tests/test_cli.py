@@ -643,6 +643,132 @@ async def test_drain_bot_commands_runs_without_scheduled_pipeline(monkeypatch) -
     assert pipeline_calls == []
 
 
+def test_worker_enables_telegram_command_polling_only_when_configured() -> None:
+    class EnabledSettings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class bot:
+            telegram_command_poll_enabled = True
+
+    class DisabledSettings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class bot:
+            telegram_command_poll_enabled = False
+
+    class MissingCredentialsSettings:
+        telegram_bot_token = "token"
+        telegram_chat_id = None
+
+        class bot:
+            telegram_command_poll_enabled = True
+
+    assert worker_cli.telegram_command_polling_enabled(EnabledSettings()) is True
+    assert worker_cli.telegram_command_polling_enabled(DisabledSettings()) is False
+    assert worker_cli.telegram_command_polling_enabled(MissingCredentialsSettings()) is False
+
+
+@pytest.mark.asyncio
+async def test_drain_telegram_commands_polls_with_configured_article_limit(monkeypatch) -> None:
+    class Session:
+        pass
+
+    class Settings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class bot:
+            telegram_detail_article_limit = 7
+
+    calls = []
+
+    async def fake_poll_telegram_commands(session, config, *, article_limit):
+        calls.append((session, config.telegram_chat_id, article_limit))
+        return {"updates": 1, "processed": 1, "ignored": 0, "replied": 1}
+
+    monkeypatch.setattr(worker_cli, "poll_telegram_commands", fake_poll_telegram_commands)
+
+    await worker_cli.drain_telegram_commands(Session(), Settings())
+
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], Session)
+    assert calls[0][1:] == ("chat_1", 7)
+
+
+@pytest.mark.asyncio
+async def test_register_telegram_command_menu_runs_only_when_enabled(monkeypatch) -> None:
+    class EnabledSettings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class bot:
+            telegram_command_poll_enabled = True
+
+    class DisabledSettings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class bot:
+            telegram_command_poll_enabled = False
+
+    calls: list[str] = []
+
+    async def fake_register(config):
+        calls.append(str(config.telegram_chat_id))
+        return {"ok": True}
+
+    monkeypatch.setattr(worker_cli, "register_telegram_bot_commands", fake_register)
+
+    await worker_cli.register_telegram_command_menu(EnabledSettings())
+    await worker_cli.register_telegram_command_menu(DisabledSettings())
+
+    assert calls == ["chat_1"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_command_loop_does_not_refresh_worker_heartbeat(monkeypatch) -> None:
+    class Settings:
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat_1"
+
+        class bot:
+            telegram_command_poll_interval_seconds = 1
+
+    class Session:
+        pass
+
+    shutdown = __import__("asyncio").Event()
+    drained = []
+
+    async def fake_with_session(fn, *, settings, session_factory):
+        assert isinstance(settings, Settings)
+        assert session_factory == "factory"
+        drained.append("drain")
+        shutdown.set()
+        return await fn(Session())
+
+    async def fail_refresh(*_args, **_kwargs):
+        raise AssertionError("telegram loop should not refresh worker heartbeat")
+
+    async def fake_drain(session, settings):
+        assert isinstance(session, Session)
+        assert isinstance(settings, Settings)
+
+    monkeypatch.setattr(worker_cli, "_with_session", fake_with_session)
+    monkeypatch.setattr(worker_cli, "refresh_worker_heartbeat", fail_refresh)
+    monkeypatch.setattr(worker_cli, "drain_telegram_commands", fake_drain)
+
+    await worker_cli._telegram_command_loop(
+        "factory",
+        Settings(),
+        shutdown=shutdown,
+    )
+
+    assert drained == ["drain"]
+
+
 @pytest.mark.asyncio
 async def test_run_pipeline_tick_runs_pipeline_and_investigations(monkeypatch) -> None:
     class Session:

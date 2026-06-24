@@ -32,6 +32,7 @@ COMPONENT_LOG_FILES = {
 WORKER_TASK_LOG_FILES = {
     "pipeline": "worker-pipeline.log",
     "command": "worker-command.log",
+    "telegram": "worker-telegram.log",
 }
 # uvicorn's own loggers are routed into the API file so request/error logs land
 # alongside application logs in the same process.
@@ -315,4 +316,3 @@ def setup_logging(settings: Settings, component: str = "cli") -> None:
         for name in EXTRA_API_LOGGERS:
             extra_logger = logging.getLogger(name)
             extra_logger.addHandler(file_handler)
-

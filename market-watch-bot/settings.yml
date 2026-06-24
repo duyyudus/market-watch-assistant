@@ -8,6 +8,9 @@ bot:
   timezone: Asia/Ho_Chi_Minh
   command_poll_interval_seconds: 2
   command_drain_limit: 25
+  telegram_command_poll_enabled: true
+  telegram_command_poll_interval_seconds: 2
+  telegram_detail_article_limit: 10
 
 ingestion:
   rss_freshness_hours: 168

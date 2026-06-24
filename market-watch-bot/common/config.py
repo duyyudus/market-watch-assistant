@@ -38,6 +38,9 @@ class BotConfig(BaseModel):
     command_poll_interval_seconds: int = 2
     command_drain_limit: int = 25
     stale_command_timeout_seconds: int = 600
+    telegram_command_poll_enabled: bool = True
+    telegram_command_poll_interval_seconds: int = 2
+    telegram_detail_article_limit: int = 10
 
 
 class IngestionConfig(BaseModel):

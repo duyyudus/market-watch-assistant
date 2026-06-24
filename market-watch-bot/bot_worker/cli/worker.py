@@ -29,11 +29,17 @@ from bot_worker.services import (
 from bot_worker.services.bot_commands import process_pending_bot_commands
 from bot_worker.services.digests import build_digest_record, send_digest_record
 from bot_worker.services.operations import run_operational_checks
+from bot_worker.services.telegram_commands import (
+    poll_telegram_commands,
+    register_telegram_bot_commands,
+)
 from common.llm import LLMConfig
 from common.logging import WORKER_TASK_LOG_FILES, log_component, setup_logging
 
 COMMAND_POLL_INTERVAL_SECONDS = 2
 COMMAND_DRAIN_LIMIT = 25
+TELEGRAM_COMMAND_POLL_INTERVAL_SECONDS = 2
+TELEGRAM_DETAIL_ARTICLE_LIMIT = 10
 WORKER_HEARTBEAT_KEY = "worker.heartbeat"
 
 logger = logging.getLogger("bot_worker")
@@ -61,6 +67,37 @@ async def drain_bot_commands(session, settings) -> None:
     )
     for command in commands:
         typer.echo(f"bot_command: {command.id} {command.command_type} {command.status}")
+
+
+def telegram_command_polling_enabled(settings) -> bool:
+    return bool(
+        getattr(settings, "telegram_bot_token", None)
+        and getattr(settings, "telegram_chat_id", None)
+        and getattr(settings.bot, "telegram_command_poll_enabled", True)
+    )
+
+
+async def drain_telegram_commands(session, settings) -> None:
+    """Poll Telegram updates and handle supported chat commands."""
+    result = await poll_telegram_commands(
+        session,
+        AlertDeliveryConfig.from_settings(settings, channel="telegram"),
+        article_limit=getattr(
+            settings.bot,
+            "telegram_detail_article_limit",
+            TELEGRAM_DETAIL_ARTICLE_LIMIT,
+        ),
+    )
+    if result["updates"] or result["processed"]:
+        typer.echo(f"telegram_commands: {result}")
+
+
+async def register_telegram_command_menu(settings) -> None:
+    if not telegram_command_polling_enabled(settings):
+        return
+    await register_telegram_bot_commands(
+        AlertDeliveryConfig.from_settings(settings, channel="telegram")
+    )
 
 
 async def run_pipeline_tick(session, settings) -> None:
@@ -116,6 +153,28 @@ async def _command_loop(session_factory, settings, *, jobs: list[str], shutdown)
         except Exception as exc:  # noqa: BLE001 - a failed drain must not kill the worker
             await _record_failed_job(session_factory, "bot_command", exc)
             logger.exception("bot command drain failed: %s", exc)
+        with suppress(TimeoutError):
+            await asyncio.wait_for(shutdown.wait(), timeout=poll_interval)
+
+
+async def _telegram_command_loop(session_factory, settings, *, shutdown) -> None:
+    """Poll Telegram bot updates on a fixed cadence in their own transaction."""
+    log_component.set("telegram")
+    poll_interval = getattr(
+        settings.bot,
+        "telegram_command_poll_interval_seconds",
+        TELEGRAM_COMMAND_POLL_INTERVAL_SECONDS,
+    )
+    while not shutdown.is_set():
+        try:
+            await _with_session(
+                lambda session: drain_telegram_commands(session, settings),
+                settings=settings,
+                session_factory=session_factory,
+            )
+        except Exception as exc:  # noqa: BLE001 - inbound chat failures must not kill the worker
+            await _record_failed_job(session_factory, "telegram_command", exc)
+            logger.exception("telegram command poll failed: %s", exc)
         with suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(), timeout=poll_interval)
 
@@ -239,6 +298,10 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
             settings=settings,
             session_factory=session_factory,
         )
+        try:
+            await register_telegram_command_menu(settings)
+        except Exception as exc:  # noqa: BLE001 - command suggestions should not block worker start
+            logger.warning("telegram command menu registration failed: %s", exc)
         shutdown = asyncio.Event()
         running_loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -255,6 +318,16 @@ def worker_start(only: Annotated[str | None, typer.Option("--only")] = None) -> 
                 _pipeline_loop(session_factory, settings, shutdown=shutdown)
             ),
         ]
+        if telegram_command_polling_enabled(settings):
+            tasks.append(
+                asyncio.create_task(
+                    _telegram_command_loop(
+                        session_factory,
+                        settings,
+                        shutdown=shutdown,
+                    )
+                )
+            )
         try:
             await shutdown.wait()
         finally:
