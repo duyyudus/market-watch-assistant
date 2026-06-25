@@ -19,6 +19,7 @@ import type {
   Source,
   SourceHealth,
   WatchlistEntry,
+  WatchlistSpotlightItem,
 } from "../api";
 import { api, eventStreamUrl, normalizeListResponse } from "../api";
 import { createResourceCache } from "../lib/apiCache";
@@ -139,6 +140,12 @@ export function useDashboardData() {
       if (key === "watchlist") {
         return { ...current, watchlist: normalizeListResponse<WatchlistEntry>(value).items };
       }
+      if (key === "watchlistSpotlight") {
+        return {
+          ...current,
+          watchlistSpotlight: normalizeListResponse<WatchlistSpotlightItem>(value).items,
+        };
+      }
       if (key === "commands") {
         return { ...current, commands: normalizeListResponse<BotCommand>(value).items };
       }
@@ -198,6 +205,7 @@ export function useDashboardData() {
       alertSuppressionRules: api.alertSuppressionRules,
       jobs: api.jobs,
       watchlist: api.watchlist,
+      watchlistSpotlight: api.watchlistSpotlight,
       commands: api.commands,
       catalysts: () => api.maintenanceCatalysts(10, 0),
       digestLatest: api.digestLatest,
@@ -350,7 +358,7 @@ export function useDashboardData() {
           "events",
           "overviewAlerts",
           "sourceHealth",
-          "watchlist",
+          "watchlistSpotlight",
           "alertPolicy",
           "catalysts",
           "digestLatest",
@@ -378,7 +386,7 @@ export function useDashboardData() {
       "events",
       "overviewAlerts",
       "sourceHealth",
-      "watchlist",
+      "watchlistSpotlight",
       "alertPolicy",
       "catalysts",
       "digestLatest",

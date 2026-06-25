@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from api_server.app.api.dependencies import SessionDep, SettingsDep
-from api_server.app.schemas import ListEnvelope, WatchlistCreate, WatchlistRead, WatchlistUpdate
+from api_server.app.schemas import (
+    ListEnvelope,
+    WatchlistCreate,
+    WatchlistRead,
+    WatchlistSpotlightRead,
+    WatchlistUpdate,
+)
 from api_server.app.services import watchlist as watchlist_service
 from common.db.models import WatchlistEntity
 
@@ -16,6 +22,23 @@ async def list_watchlist(
 ) -> ListEnvelope[WatchlistRead]:
     rows = await watchlist_service.list_watchlist(session)
     return ListEnvelope(items=[WatchlistRead.model_validate(row) for row in rows], total=len(rows))
+
+
+@router.get("/watchlist/spotlight", response_model=ListEnvelope[WatchlistSpotlightRead])
+async def watchlist_spotlight(
+    session: SessionDep,
+    per_asset_limit: int = Query(5, ge=1, le=20),
+    since_hours: int = Query(48, ge=1, le=24 * 30),
+) -> ListEnvelope[WatchlistSpotlightRead]:
+    rows = await watchlist_service.list_watchlist_spotlight(
+        session,
+        per_asset_limit=per_asset_limit,
+        since_hours=since_hours,
+    )
+    return ListEnvelope(
+        items=[WatchlistSpotlightRead.model_validate(row) for row in rows],
+        total=len(rows),
+    )
 
 
 @router.post("/watchlist", response_model=WatchlistRead, status_code=status.HTTP_201_CREATED)

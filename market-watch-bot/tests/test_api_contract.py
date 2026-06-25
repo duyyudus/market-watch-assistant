@@ -138,6 +138,28 @@ async def client():
             created_at=datetime(2026, 6, 1, 8, 0, tzinfo=UTC),
             updated_at=datetime(2026, 6, 1, 8, 5, tzinfo=UTC),
         )
+        entity_only_spy_event = EventCluster(
+            id="evt_spy_entity_only",
+            canonical_headline="S&P 500 ETF mentioned without ticker",
+            summary="Entity-only event should not appear on a ticker card.",
+            status="reported",
+            regions=["us"],
+            asset_classes=["equity"],
+            affected_entities=["S&P 500 ETF"],
+            affected_tickers=[],
+            source_count=1,
+            top_source_score=80,
+            confirmation_score=80,
+            novelty_score=80,
+            urgency_score=80,
+            market_impact_score=80,
+            relevance_score=80,
+            final_score=80,
+            first_seen_at=datetime(2026, 5, 26, 7, 0, tzinfo=UTC),
+            last_updated_at=datetime(2026, 5, 26, 7, 5, tzinfo=UTC),
+            created_at=datetime(2026, 5, 26, 7, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 26, 7, 5, tzinfo=UTC),
+        )
         news = NormalizedNewsItem(
             id="news_1",
             source_id="src_1",
@@ -255,6 +277,29 @@ async def client():
             normalized_text_hash="mock_text_hash_older_high_score",
             created_at=datetime(2026, 5, 26, 8, 5, tzinfo=UTC),
             updated_at=datetime(2026, 5, 26, 8, 6, tzinfo=UTC),
+        )
+        entity_only_spy_news = NormalizedNewsItem(
+            id="news_spy_entity_only",
+            source_id="src_1",
+            title="S&P 500 ETF mentioned without ticker",
+            snippet="A report names the entity but omits SPY.",
+            url="https://markets.example.net/spy-entity-only",
+            canonical_url=None,
+            source_name="Federal Reserve",
+            source_type="official",
+            source_score=80,
+            language="en",
+            region="us",
+            asset_classes=["equity"],
+            is_paywalled=False,
+            full_text_available=False,
+            processing_status="clustered",
+            published_at=datetime(2026, 5, 26, 7, 0, tzinfo=UTC),
+            fetched_at=datetime(2026, 5, 26, 7, 5, tzinfo=UTC),
+            title_hash="mock_title_hash_spy_entity_only",
+            normalized_text_hash="mock_text_hash_spy_entity_only",
+            created_at=datetime(2026, 5, 26, 7, 5, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 26, 7, 6, tzinfo=UTC),
         )
         alert = AlertDecision(
             id="alert_1",
@@ -454,6 +499,13 @@ async def client():
             similarity_score=90,
             added_at=datetime(2026, 5, 26, 8, 6, tzinfo=UTC),
         )
+        entity_only_spy_cluster_item = EventClusterItem(
+            event_cluster_id="evt_spy_entity_only",
+            news_item_id="news_spy_entity_only",
+            relation_type="seed",
+            similarity_score=90,
+            added_at=datetime(2026, 5, 26, 7, 6, tzinfo=UTC),
+        )
         entity = NewsEntity(
             id="ent_1",
             news_item_id="news_1",
@@ -648,11 +700,13 @@ async def client():
                 event,
                 newer_report_event,
                 older_high_score_event,
+                entity_only_spy_event,
                 news,
                 other_news,
                 older_news,
                 newer_report_news,
                 older_high_score_news,
+                entity_only_spy_news,
                 alert,
                 newer_report_alert,
                 older_report_alert,
@@ -670,6 +724,7 @@ async def client():
                 older_report_cluster_item,
                 newer_report_cluster_item,
                 older_high_score_cluster_item,
+                entity_only_spy_cluster_item,
                 entity,
                 score_history,
                 catalyst,
@@ -804,6 +859,32 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
     assert uncapped.status_code == 200
     assert uncapped.json()["total"] >= 3
     assert [item["id"] for item in uncapped.json()["items"]] == ["evt_1"]
+
+
+@pytest.mark.asyncio
+async def test_watchlist_spotlight_returns_recent_events_per_watchlist_asset(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/watchlist/spotlight?per_asset_limit=2&since_hours=720")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["entry"]["id"] == "watch_1"
+    assert item["entry"]["symbol"] == "SPY"
+    assert item["total"] == 1
+    assert [event["id"] for event in item["events"]] == ["evt_1"]
+    assert item["events"][0]["report_end_at"] == "2026-05-30T09:00:00"
+
+
+@pytest.mark.asyncio
+async def test_watchlist_spotlight_defaults_to_recent_report_window(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/watchlist/spotlight?per_asset_limit=2")
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 0}
 
 
 @pytest.mark.asyncio

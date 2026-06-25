@@ -40,7 +40,12 @@ from api_server.app.schemas.sources import (
     SourceRead,
     SourceUpdate,
 )
-from api_server.app.schemas.watchlist import WatchlistCreate, WatchlistRead, WatchlistUpdate
+from api_server.app.schemas.watchlist import (
+    WatchlistCreate,
+    WatchlistRead,
+    WatchlistSpotlightRead,
+    WatchlistUpdate,
+)
 
 __all__ = [
     "ALLOWED_COMMAND_TYPES",
@@ -82,6 +87,7 @@ __all__ = [
     "SourceUpdate",
     "WatchlistCreate",
     "WatchlistRead",
+    "WatchlistSpotlightRead",
     "WatchlistUpdate",
     "validate_command_payload",
 ]

@@ -27,6 +27,7 @@ const apiMock = vi.hoisted(() => ({
   deleteAlertSuppressionRule: vi.fn(),
   jobs: vi.fn(),
   watchlist: vi.fn(),
+  watchlistSpotlight: vi.fn(),
   commands: vi.fn(),
   createCommand: vi.fn(),
   cancelCommand: vi.fn(),
@@ -506,6 +507,42 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       },
     ]),
   );
+  apiMock.watchlistSpotlight.mockResolvedValue(
+    envelope([
+      {
+        entry: {
+          id: "watch_1",
+          symbol: "SPY",
+          name: "S&P 500 ETF",
+          entity_type: "etf",
+          tier: "S",
+          region: "us",
+          asset_class: "equity",
+          aliases: ["SPDR S&P 500"],
+          enabled: true,
+        },
+        events: [
+          {
+            id: "evt_1",
+            canonical_headline: "Fed signals a slower rate path",
+            summary: "Policy makers leaned less hawkish.",
+            status: "reported",
+            regions: ["us"],
+            asset_classes: ["global_macro"],
+            affected_entities: ["Federal Reserve"],
+            affected_tickers: ["SPY"],
+            source_count: 2,
+            final_score: 84,
+            alert_level: "immediate_alert",
+            report_start_at: "2026-05-27T08:30:00Z",
+            report_end_at: "2026-05-30T09:00:00Z",
+            last_updated_at: "2026-05-29T13:00:00Z",
+          },
+        ],
+        total: 1,
+      },
+    ]),
+  );
   apiMock.commands.mockResolvedValue(envelope([]));
   apiMock.alertPolicy.mockResolvedValue({
     immediate_threshold: 80,
@@ -752,7 +789,8 @@ describe("App data states", () => {
     expect(apiMock.events).toHaveBeenCalledWith(expect.objectContaining({ segment: "crypto" }));
     expect(apiMock.alerts).toHaveBeenCalledTimes(1);
     expect(apiMock.sourceHealth).toHaveBeenCalledTimes(1);
-    expect(apiMock.watchlist).toHaveBeenCalledTimes(1);
+    expect(apiMock.watchlist).not.toHaveBeenCalled();
+    expect(apiMock.watchlistSpotlight).toHaveBeenCalledTimes(1);
     expect(apiMock.alertPolicy).toHaveBeenCalledTimes(1);
     expect(apiMock.maintenanceCatalysts).toHaveBeenCalledWith(10, 0);
     expect(apiMock.sources).not.toHaveBeenCalled();
@@ -802,10 +840,31 @@ describe("App data states", () => {
       makeEvent("evt_spy_fifth", "SPY fifth report", "2026-05-29T11:00:00Z", 89),
       makeEvent("evt_spy_fourth", "SPY fourth report", "2026-05-29T12:00:00Z", 76),
     ];
-    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
-      if (options?.segment) return envelope([]);
-      return envelope(spotlightEvents);
-    });
+    apiMock.watchlistSpotlight.mockResolvedValue(
+      envelope([
+        {
+          entry: {
+            id: "watch_1",
+            symbol: "SPY",
+            name: "S&P 500 ETF",
+            entity_type: "etf",
+            tier: "S",
+            region: "us",
+            asset_class: "equity",
+            aliases: ["SPDR S&P 500"],
+            enabled: true,
+          },
+          events: [
+            spotlightEvents[1],
+            spotlightEvents[3],
+            spotlightEvents[2],
+            spotlightEvents[5],
+            spotlightEvents[4],
+          ],
+          total: spotlightEvents.length,
+        },
+      ]),
+    );
 
     await renderLoadedApp();
 
@@ -827,6 +886,16 @@ describe("App data states", () => {
     await waitFor(() => expect(apiMock.event).toHaveBeenCalledWith("evt_spy_fifth"));
     expect(screen.getByRole("heading", { name: "Watchlist spotlight" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Event clusters" })).not.toBeInTheDocument();
+  });
+
+  it("shows the empty spotlight state when the backend returns no spotlight hits", async () => {
+    apiMock.watchlistSpotlight.mockResolvedValue(envelope([]));
+
+    await renderLoadedApp();
+
+    const spotlight = screen.getByRole("heading", { name: "Watchlist spotlight" }).closest("section");
+    expect(spotlight).not.toBeNull();
+    expect(within(spotlight!).getByText("No tier-1 watchlist hits")).toBeInTheDocument();
   });
 
   it("opens watchlist spotlight event details in an overview popover", async () => {
@@ -967,11 +1036,15 @@ describe("App data states", () => {
       report_end_at: "2026-05-29T10:00:00Z",
       last_updated_at: "2026-05-29T10:05:00Z",
     }));
-    apiMock.watchlist.mockResolvedValue(envelope(watchlistEntries));
-    apiMock.events.mockImplementation(async (options?: { segment?: string }) => {
-      if (options?.segment) return envelope([]);
-      return envelope(spotlightEvents);
-    });
+    apiMock.watchlistSpotlight.mockResolvedValue(
+      envelope(
+        watchlistEntries.map((entry, index) => ({
+          entry,
+          events: [spotlightEvents[index]],
+          total: 1,
+        })),
+      ),
+    );
 
     await renderLoadedApp();
 

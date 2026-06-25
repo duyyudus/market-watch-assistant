@@ -16,6 +16,7 @@ import type {
   Source,
   SourceHealth,
   WatchlistEntry,
+  WatchlistSpotlightItem,
 } from "../api";
 
 export type View =
@@ -55,6 +56,7 @@ export type DashboardState = {
   alertSuppressionRules: AlertSuppressionRule[];
   jobs: JobRun[];
   watchlist: WatchlistEntry[];
+  watchlistSpotlight: WatchlistSpotlightItem[];
   commands: BotCommand[];
   catalystReviews: CatalystReview[];
   catalystReviewsTotal: number;
@@ -80,6 +82,7 @@ export type ResourceKey =
   | "alertSuppressionRules"
   | "jobs"
   | "watchlist"
+  | "watchlistSpotlight"
   | "commands"
   | "catalysts"
   | "digestLatest"

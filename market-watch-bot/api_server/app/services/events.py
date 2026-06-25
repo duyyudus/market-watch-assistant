@@ -125,7 +125,7 @@ def _effective_report_time_expr() -> ColumnElement[datetime]:
     )
 
 
-def _report_range_subquery():
+def report_range_subquery():
     effective_report_time = _effective_report_time_expr()
     return (
         select(
@@ -137,6 +137,10 @@ def _report_range_subquery():
         .group_by(EventClusterItem.event_cluster_id)
         .subquery()
     )
+
+
+def _report_range_subquery():
+    return report_range_subquery()
 
 
 async def report_ranges_by_event_id(

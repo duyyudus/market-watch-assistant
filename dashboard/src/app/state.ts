@@ -21,6 +21,7 @@ export const emptyState: DashboardState = {
   alertSuppressionRules: [],
   jobs: [],
   watchlist: [],
+  watchlistSpotlight: [],
   commands: [],
   catalystReviews: [],
   catalystReviewsTotal: 0,

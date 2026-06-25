@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from api_server.app.schemas.events import EventRead
+
 
 class WatchlistCreate(BaseModel):
     symbol: str | None = Field(default=None, max_length=64)
@@ -63,3 +65,9 @@ class WatchlistRead(WatchlistCreate):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     market_data_resolution: MarketDataResolutionRead | None = None
+
+
+class WatchlistSpotlightRead(BaseModel):
+    entry: WatchlistRead
+    events: list[EventRead]
+    total: int

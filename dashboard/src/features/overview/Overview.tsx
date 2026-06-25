@@ -19,7 +19,13 @@ import type { MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import type { AlertDecision, BotCommand, CatalystReview, EventCluster, EventDetail } from "../../api";
+import type {
+  AlertDecision,
+  BotCommand,
+  CatalystReview,
+  EventCluster,
+  EventDetail,
+} from "../../api";
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/EmptyState";
 import { SectionError } from "../../components/SectionError";
@@ -50,7 +56,6 @@ type SpotlightPopover = { eventId: string; event?: EventCluster; anchor: Spotlig
 // reflects the reporting period and self-clears to "all caught up" once it lapses.
 const ALERT_ACTION_WINDOW_MS = 48 * 60 * 60 * 1000;
 const INVESTIGATION_ACTION_STATUSES = new Set(["pending", "running", "investigating", "failed"]);
-const WATCHLIST_TIERS = new Set(["tier-1", "tier1", "1", "s", "a"]);
 const SPOTLIGHT_EVENT_LIMIT = 5;
 const SEGMENTS: Array<{ id: Segment; label: string }> = [
   { id: "global", label: "Global" },
@@ -58,10 +63,6 @@ const SEGMENTS: Array<{ id: Segment; label: string }> = [
   { id: "vietnam", label: "Vietnam" },
   { id: "crypto", label: "Crypto" },
 ];
-
-function lowerValues(values: Array<string | null | undefined>) {
-  return values.filter(Boolean).map((value) => value!.toLowerCase());
-}
 
 function isInvestigationAction(event: EventCluster) {
   const status = event.latest_investigation?.status?.toLowerCase();
@@ -118,11 +119,6 @@ function mergedEvent(event: EventCluster, detail?: EventDetail) {
   return detail ?? event;
 }
 
-function eventRecency(event: EventCluster) {
-  const value = event.report_end_at ?? event.last_updated_at ?? event.report_start_at;
-  return value ? new Date(value).getTime() : 0;
-}
-
 function sourceHealthCounts(state: DashboardState) {
   return state.sourceHealth.reduce(
     (counts, source) => {
@@ -131,33 +127,6 @@ function sourceHealthCounts(state: DashboardState) {
     },
     { healthy: 0, degraded: 0, failing: 0, disabled: 0 },
   );
-}
-
-function watchlistHits(state: DashboardState) {
-  const events = state.events.map((event) => mergedEvent(event, state.eventDetails[event.id]));
-  return state.watchlist
-    .filter((entry) => entry.enabled && WATCHLIST_TIERS.has(entry.tier.toLowerCase()))
-    .map((entry) => {
-      const needles = new Set(
-        lowerValues([entry.symbol, entry.name, ...entry.aliases]).filter((value) => value.length > 0),
-      );
-      const matches = events.filter((event) => {
-        const haystack = lowerValues([
-          ...event.affected_tickers,
-          ...event.affected_entities,
-          event.canonical_headline,
-          event.summary,
-        ]);
-        return haystack.some((value) =>
-          Array.from(needles).some((needle) => value === needle || value.includes(needle)),
-        );
-      }).sort((left, right) => {
-        const recencyDelta = eventRecency(right) - eventRecency(left);
-        return recencyDelta || right.final_score - left.final_score;
-      });
-      return { entry, matches };
-    })
-    .filter((item) => item.matches.length > 0);
 }
 
 function DigestNarrative({ content }: { content: string }) {
@@ -535,7 +504,7 @@ export function Overview({
 
   const healthCounts = sourceHealthCounts(state);
   const degradedSources = healthCounts.degraded + healthCounts.failing;
-  const spotlight = watchlistHits(state);
+  const spotlight = state.watchlistSpotlight;
   const activeSpotlightDetail = spotlightPopover
     ? state.eventDetails[spotlightPopover.eventId]
     : undefined;
@@ -718,7 +687,7 @@ export function Overview({
       <OverviewPanel icon={Star} title="Watchlist spotlight">
         {spotlight.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {spotlight.map(({ entry, matches }) => (
+            {spotlight.map(({ entry, events, total }) => (
               <div
                 className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-4"
                 key={entry.id}
@@ -730,10 +699,10 @@ export function Overview({
                       {entry.symbol ?? entry.entity_type}
                     </div>
                   </div>
-                  <Badge tone="info">{matches.length} hit{matches.length === 1 ? "" : "s"}</Badge>
+                  <Badge tone="info">{total} hit{total === 1 ? "" : "s"}</Badge>
                 </div>
                 <div className="mt-3 space-y-2">
-                  {matches.slice(0, SPOTLIGHT_EVENT_LIMIT).map((event) => (
+                  {events.slice(0, SPOTLIGHT_EVENT_LIMIT).map((event) => (
                     <button
                       aria-controls={
                         spotlightPopover?.eventId === event.id

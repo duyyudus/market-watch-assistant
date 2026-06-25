@@ -338,6 +338,12 @@ export type WatchlistEntry = {
   enabled: boolean;
 };
 
+export type WatchlistSpotlightItem = {
+  entry: WatchlistEntry;
+  events: EventCluster[];
+  total: number;
+};
+
 export type WatchlistPayload = {
   symbol?: string | null;
   name: string;
@@ -678,6 +684,10 @@ export const api = {
     request<ListEnvelope<AlertSuppressionRule>>("/alert-suppression-rules"),
   jobs: () => request<ListEnvelope<JobRun>>("/jobs/runs?limit=50"),
   watchlist: () => request<ListEnvelope<WatchlistEntry>>("/watchlist"),
+  watchlistSpotlight: () =>
+    request<ListEnvelope<WatchlistSpotlightItem>>(
+      "/watchlist/spotlight?per_asset_limit=5&since_hours=48",
+    ),
   alertPolicy: () => request<AlertPolicy>("/settings/alert-policy"),
   presets: () => request<ConfigurationPresets>("/settings/presets"),
   commands: () => request<ListEnvelope<BotCommand>>("/bot/commands"),
