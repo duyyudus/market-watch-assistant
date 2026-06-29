@@ -38,6 +38,30 @@ class _NormalizedCandidate:
     normalized_text_hash: str
 
 
+@dataclass(frozen=True)
+class NormalizationStats:
+    rows_scanned: int = 0
+    candidates: int = 0
+    skipped_stale: int = 0
+    skipped_invalid: int = 0
+    inserted_total: int = 0
+    inserted_normalized: int = 0
+    inserted_deduped: int = 0
+    inserted_ignored: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "rows_scanned": self.rows_scanned,
+            "candidates": self.candidates,
+            "skipped_stale": self.skipped_stale,
+            "skipped_invalid": self.skipped_invalid,
+            "inserted_total": self.inserted_total,
+            "inserted_normalized": self.inserted_normalized,
+            "inserted_deduped": self.inserted_deduped,
+            "inserted_ignored": self.inserted_ignored,
+        }
+
+
 def _dedup_key(
     *,
     source_type: str,
@@ -81,20 +105,42 @@ async def normalize_pending_raw_items(
     tracking_params: list[str] | set[str] | None = None,
     disclosure_noise_patterns: list[str] | None = None,
 ) -> int:
+    stats = await normalize_pending_raw_items_with_stats(
+        session,
+        limit=limit,
+        freshness_hours=freshness_hours,
+        tracking_params=tracking_params,
+        disclosure_noise_patterns=disclosure_noise_patterns,
+    )
+    return stats.inserted_total
+
+
+async def normalize_pending_raw_items_with_stats(
+    session: AsyncSession,
+    *,
+    limit: int = 500,
+    freshness_hours: int = 72,
+    tracking_params: list[str] | set[str] | None = None,
+    disclosure_noise_patterns: list[str] | None = None,
+) -> NormalizationStats:
     stmt = (
         select(RawNewsItem, NewsSource)
         .join(NewsSource, NewsSource.id == RawNewsItem.source_id)
         .outerjoin(NormalizedNewsItem, NormalizedNewsItem.raw_item_id == RawNewsItem.id)
         .where(NormalizedNewsItem.id.is_(None))
+        .order_by(RawNewsItem.fetched_at.desc(), RawNewsItem.id.desc())
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
     now = datetime.now(UTC)
 
     candidates: list[_NormalizedCandidate] = []
+    skipped_stale = 0
+    skipped_invalid = 0
     for raw, source in rows:
         title = normalize_text(raw.raw_title)
         if not title or not raw.raw_url:
+            skipped_invalid += 1
             continue
         published_at = normalize_datetime(raw.raw_published_at)
         if not is_rss_item_fresh(
@@ -103,6 +149,7 @@ async def normalize_pending_raw_items(
             now=now,
             freshness_hours=freshness_hours,
         ):
+            skipped_stale += 1
             continue
         snippet = normalize_text(raw.raw_description)
         raw_content = normalize_text(raw.raw_content)
@@ -161,7 +208,9 @@ async def normalize_pending_raw_items(
             for row in existing_rows
         }
 
-    inserted = 0
+    inserted_normalized = 0
+    inserted_deduped = 0
+    inserted_ignored = 0
     batch_active_keys: set[tuple[str, str, str]] = set()
     for candidate in candidates:
         key = _dedup_key(
@@ -181,6 +230,11 @@ async def normalize_pending_raw_items(
             processing_status = "normalized"
         if processing_status == "normalized":
             batch_active_keys.add(key)
+            inserted_normalized += 1
+        elif processing_status == "deduped":
+            inserted_deduped += 1
+        elif processing_status == "ignored":
+            inserted_ignored += 1
 
         item = NormalizedNewsItem(
             source_id=candidate.source.id,
@@ -213,8 +267,16 @@ async def normalize_pending_raw_items(
             ),
         )
         session.add(item)
-        inserted += 1
-    return inserted
+    return NormalizationStats(
+        rows_scanned=len(rows),
+        candidates=len(candidates),
+        skipped_stale=skipped_stale,
+        skipped_invalid=skipped_invalid,
+        inserted_total=len(candidates),
+        inserted_normalized=inserted_normalized,
+        inserted_deduped=inserted_deduped,
+        inserted_ignored=inserted_ignored,
+    )
 async def mark_exact_duplicates(session: AsyncSession) -> int:
     google_rss_with_snippet = and_(
         NormalizedNewsItem.source_type == "google-rss",

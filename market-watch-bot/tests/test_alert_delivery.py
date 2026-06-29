@@ -407,6 +407,18 @@ async def test_run_pipeline_records_decisions_without_delivering(monkeypatch) ->
     async def zero(*_args, **_kwargs) -> int:
         return 0
 
+    async def normalize_stats(*_args, **_kwargs):
+        return pipeline_services.NormalizationStats(
+            rows_scanned=5,
+            candidates=3,
+            skipped_stale=1,
+            skipped_invalid=1,
+            inserted_total=3,
+            inserted_normalized=1,
+            inserted_deduped=1,
+            inserted_ignored=1,
+        )
+
     async def extract_zero(*_args, **_kwargs) -> int:
         order.append("extract_entities")
         return 0
@@ -428,7 +440,7 @@ async def test_run_pipeline_records_decisions_without_delivering(monkeypatch) ->
     async def one_alert(_session) -> int:
         return 1
 
-    monkeypatch.setattr(pipeline_services, "normalize_pending_raw_items", zero)
+    monkeypatch.setattr(pipeline_services, "normalize_pending_raw_items", normalize_stats)
     monkeypatch.setattr(pipeline_services, "mark_exact_duplicates", zero)
     monkeypatch.setattr(pipeline_services, "extract_entities_with_llm", extract_zero)
     monkeypatch.setattr(pipeline_services, "embed_pending_news_items", embed_zero)
@@ -437,6 +449,7 @@ async def test_run_pipeline_records_decisions_without_delivering(monkeypatch) ->
 
     result = await pipeline_services.run_pipeline(
         PipelineSession(),
+        freshness_hours=168,
         alert_delivery_config=AlertDeliveryConfig(
             channel="telegram",
             telegram_bot_token="token",
@@ -447,6 +460,18 @@ async def test_run_pipeline_records_decisions_without_delivering(monkeypatch) ->
     )
 
     assert order == ["extract_entities", "embed_news", "cluster"]
+    assert result["rss_freshness_hours"] == 168
+    assert result["normalization_diagnostics"] == {
+        "rows_scanned": 5,
+        "candidates": 3,
+        "skipped_stale": 1,
+        "skipped_invalid": 1,
+        "inserted_total": 3,
+        "inserted_normalized": 1,
+        "inserted_deduped": 1,
+        "inserted_ignored": 1,
+    }
+    assert result["normalized"] == 3
     assert result["entities_extracted"] == 0
     assert result["clusters"] == 0
     assert result["cluster_attached_existing"] == 1

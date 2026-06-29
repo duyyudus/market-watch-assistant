@@ -27,6 +27,10 @@ MODEL_PRICING_PER_1K = {
 }
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 async def list_source_fetch_logs(
     session: AsyncSession,
     *,
@@ -169,7 +173,7 @@ async def get_llm_cost_summary(session: AsyncSession) -> dict[str, object]:
         completion_tokens = _int_usage(usage, "completion_tokens")
         total_tokens = _int_usage(usage, "total_tokens") or prompt_tokens + completion_tokens
         cost = _estimated_cost(row.model, prompt_tokens, completion_tokens)
-        day = row.created_at.astimezone(UTC).date().isoformat()
+        day = _as_utc(row.created_at).date().isoformat()
         _add_cost(
             daily.setdefault(day, _empty_cost_bucket(day)),
             prompt_tokens,

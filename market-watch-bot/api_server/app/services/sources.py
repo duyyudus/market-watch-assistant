@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,10 @@ from common.source_preview import (
 from common.source_preview import (
     preview_source_url as common_preview_source_url,
 )
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 async def list_sources(session: AsyncSession, *, enabled: bool | None) -> list[NewsSource]:
@@ -140,7 +144,7 @@ async def list_source_health(session: AsyncSession) -> list[SourceHealthRead]:
         durations = [log.duration_ms for log in source_logs if log.duration_ms is not None]
         daily_counts: dict[str, int] = defaultdict(int)
         for log in source_logs:
-            day = log.fetched_at.astimezone(UTC).date().isoformat()
+            day = _as_utc(log.fetched_at).date().isoformat()
             daily_counts[day] += int(log.item_count or 0)
         if not source.enabled:
             health_status = "disabled"

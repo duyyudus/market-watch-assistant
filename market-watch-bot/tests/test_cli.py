@@ -856,7 +856,10 @@ async def test_run_pipeline_tick_runs_pipeline_and_investigations(monkeypatch) -
         investigation_calls.append("investigation")
         return {"pending": 0, "completed": 0, "failed": 0}
 
-    async def fake_record_job_run(*_args, **_kwargs):
+    recorded_jobs = []
+
+    async def fake_record_job_run(_session, job_name, result, **_kwargs):
+        recorded_jobs.append((job_name, result))
         return None
 
     monkeypatch.setattr(worker_cli, "run_pipeline", fake_run_pipeline)
@@ -867,6 +870,7 @@ async def test_run_pipeline_tick_runs_pipeline_and_investigations(monkeypatch) -
 
     assert pipeline_calls == ["pipeline"]
     assert investigation_calls == ["investigation"]
+    assert recorded_jobs == [("pipeline", {"status": "ok"})]
 
 
 def test_cli_event_show_reports_event_details(monkeypatch) -> None:

@@ -589,6 +589,15 @@ async def client():
             embedding_text_hash="hash_6",
             vector=[0.6] * 1536,
         )
+        entity_only_spy_news_embedding = NewsItemEmbedding(
+            news_item_id="news_spy_entity_only",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_spy_entity_only",
+            vector=[0.9] * 1536,
+        )
         event_embedding = EventClusterEmbedding(
             event_cluster_id="evt_1",
             provider="openai",
@@ -615,6 +624,15 @@ async def client():
             dimensions=1536,
             embedding_text_hash="hash_8",
             vector=[0.8] * 1536,
+        )
+        entity_only_spy_event_embedding = EventClusterEmbedding(
+            event_cluster_id="evt_spy_entity_only",
+            provider="openai",
+            embedding_model="text-embedding-3-small",
+            embedding_version="1",
+            dimensions=1536,
+            embedding_text_hash="hash_spy_entity_only_event",
+            vector=[0.9] * 1536,
         )
         llm_run = LLMAnalysisRun(
             id="llm_1",
@@ -733,9 +751,11 @@ async def client():
                 older_news_embedding,
                 newer_report_news_embedding,
                 older_high_score_news_embedding,
+                entity_only_spy_news_embedding,
                 event_embedding,
                 newer_report_event_embedding,
                 older_high_score_event_embedding,
+                entity_only_spy_event_embedding,
                 llm_run,
                 investigation,
                 market_move,
@@ -844,10 +864,11 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
     filtered = await client.get("/events?limit=100&min_score=75")
     assert filtered.status_code == 200
     filtered_payload = filtered.json()
-    assert filtered_payload["total"] == 2
+    assert filtered_payload["total"] == 3
     assert [item["id"] for item in filtered_payload["items"]] == [
         "evt_1",
         "evt_older_high_score",
+        "evt_spy_entity_only",
     ]
 
     capped_exhausted = await client.get("/events?limit=100&offset=2&max_items=2")
@@ -946,7 +967,7 @@ async def test_news_list_supports_limit_and_article_domain_filter(client: AsyncC
     limited = await client.get("/news?limit=1")
     assert limited.status_code == 200
     assert len(limited.json()["items"]) == 1
-    assert limited.json()["total"] == 5
+    assert limited.json()["total"] == 6
 
     response = await client.get("/news?domain=www.example.com")
     assert response.status_code == 200
@@ -2120,9 +2141,9 @@ async def test_maintenance_endpoints(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert "total_news_items" in data
-    assert data["news_items_with_embeddings"] == 5
+    assert data["news_items_with_embeddings"] == 6
     assert data["embedding_coverage_pct"] == 100.0
-    assert data["event_clusters_with_embeddings"] == 3
+    assert data["event_clusters_with_embeddings"] == 4
     assert data["cluster_embedding_coverage_pct"] == 100.0
     assert "openai" in data["news_providers"]
     assert "text-embedding-3-small" in data["news_models"]

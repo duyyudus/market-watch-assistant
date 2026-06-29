@@ -124,8 +124,9 @@ async def run_pipeline_tick(session, settings) -> None:
             llm_config=LLMConfig.from_settings(settings),
             limit=investigation_config.max_concurrency,
         )
-        await record_job_run(session, "agent_investigation", pending_result)
-        typer.echo(f"agent_investigation: {pending_result}")
+        if pending_result.get("pending", 0):
+            await record_job_run(session, "agent_investigation", pending_result)
+            typer.echo(f"agent_investigation: {pending_result}")
     # Digest delivery and operational checks run after this transaction commits
     # (see _pipeline_loop) so their external sends / state are not rolled back.
 

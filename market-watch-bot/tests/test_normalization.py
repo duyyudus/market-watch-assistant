@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import bot_worker.services.ingestion as ingestion_services
 from bot_worker.db.models import NewsSource, RawNewsItem
 from bot_worker.normalize import (
     canonicalize_url,
@@ -169,6 +170,136 @@ async def test_normalize_google_rss_items_marks_full_text_skipped() -> None:
     assert item.full_text_available is False
     assert item.full_text_extraction_status == "skipped"
     assert item.full_text_last_error == "google_rss_feed_only"
+
+
+async def test_normalize_selects_newest_unmatched_raw_items_first() -> None:
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.executed: list[object] = []
+
+        async def execute(self, stmt):
+            self.executed.append(stmt)
+
+            class Result:
+                def all(self_inner):
+                    return []
+
+            return Result()
+
+    session = NormalizeSession()
+
+    await normalize_pending_raw_items(session)
+
+    first_stmt = str(session.executed[0]).lower()
+    assert "order by raw_news_items.fetched_at desc" in first_stmt
+    assert "raw_news_items.id desc" in first_stmt
+
+
+async def test_normalize_stats_count_skipped_rows_and_inserted_statuses() -> None:
+    source = NewsSource(
+        id="src_rss",
+        name="Market RSS",
+        source_type="rss",
+        source_score=80,
+        language="en",
+        region="global",
+        asset_classes=["global_macro"],
+    )
+    raws = [
+        RawNewsItem(
+            id="raw_fresh",
+            source_id=source.id,
+            raw_title="Oil rises",
+            raw_description="Crude climbs.",
+            raw_url="https://example.com/oil",
+            raw_published_at="2026-06-29T03:00:00+00:00",
+            raw_payload={},
+            content_hash="hash_fresh",
+            fetched_at=datetime(2026, 6, 29, 3, 1, tzinfo=UTC),
+        ),
+        RawNewsItem(
+            id="raw_duplicate",
+            source_id=source.id,
+            raw_title="Oil rises",
+            raw_description="Crude climbs.",
+            raw_url="https://example.com/oil?utm_source=x",
+            raw_published_at="2026-06-29T03:01:00+00:00",
+            raw_payload={},
+            content_hash="hash_duplicate",
+            fetched_at=datetime(2026, 6, 29, 3, 2, tzinfo=UTC),
+        ),
+        RawNewsItem(
+            id="raw_noise",
+            source_id=source.id,
+            raw_title="ETF: Net Asset Value(s)",
+            raw_description="Daily NAV disclosure.",
+            raw_url="https://example.com/nav",
+            raw_published_at="2026-06-29T03:02:00+00:00",
+            raw_payload={},
+            content_hash="hash_noise",
+            fetched_at=datetime(2026, 6, 29, 3, 3, tzinfo=UTC),
+        ),
+        RawNewsItem(
+            id="raw_stale",
+            source_id=source.id,
+            raw_title="Old market story",
+            raw_description="Old.",
+            raw_url="https://example.com/old",
+            raw_published_at="2026-05-01T09:00:00+00:00",
+            raw_payload={},
+            content_hash="hash_stale",
+            fetched_at=datetime(2026, 6, 29, 3, 4, tzinfo=UTC),
+        ),
+        RawNewsItem(
+            id="raw_invalid",
+            source_id=source.id,
+            raw_title="",
+            raw_description="Missing title.",
+            raw_url="https://example.com/invalid",
+            raw_published_at="2026-06-29T03:03:00+00:00",
+            raw_payload={},
+            content_hash="hash_invalid",
+            fetched_at=datetime(2026, 6, 29, 3, 5, tzinfo=UTC),
+        ),
+    ]
+
+    class NormalizeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+            self.execute_count = 0
+
+        async def execute(self, _stmt):
+            self.execute_count += 1
+
+            class Result:
+                def all(self_inner):
+                    if self.execute_count == 1:
+                        return [(raw, source) for raw in raws]
+                    return []
+
+            return Result()
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+    session = NormalizeSession()
+
+    stats = await ingestion_services.normalize_pending_raw_items_with_stats(
+        session,
+        freshness_hours=24,
+        disclosure_noise_patterns=["net asset value"],
+    )
+
+    assert stats.as_dict() == {
+        "rows_scanned": 5,
+        "candidates": 3,
+        "skipped_stale": 1,
+        "skipped_invalid": 1,
+        "inserted_total": 3,
+        "inserted_normalized": 1,
+        "inserted_deduped": 1,
+        "inserted_ignored": 1,
+    }
 
 
 def test_is_disclosure_noise_title_matches_configured_patterns() -> None:

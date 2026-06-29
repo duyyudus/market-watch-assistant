@@ -19,7 +19,13 @@ from bot_worker.services.alerts import record_alert_decisions
 from bot_worker.services.embeddings import embed_pending_event_clusters, embed_pending_news_items
 from bot_worker.services.events import ClusterBuildStats, build_event_clusters
 from bot_worker.services.full_text import extract_full_text_for_pending_items
-from bot_worker.services.ingestion import mark_exact_duplicates, normalize_pending_raw_items
+from bot_worker.services.ingestion import (
+    NormalizationStats,
+    mark_exact_duplicates,
+)
+from bot_worker.services.ingestion import (
+    normalize_pending_raw_items_with_stats as normalize_pending_raw_items,
+)
 from bot_worker.services.investigation import (
     queue_event_investigation_runs,
     queue_investigations_for_missed_catalysts,
@@ -147,12 +153,18 @@ async def run_pipeline(
 
     stage_start = datetime.now(UTC)
     logger.info("─── [Stage 2/12] Normalizing Raw Items ───")
-    normalized = await normalize_pending_raw_items(
+    normalization_result = await normalize_pending_raw_items(
         session,
         freshness_hours=freshness_hours,
         tracking_params=tracking_params,
         disclosure_noise_patterns=disclosure_noise_patterns,
     )
+    normalization_stats = (
+        normalization_result
+        if isinstance(normalization_result, NormalizationStats)
+        else NormalizationStats(inserted_total=int(normalization_result))
+    )
+    normalized = normalization_stats.inserted_total
     logger.info("  ✓ Normalized %d news items", normalized)
     metrics.record_stage(
         stage_name="normalize_raw_items",
@@ -526,10 +538,12 @@ async def run_pipeline(
     logger.info("======================================================================")
     return {
         "fetched": fetched,
+        "rss_freshness_hours": freshness_hours,
         "skipped_sources": skipped_sources,
         "poll_source_cooldown_skips": poll_source_cooldown_skips,
         "failed_sources": failed_sources,
         "normalized": normalized,
+        "normalization_diagnostics": normalization_stats.as_dict(),
         "duplicates": duplicates,
         "entities_extracted": entities_extracted,
         "news_embeddings": news_embeddings,
