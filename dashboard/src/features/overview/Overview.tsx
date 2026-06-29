@@ -301,11 +301,17 @@ function ActionQueue({
 function EventCard({
   event,
   detail,
-  openEvent,
+  isOpen,
+  openEventPopover,
 }: {
   event: EventCluster;
   detail?: EventDetail;
-  openEvent: (id: string) => void;
+  isOpen: boolean;
+  openEventPopover: (
+    eventId: string,
+    baseEvent: EventCluster | undefined,
+    clickEvent: MouseEvent<HTMLButtonElement>,
+  ) => void;
 }) {
   const combined = mergedEvent(event, detail);
   const trend = scoreTrend(detail);
@@ -313,9 +319,15 @@ function EventCard({
   const TrendIcon = trend?.icon;
   return (
     <button
-      className="w-full rounded-lg border border-zinc-800 bg-zinc-950/30 p-4 text-left transition-colors hover:border-primary/40 hover:bg-zinc-900/70"
+      aria-controls={isOpen ? `watchlist-event-popover-${event.id}` : undefined}
+      aria-expanded={isOpen}
+      className={classNames(
+        "w-full rounded-lg border bg-zinc-950/30 p-4 text-left transition-colors hover:border-primary/40 hover:bg-zinc-900/70",
+        isOpen ? "border-primary/60 bg-primary/5" : "border-zinc-800",
+      )}
+      data-watchlist-event-trigger={event.id}
       data-testid={`event-card-${event.id}`}
-      onClick={() => openEvent(event.id)}
+      onClick={(clickEvent) => openEventPopover(event.id, event, clickEvent)}
       type="button"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -670,8 +682,9 @@ export function Overview({
               <EventCard
                 detail={state.eventDetails[event.id]}
                 event={event}
+                isOpen={spotlightPopover?.eventId === event.id}
                 key={event.id}
-                openEvent={openEvent}
+                openEventPopover={openEventPopover}
               />
             ))}
           </div>

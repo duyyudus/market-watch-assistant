@@ -1181,6 +1181,28 @@ describe("App data states", () => {
     expect(screen.queryByText("ETF outflows pressure BTC")).not.toBeInTheDocument();
   });
 
+  it("opens top event details in an overview popover", async () => {
+    await renderLoadedApp();
+
+    const topEvents = screen.getByRole("heading", { name: "Top events" }).closest("section");
+    expect(topEvents).not.toBeNull();
+
+    fireEvent.click(
+      within(topEvents!).getByRole("button", { name: /Fed signals a slower rate path/ }),
+    );
+
+    const popover = await screen.findByRole("dialog", {
+      name: "Fed signals a slower rate path details",
+    });
+
+    expect(apiMock.event).toHaveBeenCalledWith("evt_1");
+    expect(screen.getByRole("heading", { name: "Top events" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Event clusters" })).not.toBeInTheDocument();
+    expect(within(popover).getByText("Policy makers leaned less hawkish.")).toBeInTheDocument();
+    expect(within(popover).getByText("Event ID")).toBeInTheDocument();
+    expect(within(popover).getByText("evt_1")).toBeInTheDocument();
+  });
+
   it("shows the overview caught-up state when there are no action items", async () => {
     apiMock.alerts.mockResolvedValue(envelope([]));
     apiMock.events.mockResolvedValue(
