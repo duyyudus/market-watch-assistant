@@ -85,7 +85,7 @@ def catalyst_resolve(
     summary: Annotated[str | None, typer.Option("--summary")] = None,
 ) -> None:
     """Resolve or update a missed catalyst review status."""
-    allowed = {"resolved", "no_clear_catalyst", "false_signal", "ignored"}
+    allowed = {"resolved", "no_clear_catalyst", "false_signal", "ignored", "expired"}
     if status not in allowed:
         typer.echo(f"status must be one of: {', '.join(sorted(allowed))}")
         raise typer.Exit(1)

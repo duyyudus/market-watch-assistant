@@ -1749,6 +1749,10 @@ async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> Non
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.expire_stale_missed_catalyst_reviews",
+        return_zero,
+    )
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
     monkeypatch.setattr(
         "bot_worker.services.pipeline.watchlist_market_symbol_requests",
@@ -1775,6 +1779,56 @@ async def test_run_pipeline_persists_stage_metrics_in_result(monkeypatch) -> Non
         "run_missed_catalyst_review",
     ]
     assert all("duration_ms" in stage for stage in metrics["stages"])
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_expires_stale_missed_catalysts_before_review(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def return_zero(*_args, **_kwargs):
+        return 0
+
+    async def return_empty_list(*_args, **_kwargs):
+        return []
+
+    async def return_cluster_stats(*_args, **_kwargs):
+        from bot_worker.services.events import ClusterBuildStats
+
+        return ClusterBuildStats()
+
+    async def return_full_text_stats(*_args, **_kwargs):
+        return type("FullTextStats", (), {"extracted": 0, "failed": 0})()
+
+    async def expire_stale(*_args, **_kwargs):
+        calls.append("expire")
+        return 3
+
+    async def run_review(*_args, **_kwargs):
+        calls.append("review")
+        return 0
+
+    monkeypatch.setattr("bot_worker.services.pipeline.normalize_pending_raw_items", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.mark_exact_duplicates", return_zero)
+    monkeypatch.setattr("bot_worker.services.pipeline.build_event_clusters", return_cluster_stats)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.extract_full_text_for_pending_items",
+        return_full_text_stats,
+    )
+    monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.expire_stale_missed_catalyst_reviews",
+        expire_stale,
+    )
+    monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", run_review)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.watchlist_market_symbol_requests",
+        return_empty_list,
+    )
+
+    result = await run_pipeline(EmptyPipelineSession())
+
+    assert calls == ["expire", "review"]
+    assert result["missed_catalysts_expired"] == 3
 
 
 @pytest.mark.asyncio
@@ -1822,6 +1876,10 @@ async def test_run_pipeline_isolates_entity_extraction_failure_from_later_stages
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.expire_stale_missed_catalyst_reviews",
+        return_zero,
+    )
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
     monkeypatch.setattr(
         "bot_worker.services.pipeline.watchlist_market_symbol_requests",
@@ -1877,6 +1935,10 @@ async def test_run_pipeline_keeps_full_text_stage_success_for_terminal_fallbacks
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.expire_stale_missed_catalyst_reviews",
+        return_zero,
+    )
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
     monkeypatch.setattr(
         "bot_worker.services.pipeline.watchlist_market_symbol_requests",
@@ -1948,6 +2010,10 @@ async def test_run_pipeline_keeps_poll_sources_success_for_interval_skips(monkey
         return_full_text_stats,
     )
     monkeypatch.setattr("bot_worker.services.pipeline.record_alert_decisions", return_zero)
+    monkeypatch.setattr(
+        "bot_worker.services.pipeline.expire_stale_missed_catalyst_reviews",
+        return_zero,
+    )
     monkeypatch.setattr("bot_worker.services.pipeline.run_missed_catalyst_review", return_zero)
     monkeypatch.setattr(
         "bot_worker.services.pipeline.watchlist_market_symbol_requests",

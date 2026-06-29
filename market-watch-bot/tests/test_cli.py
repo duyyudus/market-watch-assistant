@@ -1916,6 +1916,45 @@ def test_cli_catalyst_resolve_updates_review(monkeypatch) -> None:
     assert '"id": "review_1"' in result.output
 
 
+def test_cli_catalyst_resolve_accepts_expired_status(monkeypatch) -> None:
+    review = MissedCatalystReview(
+        id="review_1",
+        asset_symbol="BTCUSDT",
+        asset_class="crypto",
+        move_window="1d",
+        price_change_pct=5.2,
+    )
+
+    class CatalystSession:
+        async def get(self, model, key):
+            assert model is MissedCatalystReview
+            assert key == "review_1"
+            return review
+
+    async def fake_with_session(fn):
+        return await fn(CatalystSession())
+
+    monkeypatch.setattr(catalyst_cli, "_with_session", fake_with_session)
+
+    result = runner.invoke(
+        app,
+        [
+            "catalyst",
+            "resolve",
+            "review_1",
+            "--status",
+            "expired",
+            "--summary",
+            "No longer actionable after 24h",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert review.status == "expired"
+    assert review.agent_summary == "No longer actionable after 24h"
+    assert '"status": "expired"' in result.output
+
+
 def test_cli_health_alerts_reports_delivery_counts(monkeypatch) -> None:
     class HealthSession:
         def __init__(self) -> None:

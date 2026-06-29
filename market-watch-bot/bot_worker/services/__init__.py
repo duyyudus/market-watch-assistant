@@ -80,6 +80,7 @@ from bot_worker.services.llm import (
     summarize_event_with_llm,
 )
 from bot_worker.services.market import (
+    expire_stale_missed_catalyst_reviews,
     fetch_market_moves,
     fetch_market_moves_with_stats,
     market_move_score_for_cluster,
@@ -186,6 +187,7 @@ __all__ = [
     "refresh_source_quality_scores",
     "retention_preview",
     "run_baseline_reset",
+    "expire_stale_missed_catalyst_reviews",
     "run_asset_investigation",
     "run_event_investigation",
     "run_existing_investigation",

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot_worker.catalysts import (
@@ -32,6 +33,7 @@ from bot_worker.services.external_providers import request_with_retry
 from common.market import MarketResolvedSymbolRequest
 
 COINGECKO_MISSING_API_KEY_ERROR = "COINGECKO_API_KEY is required for CoinGecko market data"
+MISSED_CATALYST_ACTION_TTL = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,24 @@ async def store_market_moves(session: AsyncSession, moves: list[MarketMoveDraft]
             )
         )
     return len(moves)
+
+
+async def expire_stale_missed_catalyst_reviews(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    cutoff = (now or datetime.now(UTC)) - MISSED_CATALYST_ACTION_TTL
+    result = await session.execute(
+        update(MissedCatalystReview)
+        .where(MissedCatalystReview.detected_event_cluster_id.is_(None))
+        .where(MissedCatalystReview.status.in_(("pending", "investigating")))
+        .where(MissedCatalystReview.created_at < cutoff)
+        .values(status="expired")
+    )
+    return result.rowcount or 0
+
+
 async def fetch_market_moves(
     *,
     symbols: list[str],

@@ -33,6 +33,7 @@ from bot_worker.services.investigation import (
 )
 from bot_worker.services.llm import enrich_event_clusters_with_llm, extract_entities_with_llm
 from bot_worker.services.market import (
+    expire_stale_missed_catalyst_reviews,
     fetch_market_moves_with_stats,
     run_missed_catalyst_review,
     store_market_moves,
@@ -508,16 +509,22 @@ async def run_pipeline(
     )
 
     missed_catalysts_created = 0
+    missed_catalysts_expired = 0
     stage_start = datetime.now(UTC)
     logger.info("─── [Stage 12/12] Missed Catalyst Review ───")
     stage_status = "success"
     try:
-        missed_catalysts_created = await _run_stage_savepoint(
-            session,
-            lambda: run_missed_catalyst_review(session, window="1d"),
+        async def run_missed_catalyst_stage() -> tuple[int, int]:
+            expired = await expire_stale_missed_catalyst_reviews(session)
+            created = await run_missed_catalyst_review(session, window="1d")
+            return expired, created
+
+        missed_catalysts_expired, missed_catalysts_created = await _run_stage_savepoint(
+            session, run_missed_catalyst_stage
         )
         logger.info(
-            "  ✓ Completed review; created %d missed catalyst tasks",
+            "  ✓ Completed review; expired %d stale tasks; created %d missed catalyst tasks",
+            missed_catalysts_expired,
             missed_catalysts_created,
         )
     except Exception as exc:  # noqa: BLE001
@@ -567,6 +574,7 @@ async def run_pipeline(
         "delivered_alerts": delivered_alerts,
         "failed_alert_deliveries": failed_alert_deliveries,
         "missed_catalysts_created": missed_catalysts_created,
+        "missed_catalysts_expired": missed_catalysts_expired,
         "degraded_stages": sorted(set(degraded_stages)),
         "failed_stages": sorted(set(failed_stages)),
         "rate_limit_skips": rate_limit_skips,
