@@ -105,10 +105,10 @@ npm run lint
 npm run e2e
 ```
 
-Docker Compose can run the implemented service targets from the repository root:
+The unified Docker build script can run the implemented service targets from the repository root:
 
 ```bash
-docker compose up --build
+./docker-build local --env-file .env.local
 ```
 
 ## Coding Conventions

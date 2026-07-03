@@ -1,20 +1,286 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
-if [[ -f .env ]]; then
-  set -a
-  source .env
-  set +a
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./docker-build local [options]
+  ./docker-build prod [options]
+
+Modes:
+  local                     Build images with Docker Compose and start containers.
+  prod                      Build Linux images with buildx and push to REGISTRY_REF.
+
+Options:
+  --env-file FILE           Scenario env file. Defaults to .env.local or .env.prod.
+  --target TARGETS          all, bot-worker, api-server, dashboard. Repeatable or comma-separated.
+  --tag TAG                 Image tag. Overrides IMAGE_TAG from the env file.
+  --platform PLATFORM       Docker platform. Defaults to host platform for local, linux/amd64 for prod.
+  --build-only              Local mode: build images without starting containers.
+  --preview                 Print resolved Compose settings and exit without building.
+  --dry-run                 Print commands without running them.
+  -h, --help                Show this help.
+
+Examples:
+  ./docker-build local --env-file .env.local
+  ./docker-build local --preview
+  ./docker-build local --env-file .env.local --build-only --target dashboard
+  ./docker-build prod --preview
+  ./docker-build prod --env-file .env.prod --tag 2026.07.03
+USAGE
+}
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+run() {
+  echo "+ $*"
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    "$@"
+  fi
+}
+
+load_env_file() {
+  local file="$1"
+  local line key value
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      ""|\#*) continue ;;
+    esac
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+    if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+      value="${value#\"}"
+      value="${value%\"}"
+    elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+      value="${value#\'}"
+      value="${value%\'}"
+    fi
+
+    export "${key}=${value}"
+  done < "${file}"
+}
+
+append_targets() {
+  local raw="$1"
+  local old_ifs="${IFS}"
+  local target
+  IFS=","
+  for target in ${raw}; do
+    target="${target#"${target%%[![:space:]]*}"}"
+    target="${target%"${target##*[![:space:]]}"}"
+    [[ -n "${target}" ]] && TARGETS+=("${target}")
+  done
+  IFS="${old_ifs}"
+}
+
+normalize_targets() {
+  local normalized=()
+  local target
+
+  if [[ "${#TARGETS[@]}" -eq 0 ]]; then
+    TARGETS=("all")
+  fi
+
+  for target in "${TARGETS[@]}"; do
+    case "${target}" in
+      all)
+        normalized=("bot-worker" "api-server" "dashboard")
+        ;;
+      bot-worker|api-server|dashboard)
+        normalized+=("${target}")
+        ;;
+      *)
+        die "unsupported target '${target}'"
+        ;;
+    esac
+  done
+
+  TARGETS=()
+  for target in "${normalized[@]}"; do
+    case " ${TARGETS[*]-} " in
+      *" ${target} "*) ;;
+      *) TARGETS+=("${target}") ;;
+    esac
+  done
+}
+
+image_for_target() {
+  case "$1" in
+    bot-worker) echo "${IMAGE_PREFIX}market-watch-assistant-bot-worker:${IMAGE_TAG}" ;;
+    api-server) echo "${IMAGE_PREFIX}market-watch-assistant-api-server:${IMAGE_TAG}" ;;
+    dashboard) echo "${IMAGE_PREFIX}market-watch-assistant-dashboard:${IMAGE_TAG}" ;;
+    *) die "unsupported target '$1'" ;;
+  esac
+}
+
+preview_compose_config() {
+  echo
+  echo "Resolved Compose config:"
+  echo "+ docker compose --env-file ${ENV_FILE} config"
+  docker compose --env-file "${ENV_FILE}" config
+}
+
+preview_buildx_commands() {
+  local target image
+
+  echo
+  echo "Production buildx commands:"
+  for target in "${TARGETS[@]}"; do
+    image="$(image_for_target "${target}")"
+    printf '+ docker buildx build --platform %q --target %q --tag %q ' \
+      "${PLATFORM}" "${target}" "${image}"
+    printf -- '--build-arg %q --build-arg %q --push .\n' \
+      "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
+      "VITE_API_AUTH_TOKEN=${VITE_API_AUTH_TOKEN:-}"
+  done
+}
+
+MODE="${1:-}"
+if [[ -z "${MODE}" || "${MODE}" == "-h" || "${MODE}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+shift
+
+case "${MODE}" in
+  local|prod) ;;
+  *) die "first argument must be 'local' or 'prod'" ;;
+esac
+
+ENV_FILE=""
+PLATFORM=""
+TARGETS=()
+BUILD_ONLY=0
+DRY_RUN=0
+PREVIEW=0
+TAG_OVERRIDE=""
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --env-file)
+      [[ "$#" -ge 2 ]] || die "--env-file requires a value"
+      ENV_FILE="$2"
+      shift 2
+      ;;
+    --target)
+      [[ "$#" -ge 2 ]] || die "--target requires a value"
+      append_targets "$2"
+      shift 2
+      ;;
+    --tag)
+      [[ "$#" -ge 2 ]] || die "--tag requires a value"
+      TAG_OVERRIDE="$2"
+      shift 2
+      ;;
+    --platform)
+      [[ "$#" -ge 2 ]] || die "--platform requires a value"
+      PLATFORM="$2"
+      shift 2
+      ;;
+    --build-only)
+      BUILD_ONLY=1
+      shift
+      ;;
+    --preview)
+      PREVIEW=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option '$1'"
+      ;;
+  esac
+done
+
+if [[ -z "${ENV_FILE}" ]]; then
+  if [[ "${MODE}" == "local" ]]; then
+    ENV_FILE=".env.local"
+  else
+    ENV_FILE=".env.prod"
+  fi
 fi
 
-: "${LOCAL_VITE_API_BASE_URL:=http://localhost:8030}"
-: "${VITE_API_BASE_URL:=${LOCAL_VITE_API_BASE_URL}}"
-: "${VITE_API_AUTH_TOKEN:=}"
-export VITE_API_BASE_URL
-export VITE_API_AUTH_TOKEN
-BUILD_NUMBER=$(git rev-list --count HEAD)
+[[ -f "${ENV_FILE}" ]] || die "env file '${ENV_FILE}' does not exist"
+
+load_env_file "${ENV_FILE}"
+
+normalize_targets
+
+IMAGE_TAG="${TAG_OVERRIDE:-${IMAGE_TAG:-latest}}"
+export IMAGE_TAG
+export APP_ENV_FILE="${ENV_FILE}"
+
+BUILD_NUMBER="$(git rev-list --count HEAD)"
 export BUILD_NUMBER
+
+echo "Mode: ${MODE}"
+echo "Env file: ${ENV_FILE}"
 echo "Build number: ${BUILD_NUMBER}"
+echo "Image tag: ${IMAGE_TAG}"
+echo "Targets: ${TARGETS[*]}"
+
+if [[ "${MODE}" == "local" ]]; then
+  export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://localhost:${API_HOST_PORT:-8030}}"
+  export VITE_API_AUTH_TOKEN="${VITE_API_AUTH_TOKEN:-}"
+  if [[ -n "${PLATFORM}" && "${PLATFORM}" != "local" ]]; then
+    export DOCKER_DEFAULT_PLATFORM="${PLATFORM}"
+    echo "Platform: ${PLATFORM}"
+  fi
+  echo "Dashboard API base URL: ${VITE_API_BASE_URL}"
+  if [[ "${PREVIEW}" == "1" ]]; then
+    preview_compose_config
+    exit 0
+  fi
+  run docker compose --env-file "${ENV_FILE}" build "${TARGETS[@]}"
+  if [[ "${BUILD_ONLY}" != "1" ]]; then
+    run docker compose --env-file "${ENV_FILE}" up -d
+  fi
+  exit 0
+fi
+
+[[ "${BUILD_ONLY}" != "1" ]] || die "--build-only is only supported in local mode"
+: "${REGISTRY_REF:?Set REGISTRY_REF in ${ENV_FILE}}"
+: "${VITE_API_BASE_URL:?Set VITE_API_BASE_URL in ${ENV_FILE}}"
+
+PLATFORM="${PLATFORM:-linux/amd64}"
+IMAGE_PREFIX="${REGISTRY_REF%/}/"
+
+echo "Registry: ${REGISTRY_REF}"
+echo "Platform: ${PLATFORM}"
 echo "Dashboard API base URL: ${VITE_API_BASE_URL}"
-docker compose down && docker compose -f docker-compose.yml build && docker compose up -d
+
+if [[ "${PREVIEW}" == "1" ]]; then
+  preview_compose_config
+  preview_buildx_commands
+  exit 0
+fi
+
+for target in "${TARGETS[@]}"; do
+  image="$(image_for_target "${target}")"
+  run docker buildx build \
+    --platform "${PLATFORM}" \
+    --target "${target}" \
+    --tag "${image}" \
+    --build-arg "VITE_API_BASE_URL=${VITE_API_BASE_URL}" \
+    --build-arg "VITE_API_AUTH_TOKEN=${VITE_API_AUTH_TOKEN:-}" \
+    --push \
+    .
+done

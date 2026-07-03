@@ -26,10 +26,24 @@ Detailed architecture, schemas, pipelines, and interface specifications are avai
 
 ## 🚀 Quick Start
 
-### 1. Run via Docker Compose
-Start the database, worker, server, and dashboard containers:
+### 1. Run via Docker
+Create a local Docker scenario env file, then build and start the worker, API, and dashboard containers:
 ```bash
-docker compose up --build
+cp .env.local.example .env.local
+./docker-build local --env-file .env.local
+```
+
+The Compose setup expects an external PostgreSQL database from `DATABASE_URL`; it does not start a database container.
+
+Build only one target without starting containers:
+```bash
+./docker-build local --env-file .env.local --build-only --target dashboard
+```
+
+Build Linux production images and push them to a registry:
+```bash
+cp .env.prod.example .env.prod
+./docker-build prod --env-file .env.prod --tag latest
 ```
 
 ### 2. Manual Development Setup
