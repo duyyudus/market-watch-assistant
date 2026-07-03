@@ -5,6 +5,7 @@ import type {
   AlertSuppressionRule,
   ConfigurationPresets,
   EventDetail,
+  NewsDetail,
 } from "../../api";
 import { FeatureTabs } from "../../components/FeatureTabs";
 import { AlertDecisionsTab, AlertSettingsTab } from "./tabs/AlertTabs";
@@ -32,10 +33,13 @@ export function Alerts({
   selectedAlertId,
   selectedAlertDetail,
   selectedAlertEventDetail,
+  newsDetails,
   alertDetailError,
   eventDetailError,
+  newsDetailError,
   retryAlerts,
   retrySelectedAlertDetail,
+  loadNewsDetail,
   onSelectAlert,
   alertPolicy,
   alertPolicyError,
@@ -59,10 +63,13 @@ export function Alerts({
   selectedAlertId?: string;
   selectedAlertDetail?: AlertDecision;
   selectedAlertEventDetail?: EventDetail;
+  newsDetails: Record<string, NewsDetail>;
   alertDetailError?: string;
   eventDetailError?: string;
+  newsDetailError?: string;
   retryAlerts: () => Promise<void>;
   retrySelectedAlertDetail: () => Promise<void>;
+  loadNewsDetail: (id: string) => void;
   onSelectAlert: (id: string) => void;
   alertPolicy: AlertPolicy | null;
   alertPolicyError?: string;
@@ -92,9 +99,12 @@ export function Alerts({
           onSelectAlert={onSelectAlert}
           selectedAlertDetail={selectedAlertDetail}
           selectedAlertEventDetail={selectedAlertEventDetail}
+          newsDetails={newsDetails}
           alertError={alertDetailError}
           eventError={eventDetailError}
+          newsDetailError={newsDetailError}
           retryDetail={retrySelectedAlertDetail}
+          loadNewsDetail={loadNewsDetail}
         />
       ) : (
         <AlertSettingsTab

@@ -381,8 +381,10 @@ export function App() {
                 selectedAlertId={selectedAlert?.id}
                 selectedAlertDetail={selectedAlertDetail}
                 selectedAlertEventDetail={selectedAlertEventDetail}
+                newsDetails={state.newsDetails}
                 alertDetailError={resourceErrors.alertDetail}
                 eventDetailError={resourceErrors.eventDetail}
+                newsDetailError={resourceErrors.newsDetail}
                 retryAlerts={() => load(true)}
                 retrySelectedAlertDetail={async () => {
                   if (selectedAlert?.id) {
@@ -390,6 +392,7 @@ export function App() {
                     await loadEventDetail(selectedAlert.event_cluster_id, true);
                   }
                 }}
+                loadNewsDetail={(id) => void loadNewsDetail(id)}
                 onSelectAlert={(id) => setSelectedAlertId(id)}
                 alertPolicy={state.alertPolicy}
                 alertPolicyError={resourceErrors.alertPolicy}

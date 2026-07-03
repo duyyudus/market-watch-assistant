@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight, RefreshCcw } from "lucide-react";
 
-import type { AlertDecision, EventDetail } from "../../../api";
+import type { AlertDecision, EventDetail, NewsDetail } from "../../../api";
 import { Panel } from "../../../components/Panel";
 import { AlertsTable } from "../AlertsTable";
 import { AlertDetailPanel } from "./AlertDetailPanel";
@@ -27,10 +27,13 @@ export function AlertDecisionsTab({
   selectedAlertId,
   selectedAlertDetail,
   selectedAlertEventDetail,
+  newsDetails,
   alertError,
   eventError,
+  newsDetailError,
   retry,
   retryDetail,
+  loadNewsDetail,
   onSelectAlert,
 }: {
   alerts: AlertDecision[];
@@ -46,10 +49,13 @@ export function AlertDecisionsTab({
   selectedAlertId?: string;
   selectedAlertDetail?: AlertDecision;
   selectedAlertEventDetail?: EventDetail;
+  newsDetails: Record<string, NewsDetail>;
   alertError?: string;
   eventError?: string;
+  newsDetailError?: string;
   retry: () => Promise<void>;
   retryDetail: () => Promise<void>;
+  loadNewsDetail: (id: string) => void;
   onSelectAlert: (id: string) => void;
 }) {
   const pageStart = total > 0 ? Math.min(offset + 1, total) : 0;
@@ -146,9 +152,12 @@ export function AlertDecisionsTab({
           <AlertDetailPanel
             alert={selectedAlertDetail}
             eventDetail={selectedAlertEventDetail}
+            newsDetails={newsDetails}
             alertError={alertError}
             eventError={eventError}
+            newsDetailError={newsDetailError}
             retry={retryDetail}
+            loadNewsDetail={loadNewsDetail}
           />
         </Panel>
       </div>

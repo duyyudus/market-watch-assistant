@@ -1,10 +1,21 @@
-import { AlertTriangle, Bell, CheckCircle2, Database, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  CheckCircle2,
+  Database,
+  ExternalLink,
+  X,
+  XCircle,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
-import type { AlertDecision, EventDetail } from "../../../api";
+import type { AlertDecision, EventDetail, EventTimelineItem, NewsDetail } from "../../../api";
 import { EmptyState } from "../../../components/EmptyState";
 import { MetadataRow } from "../../../components/MetadataRow";
 import { SectionError } from "../../../components/SectionError";
 import { StatusBadge, type StatusBadgeTone } from "../../../components/StatusBadge";
+import { classNames } from "../../../lib/classNames";
 import { formatTime, formatTimeRange } from "../../../lib/time";
 
 function formatLabel(value: string) {
@@ -22,16 +33,56 @@ const decisionTones: Record<string, StatusBadgeTone> = {
 export function AlertDetailPanel({
   alert,
   eventDetail,
+  newsDetails,
   alertError,
   eventError,
+  newsDetailError,
   retry,
+  loadNewsDetail,
 }: {
   alert?: AlertDecision;
   eventDetail?: EventDetail;
+  newsDetails: Record<string, NewsDetail>;
   alertError?: string;
   eventError?: string;
+  newsDetailError?: string;
   retry: () => Promise<void>;
+  loadNewsDetail: (id: string) => void;
 }) {
+  const [activeNewsId, setActiveNewsId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveNewsId(null);
+  }, [alert?.id, eventDetail?.id]);
+
+  useEffect(() => {
+    if (!activeNewsId) return undefined;
+    const newsId = activeNewsId;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setActiveNewsId(null);
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const insidePopover = Boolean(target.closest("[data-alert-news-popover]"));
+      const insideTrigger = Boolean(
+        target.closest(`[data-alert-news-trigger="${CSS.escape(newsId)}"]`),
+      );
+      if (!insidePopover && !insideTrigger) {
+        setActiveNewsId(null);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [activeNewsId]);
+
   if (alertError) {
     return <SectionError title="Alert detail unavailable" message={alertError} retry={retry} />;
   }
@@ -61,6 +112,15 @@ export function AlertDetailPanel({
   const investigationData = alert.score_breakdown?.investigation;
 
   const badgeTone = decisionTones[alert.decision] || "neutral";
+  const activeNewsItem = eventDetail?.timeline.find((item) => item.news_item_id === activeNewsId);
+  const activeNewsDetail = activeNewsId ? newsDetails[activeNewsId] : undefined;
+
+  function openNewsPopover(item: EventTimelineItem) {
+    setActiveNewsId(item.news_item_id);
+    if (!newsDetails[item.news_item_id]) {
+      loadNewsDetail(item.news_item_id);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -323,22 +383,56 @@ export function AlertDetailPanel({
         {eventDetail?.timeline.length ? (
           <div className="space-y-2">
             {eventDetail.timeline.map((item) => (
-              <a
-                className="block rounded-md border border-zinc-800 bg-zinc-950/30 p-3 text-sm hover:border-primary/40"
-                href={item.url}
+              <div
+                className={classNames(
+                  "rounded-md border bg-zinc-950/30 text-sm transition-colors",
+                  activeNewsId === item.news_item_id
+                    ? "border-primary/60 bg-primary/5"
+                    : "border-zinc-800 hover:border-primary/40",
+                )}
                 key={item.news_item_id}
-                rel="noopener noreferrer"
-                target="_blank"
               >
-                <div className="font-semibold text-zinc-100">{item.title}</div>
-                <div className="mt-1 text-xs text-base-content/60">
-                  {item.source_name} · {item.relation_type} · {item.similarity_score ?? "-"}
+                <div className="flex items-start gap-2 p-3">
+                  <button
+                    aria-controls={
+                      activeNewsId === item.news_item_id
+                        ? `alert-news-popover-${item.news_item_id}`
+                        : undefined
+                    }
+                    aria-expanded={activeNewsId === item.news_item_id}
+                    className="min-w-0 flex-1 text-left"
+                    data-alert-news-trigger={item.news_item_id}
+                    onClick={() => openNewsPopover(item)}
+                    type="button"
+                  >
+                    <div className="font-semibold text-zinc-100">{item.title}</div>
+                    <div className="mt-1 text-xs text-base-content/60">
+                      {item.source_name} · {item.relation_type} · {item.similarity_score ?? "-"}
+                    </div>
+                    <div className="mt-1 text-xs text-base-content/50">
+                      {formatTime(item.published_at ?? item.fetched_at ?? item.added_at)}
+                    </div>
+                  </button>
+                  <a
+                    aria-label={`Open article ${item.title}`}
+                    className="btn btn-square btn-ghost btn-xs shrink-0"
+                    href={item.url}
+                    rel="noopener noreferrer"
+                    target="_blank"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
                 </div>
-                <div className="mt-1 text-xs text-base-content/50">
-                  {formatTime(item.published_at ?? item.fetched_at ?? item.added_at)}
-                </div>
-              </a>
+              </div>
             ))}
+            {activeNewsItem ? (
+              <ArticleTextModal
+                detail={activeNewsDetail}
+                error={newsDetailError}
+                item={activeNewsItem}
+                onClose={() => setActiveNewsId(null)}
+              />
+            ) : null}
           </div>
         ) : (
           <div className="text-sm text-base-content/60">
@@ -347,5 +441,67 @@ export function AlertDetailPanel({
         )}
       </section>
     </div>
+  );
+}
+
+function ArticleTextModal({
+  item,
+  detail,
+  error,
+  onClose,
+}: {
+  item: EventTimelineItem;
+  detail?: NewsDetail;
+  error?: string;
+  onClose: () => void;
+}) {
+  if (typeof document === "undefined") return null;
+  const timestamp = formatTime(item.published_at ?? item.fetched_at ?? item.added_at);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div
+        aria-label={`${item.title} article text`}
+        aria-modal="true"
+        className="flex h-[calc(100vh-2rem)] max-h-[760px] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950 text-left shadow-2xl shadow-black/50"
+        data-alert-news-popover={item.news_item_id}
+        id={`alert-news-popover-${item.news_item_id}`}
+        role="dialog"
+      >
+        <div className="shrink-0 flex items-start justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+          <div className="min-w-0">
+            <h4 className="text-base font-bold leading-6 text-zinc-100">{item.title}</h4>
+            <div className="mt-1 text-xs text-base-content/60">
+              {item.source_name} · {timestamp}
+            </div>
+          </div>
+          <button
+            aria-label="Close article text"
+            className="btn btn-square btn-ghost btn-sm shrink-0"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-8">
+          {detail ? (
+            <pre className="min-h-full whitespace-pre-wrap break-words rounded-md bg-zinc-900/70 p-4 text-sm leading-relaxed text-zinc-200">
+              {detail.raw_content || "No full article text available."}
+            </pre>
+          ) : error ? (
+            <div className="rounded-md border border-error/30 bg-error/10 p-3 text-sm text-error">
+              {error}
+            </div>
+          ) : (
+            <div className="rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-sm text-base-content/60">
+              Loading article text...
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

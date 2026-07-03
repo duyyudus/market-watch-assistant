@@ -332,6 +332,14 @@ export function useDashboardData() {
     async (id: string, invalidate = false) => {
       const key = `news:${id}`;
       if (invalidate) resourceCache.invalidate(key);
+      // Clear any stale error before loading so a previous failure (possibly for a
+      // different news item) does not surface against the item being loaded now.
+      setResourceErrors((current) => {
+        if (!("newsDetail" in current)) return current;
+        const next = { ...current };
+        delete next.newsDetail;
+        return next;
+      });
       const result = await settle("newsDetail", resourceCache.get(key, () => api.newsDetail(id)));
       if ("error" in result) {
         setResourceErrors((current) => ({ ...current, newsDetail: result.error }));

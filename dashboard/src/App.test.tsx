@@ -2428,6 +2428,17 @@ describe("App data states", () => {
     expect(within(detailPanel).getByText("Federal Reserve · seed · 91")).toBeInTheDocument();
     expect(apiMock.alert).toHaveBeenCalledWith("alert_1");
     expect(apiMock.event).toHaveBeenCalledWith("evt_1");
+
+    fireEvent.click(within(detailPanel).getByRole("button", { name: /Fed signals a slower rate path/i }));
+
+    await waitFor(() => expect(apiMock.newsDetail).toHaveBeenCalledWith("news_1"));
+    const articlePopover = await screen.findByRole("dialog", {
+      name: /Fed signals a slower rate path article text/i,
+    });
+    expect(within(articlePopover).getByText("Full normalized article text.")).toBeInTheDocument();
+    expect(
+      within(detailPanel).getByRole("link", { name: /Open article Fed signals a slower rate path/i }),
+    ).toHaveAttribute("href", "https://example.com/news");
   });
 
 });
