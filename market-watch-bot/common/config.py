@@ -147,7 +147,7 @@ class InvestigationSettings(BaseModel):
 
 
 class MarketDataConfig(BaseModel):
-    vn_base_url: str = "http://192.168.100.39:8020"
+    vnstock_base_url: str = ""
     crypto_provider: str = "binance"
     crypto_fallback_provider: str = "coingecko"
     global_provider: str = "hyperliquid"
@@ -323,6 +323,7 @@ def _read_env(path: Path) -> dict[str, str]:
             "REDIS_URL",
             "API_CORS_ORIGINS",
             "API_CORS_ORIGIN_REGEX",
+            "VNSTOCK_BASE_URL",
         }
     }
     return {**file_values, **process_values}
@@ -350,6 +351,11 @@ def load_settings(
         "redis_url": env_data.get("REDIS_URL"),
         "api_cors_origin_regex": origin_regex or DEFAULT_API_CORS_ORIGIN_REGEX,
     }
+    vnstock_base_url = env_data.get("VNSTOCK_BASE_URL")
+    if vnstock_base_url:
+        market_data = dict(merged.get("market_data") or {})
+        market_data["vnstock_base_url"] = vnstock_base_url
+        merged["market_data"] = market_data
     if origins:
         merged["api_cors_origins"] = [
             origin.strip() for origin in origins.split(",") if origin.strip()

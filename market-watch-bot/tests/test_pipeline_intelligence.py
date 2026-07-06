@@ -761,7 +761,7 @@ async def test_market_fetch_continues_after_symbol_provider_failures() -> None:
     result = await fetch_market_moves_with_stats(
         symbols=["BTC", "VIC"],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"BTC": "bitcoin"},
         coingecko_api_key="demo-key",
         client=MarketClient(),
@@ -794,7 +794,7 @@ async def test_market_fetch_uses_configured_crypto_provider_order() -> None:
     result = await fetch_market_moves_with_stats(
         symbols=["BTC"],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"BTC": "bitcoin"},
         crypto_provider="coingecko",
         crypto_fallback_provider="binance",
@@ -856,7 +856,7 @@ async def test_market_fetch_uses_resolved_provider_symbols_directly() -> None:
             ),
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={},
         crypto_provider="binance",
         crypto_fallback_provider="coingecko",
@@ -891,7 +891,7 @@ async def test_market_fetch_missing_coingecko_key_falls_back_to_binance() -> Non
     result = await fetch_market_moves_with_stats(
         symbols=["BTC"],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"BTC": "bitcoin"},
         crypto_provider="coingecko",
         crypto_fallback_provider="binance",
@@ -914,7 +914,7 @@ async def test_market_fetch_missing_coingecko_key_fails_when_no_fallback() -> No
     result = await fetch_market_moves_with_stats(
         symbols=["BTC"],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"BTC": "bitcoin"},
         crypto_provider="coingecko",
         crypto_fallback_provider="",
@@ -960,7 +960,7 @@ async def test_market_fetch_resolved_crypto_uses_configured_fallback() -> None:
             )
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={},
         client=client,
     )
@@ -991,7 +991,7 @@ async def test_market_fetch_surfaces_unresolved_resolution_without_guessing() ->
             )
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"ABCD": "xyz:ABCD"},
         client=MarketClient(),
     )
@@ -1076,7 +1076,7 @@ async def test_market_fetch_routes_watchlist_metadata_without_vn_catchall() -> N
             MarketSymbolRequest(symbol="XRP", asset_class="crypto", region="crypto"),
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={
             "SPX": "xyz:SP500",
             "GOLD": "xyz:GOLD",
@@ -1119,7 +1119,7 @@ async def test_market_fetch_thin_hyperliquid_market_is_skipped_not_failed() -> N
             MarketSymbolRequest(symbol="VIX", asset_class="index", region="us"),
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"SPX": "xyz:SP500", "VIX": "xyz:VIX"},
         hyperliquid_min_day_notional_volume=100000,
         client=MarketClient(),
@@ -1156,7 +1156,7 @@ async def test_market_fetch_legacy_symbols_route_mapped_crypto_and_unrouted_safe
     result = await fetch_market_moves_with_stats(
         symbols=["XRP", "UNKNOWN"],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"XRP": "ripple"},
         crypto_provider="coingecko",
         crypto_fallback_provider="binance",
@@ -1197,7 +1197,7 @@ async def test_market_fetch_emits_one_move_per_hyperliquid_alias() -> None:
             MarketSymbolRequest(symbol="SP500", asset_class="index", region="us"),
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"SPX": "xyz:SP500", "SP500": "xyz:SP500"},
         client=client,
     )
@@ -1218,7 +1218,7 @@ async def test_market_fetch_rejects_hyperliquid_non_1d_windows() -> None:
     result = await fetch_market_moves_with_stats(
         market_symbols=[MarketSymbolRequest(symbol="SPX", asset_class="index", region="us")],
         window="1w",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={"SPX": "xyz:SP500"},
         client=MarketClient(),
     )
@@ -1262,7 +1262,7 @@ async def test_market_fetch_uses_vietnam_only_for_explicit_vietnam_assets() -> N
             MarketSymbolRequest(symbol="VIC", asset_class="vietnam_equity", region="vietnam"),
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={},
         client=client,
     )
@@ -1282,7 +1282,7 @@ async def test_market_fetch_records_unrouted_symbols_instead_of_vn_fallback() ->
             MarketSymbolRequest(symbol="UNKNOWN", asset_class="macro_theme", region="global"),
         ],
         window="1d",
-        vn_base_url="https://vn.example",
+        vnstock_base_url="https://vn.example",
         symbol_map={},
         client=MarketClient(),
     )

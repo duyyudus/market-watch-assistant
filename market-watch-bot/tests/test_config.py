@@ -28,6 +28,7 @@ def test_load_settings_merges_env_and_yaml(tmp_path: Path) -> None:
                 "OPENROUTER_API_KEY=secret-key",
                 "BRAVE_SEARCH_API_KEY=brave-key",
                 "COINGECKO_API_KEY=coingecko-key",
+                "VNSTOCK_BASE_URL=https://vn.example",
             ]
         ),
         encoding="utf-8",
@@ -52,6 +53,7 @@ alerts:
     assert settings.openrouter_api_key == "secret-key"
     assert settings.brave_search_api_key == "brave-key"
     assert settings.coingecko_api_key == "coingecko-key"
+    assert settings.market_data.vnstock_base_url == "https://vn.example"
     assert settings.app.name == "custom-watch"
     assert settings.app.environment == "test"
     assert settings.bot.polling_interval_seconds == 42
@@ -72,6 +74,47 @@ def test_load_settings_reads_coingecko_api_key_from_process_env(
     settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
 
     assert settings.coingecko_api_key == "process-coingecko-key"
+
+
+def test_load_settings_reads_vnstock_base_url_from_process_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VNSTOCK_BASE_URL", "https://vn.process.example")
+
+    settings = load_settings(env_file=env_file, settings_file=tmp_path / "missing.yml")
+
+    assert settings.market_data.vnstock_base_url == "https://vn.process.example"
+
+
+def test_load_settings_prefers_vnstock_base_url_env_over_yaml(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    settings_file = tmp_path / "settings.yml"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/app",
+                "VNSTOCK_BASE_URL=https://vn.env.example",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings_file.write_text(
+        """
+market_data:
+  vnstock_base_url: https://vn.yaml.example
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file=env_file, settings_file=settings_file)
+
+    assert settings.market_data.vnstock_base_url == "https://vn.env.example"
 
 
 def test_load_settings_ignores_redundant_api_base_url(tmp_path: Path) -> None:
@@ -156,6 +199,7 @@ def test_load_settings_uses_documented_defaults_with_explicit_database_url(tmp_p
     assert "sec.gov" in settings.investigation.official_domains
     assert "reuters.com" in settings.investigation.high_quality_domains
     assert settings.market_data.global_provider == "hyperliquid"
+    assert settings.market_data.vnstock_base_url == ""
     assert settings.market_data.hyperliquid_base_url == "https://api.hyperliquid.xyz"
     assert settings.market_data.hyperliquid_dex == "xyz"
     assert settings.market_data.hyperliquid_min_day_notional_volume == 100000

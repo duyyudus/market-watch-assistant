@@ -71,6 +71,10 @@ def test_cli_init_creates_templates(tmp_path) -> None:
     assert (tmp_path / ".env.example").exists()
     assert (tmp_path / "settings.yml").exists()
     assert "COINGECKO_API_KEY=" in (tmp_path / ".env.example").read_text(encoding="utf-8")
+    assert "VNSTOCK_BASE_URL=http://192.168.100.39:8020" in (
+        tmp_path / ".env.example"
+    ).read_text(encoding="utf-8")
+    assert "vnstock_base_url" not in (tmp_path / "settings.yml").read_text(encoding="utf-8")
     assert "Initialized" in result.output
 
 
@@ -2592,7 +2596,7 @@ def test_cli_market_fetch_without_symbols_uses_watchlist_resolutions(monkeypatch
         lambda: SimpleNamespace(
             coingecko_api_key="demo-key",
             market_data=SimpleNamespace(
-                vn_base_url="https://vn.example",
+                vnstock_base_url="https://vn.example",
                 symbol_map={},
                 crypto_provider="binance",
                 crypto_fallback_provider="coingecko",

@@ -109,7 +109,6 @@ investigation:
     - cointelegraph.com
 
 market_data:
-  vn_base_url: http://192.168.100.39:8020
   crypto_provider: coingecko
   crypto_fallback_provider: binance
   global_provider: hyperliquid

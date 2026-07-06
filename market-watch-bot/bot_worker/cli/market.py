@@ -74,7 +74,7 @@ def market_fetch(
             moves = await fetch_market_moves(
                 symbols=requested_symbols,
                 window=window,
-                vn_base_url=settings.market_data.vn_base_url,
+                vnstock_base_url=settings.market_data.vnstock_base_url,
                 symbol_map=settings.market_data.symbol_map,
                 crypto_provider=settings.market_data.crypto_provider,
                 crypto_fallback_provider=settings.market_data.crypto_fallback_provider,
@@ -99,7 +99,7 @@ def market_fetch(
             market_result = await fetch_market_moves_with_stats(
                 resolved_symbols=resolved_symbols,
                 window=window,
-                vn_base_url=settings.market_data.vn_base_url,
+                vnstock_base_url=settings.market_data.vnstock_base_url,
                 symbol_map=settings.market_data.symbol_map,
                 crypto_provider=settings.market_data.crypto_provider,
                 crypto_fallback_provider=settings.market_data.crypto_fallback_provider,

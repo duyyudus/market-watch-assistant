@@ -529,7 +529,7 @@ async def test_execute_bot_commands_market_fetch_and_catalyst_review(monkeypatch
 
     settings = SimpleNamespace(
         market_data=SimpleNamespace(
-            vn_base_url="http://mock",
+            vnstock_base_url="http://mock",
             symbol_map={"BTC": "bitcoin"},
             crypto_provider="coingecko",
             crypto_fallback_provider="binance",
