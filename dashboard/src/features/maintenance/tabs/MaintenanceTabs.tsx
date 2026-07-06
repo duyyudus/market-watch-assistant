@@ -2,6 +2,7 @@ export { FetchLogsTab } from "./FetchLogsTab";
 export { JobHistoryTab } from "./JobHistoryTab";
 export { ScoreHistoryTab } from "./ScoreHistoryTab";
 export { CatalystsTab } from "./CatalystsTab";
+export { MarketMovesTab } from "./MarketMovesTab";
 export { EmbeddingsTab } from "./EmbeddingsTab";
 export { LLMRunsTab } from "./LLMRunsTab";
 export { LLMCostsTab } from "./LLMCostsTab";

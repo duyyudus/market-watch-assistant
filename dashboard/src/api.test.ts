@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  api,
   buildAlertsPath,
   buildEventsPath,
+  buildMarketMovesPath,
   buildMaintenanceLLMCostsPath,
   buildMaintenancePipelineMetricsPath,
   buildRequestHeaders,
@@ -50,6 +52,27 @@ describe("normalizeListResponse", () => {
     expect(buildMaintenancePipelineMetricsPath(20, 40)).toBe(
       "/maintenance/pipeline-metrics?limit=20&offset=40",
     );
+  });
+
+  it("builds market moves endpoint paths with a clamped limit", () => {
+    expect(buildMarketMovesPath(100)).toBe("/market/moves?limit=100");
+    expect(buildMarketMovesPath(500)).toBe("/market/moves?limit=200");
+    expect(buildMarketMovesPath(0)).toBe("/market/moves?limit=1");
+  });
+
+  it("requests market moves from the API client", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.marketMoves(100);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/market/moves?limit=100"),
+      expect.any(Object),
+    );
+    vi.unstubAllGlobals();
   });
 
   it("builds event endpoint paths with pagination cap and score filter", () => {

@@ -1075,6 +1075,31 @@ async def test_event_detail_includes_timeline_analysis_investigation_and_market_
 
 
 @pytest.mark.asyncio
+async def test_market_moves_endpoint_serializes_recent_moves(client: AsyncClient) -> None:
+    response = await client.get("/market/moves?limit=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert {item["id"] for item in payload["items"]} == {"move_1", "move_unrelated"}
+    spy_move = next(item for item in payload["items"] if item["id"] == "move_1")
+    assert spy_move == {
+        "id": "move_1",
+        "asset_symbol": "SPY",
+        "asset_class": "equity",
+        "exchange": "NYSE",
+        "timestamp": "2026-05-29T13:10:00",
+        "window": "1h",
+        "price_change_pct": 1.7,
+        "volume_change_pct": 22.5,
+        "value_traded_change_pct": None,
+        "z_score": None,
+        "created_at": spy_move["created_at"],
+    }
+    assert "_sa_instance_state" not in spy_move
+
+
+@pytest.mark.asyncio
 async def test_source_health_endpoint_reports_status_latency_and_daily_counts(
     client: AsyncClient,
 ) -> None:

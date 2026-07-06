@@ -4,6 +4,7 @@ import {
   DollarSign,
   History,
   Layers,
+  LineChart,
   Sliders,
   Sparkles,
   Timer,
@@ -21,6 +22,7 @@ import {
   JobHistoryTab,
   LLMCostsTab,
   LLMRunsTab,
+  MarketMovesTab,
   PipelineMetricsTab,
   RetentionTab,
   ScoreHistoryTab,
@@ -31,6 +33,7 @@ type Tab =
   | "job-history"
   | "score-history"
   | "catalysts"
+  | "market-moves"
   | "embeddings"
   | "llm-costs"
   | "pipeline-metrics"
@@ -42,6 +45,7 @@ const MAINTENANCE_TABS = [
   { id: "job-history", label: "Job History", icon: History },
   { id: "score-history", label: "Score History", icon: Sliders },
   { id: "catalysts", label: "Catalysts", icon: Sparkles },
+  { id: "market-moves", label: "Market Moves", icon: LineChart },
   { id: "embeddings", label: "Embeddings Coverage", icon: Layers },
   { id: "llm-runs", label: "LLM Diagnostics", icon: Brain },
   { id: "llm-costs", label: "LLM Costs", icon: DollarSign },
@@ -71,6 +75,7 @@ export function Maintenance({
         )}
         {activeTab === "score-history" && <ScoreHistoryTab />}
         {activeTab === "catalysts" && <CatalystsTab />}
+        {activeTab === "market-moves" && <MarketMovesTab />}
         {activeTab === "embeddings" && <EmbeddingsTab />}
         {activeTab === "llm-runs" && <LLMRunsTab />}
         {activeTab === "llm-costs" && <LLMCostsTab />}

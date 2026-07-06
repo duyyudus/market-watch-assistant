@@ -27,6 +27,7 @@ from api_server.app.schemas.maintenance import (
     RetentionJobRead,
     ScoreHistoryRead,
 )
+from api_server.app.schemas.market import MarketMoveRead
 from api_server.app.schemas.news import EntityRead, NewsRead
 from api_server.app.schemas.settings import AlertPolicy, ConfigurationPresets
 from api_server.app.schemas.sources import (
@@ -72,6 +73,7 @@ __all__ = [
     "LLMCostSummary",
     "LLMRunRead",
     "ListEnvelope",
+    "MarketMoveRead",
     "NewsRead",
     "PipelineMetricsRead",
     "RetentionJobRead",

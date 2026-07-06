@@ -130,6 +130,10 @@ export type EventMarketMove = {
   z_score?: number | null;
 };
 
+export type MarketMove = EventMarketMove & {
+  created_at?: string | null;
+};
+
 export type EventLLMRun = {
   id: string;
   provider: string;
@@ -636,6 +640,11 @@ export function buildAlertsPath({
   return `/alerts?${params.toString()}`;
 }
 
+export function buildMarketMovesPath(limit = 100): string {
+  const normalizedLimit = Math.min(200, Math.max(1, Math.trunc(limit)));
+  return `/market/moves?limit=${normalizedLimit}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...buildRequestHeaders(API_AUTH_TOKEN), ...(init?.headers ?? {}) },
@@ -683,6 +692,7 @@ export const api = {
   alertSuppressionRules: () =>
     request<ListEnvelope<AlertSuppressionRule>>("/alert-suppression-rules"),
   jobs: () => request<ListEnvelope<JobRun>>("/jobs/runs?limit=50"),
+  marketMoves: (limit = 100) => request<ListEnvelope<MarketMove>>(buildMarketMovesPath(limit)),
   watchlist: () => request<ListEnvelope<WatchlistEntry>>("/watchlist"),
   watchlistSpotlight: () =>
     request<ListEnvelope<WatchlistSpotlightItem>>(
