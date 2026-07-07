@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import api_server.app.services.events as event_service
 import api_server.app.services.watchlist as watchlist_service
 from api_server.app.db import Base, get_session
 from api_server.app.main import app, create_app
@@ -39,6 +40,7 @@ from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
 from common.external_providers import ProviderRetryPolicy
+from common.llm import LLMEventSummary
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
@@ -1072,6 +1074,87 @@ async def test_event_detail_includes_timeline_analysis_investigation_and_market_
         ("move_1", "SPY", "NYSE", "2026-05-29T13:10:00", 1.7),
         ("move_alt_exchange", "SPY", "ARCA", "2026-05-29T13:07:00", 1.4),
     ]
+
+
+@pytest.mark.asyncio
+async def test_related_news_summary_reports_missing_full_text(client: AsyncClient) -> None:
+    response = await client.post(
+        "/events/evt_newer_report/related-news-summary",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "no_full_text"
+    assert payload["event_id"] == "evt_newer_report"
+    assert payload["summary"] is None
+    assert payload["news_item_count"] == 1
+    assert payload["full_text_item_count"] == 0
+    assert "full article text" in payload["message"]
+
+
+@pytest.mark.asyncio
+async def test_related_news_summary_uses_llm_and_persists_run(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProvider:
+        async def summarize_event(self, prompt: str):
+            assert "Full article text about the Federal Reserve policy path." in prompt
+            assert "Treasury yields fall after jobs report" in prompt
+            return (
+                LLMEventSummary(
+                    summary="The Fed news points to a less hawkish policy path.",
+                    status="reported",
+                    affected_assets=["SPY"],
+                    digest_bullets=[
+                        "Full text supports a softer Fed policy signal.",
+                        "Related jobs-report context adds rates pressure relief.",
+                    ],
+                    why_it_matters="A softer policy path can support duration and equities.",
+                    alert_message="Fed path looks less hawkish.",
+                    caveats=["One related item only has title/snippet context."],
+                ),
+                {"prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168},
+            )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(event_service, "llm_provider", lambda _config: FakeProvider())
+
+    response = await client.post(
+        "/events/evt_1/related-news-summary",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "generated"
+    assert payload["event_id"] == "evt_1"
+    assert payload["summary"] == "The Fed news points to a less hawkish policy path."
+    assert payload["digest_bullets"][0] == "Full text supports a softer Fed policy signal."
+    assert payload["why_it_matters"] == "A softer policy path can support duration and equities."
+    assert payload["caveats"] == ["One related item only has title/snippet context."]
+    assert payload["news_item_count"] == 3
+    assert payload["full_text_item_count"] == 1
+    assert payload["run_id"]
+    assert payload["usage"]["total_tokens"] == 168
+
+
+@pytest.mark.asyncio
+async def test_related_news_summary_missing_event_returns_404(client: AsyncClient) -> None:
+    response = await client.post(
+        "/events/missing/related-news-summary",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_related_news_summary_requires_write_auth(client: AsyncClient) -> None:
+    response = await client.post("/events/evt_1/related-news-summary")
+
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio

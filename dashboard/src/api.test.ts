@@ -75,6 +75,32 @@ describe("normalizeListResponse", () => {
     vi.unstubAllGlobals();
   });
 
+  it("requests related news summaries from the API client", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          status: "no_full_text",
+          event_id: "evt_1",
+          message: "Full text required.",
+          digest_bullets: [],
+          caveats: [],
+          news_item_count: 1,
+          full_text_item_count: 0,
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.relatedNewsSummary("evt_1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/events/evt_1/related-news-summary"),
+      expect.objectContaining({ method: "POST" }),
+    );
+    vi.unstubAllGlobals();
+  });
+
   it("builds event endpoint paths with pagination cap and score filter", () => {
     expect(
       buildEventsPath({

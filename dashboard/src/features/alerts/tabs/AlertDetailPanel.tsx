@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Bell,
+  Brain,
   CheckCircle2,
   Database,
   ExternalLink,
@@ -13,6 +14,7 @@ import { createPortal } from "react-dom";
 import type { AlertDecision, EventDetail, EventTimelineItem, NewsDetail } from "../../../api";
 import { EmptyState } from "../../../components/EmptyState";
 import { MetadataRow } from "../../../components/MetadataRow";
+import { RelatedNewsSummaryModal } from "../../../components/RelatedNewsSummaryModal";
 import { SectionError } from "../../../components/SectionError";
 import { StatusBadge, type StatusBadgeTone } from "../../../components/StatusBadge";
 import { classNames } from "../../../lib/classNames";
@@ -50,9 +52,11 @@ export function AlertDetailPanel({
   loadNewsDetail: (id: string) => void;
 }) {
   const [activeNewsId, setActiveNewsId] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   useEffect(() => {
     setActiveNewsId(null);
+    setSummaryOpen(false);
   }, [alert?.id, eventDetail?.id]);
 
   useEffect(() => {
@@ -114,6 +118,7 @@ export function AlertDetailPanel({
   const badgeTone = decisionTones[alert.decision] || "neutral";
   const activeNewsItem = eventDetail?.timeline.find((item) => item.news_item_id === activeNewsId);
   const activeNewsDetail = activeNewsId ? newsDetails[activeNewsId] : undefined;
+  const summaryEventId = eventDetail?.id ?? alert.event_cluster_id;
 
   function openNewsPopover(item: EventTimelineItem) {
     setActiveNewsId(item.news_item_id);
@@ -130,7 +135,22 @@ export function AlertDetailPanel({
         </StatusBadge>
         <h2 className="mt-2 text-xl font-bold text-zinc-100">{headline}</h2>
         <p className="mt-1 text-sm text-base-content/70">{alert.reason}</p>
+        <button
+          className="btn btn-sm btn-outline btn-primary mt-3"
+          disabled={!summaryEventId}
+          onClick={() => setSummaryOpen(true)}
+          type="button"
+        >
+          <Brain className="h-4 w-4" />
+          Summary
+        </button>
       </div>
+      <RelatedNewsSummaryModal
+        eventId={summaryEventId}
+        headline={eventDetail?.canonical_headline ?? headline}
+        onClose={() => setSummaryOpen(false)}
+        open={summaryOpen}
+      />
 
       <section>
         <h3 className="mb-2 text-sm font-bold text-zinc-100">Metadata</h3>

@@ -15,6 +15,7 @@ const apiMock = vi.hoisted(() => ({
   newsDetail: vi.fn(),
   alerts: vi.fn(),
   alert: vi.fn(),
+  relatedNewsSummary: vi.fn(),
   sourceHealth: vi.fn(),
   alertChannels: vi.fn(),
   alertSuppressionRules: vi.fn(),
@@ -438,6 +439,19 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
       latest_delivery_error: null,
       acknowledged_at: null,
     };
+  });
+  apiMock.relatedNewsSummary.mockResolvedValue({
+    status: "generated",
+    event_id: "evt_1",
+    message: null,
+    summary: "Related coverage points to a less hawkish Fed path.",
+    why_it_matters: "A softer Fed path can support equities and duration.",
+    digest_bullets: ["Fed communication softened.", "Rates pressure eased."],
+    caveats: ["One item only has snippet context."],
+    news_item_count: 2,
+    full_text_item_count: 1,
+    run_id: "llm_summary_1",
+    usage: { total_tokens: 100 },
   });
   apiMock.sourceHealth.mockResolvedValue(
     envelope([
@@ -1353,6 +1367,49 @@ describe("App data states", () => {
     expect(screen.getByText("Source")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /rescore/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /confirm/i })).toBeInTheDocument();
+  });
+
+  it("summarizes related news from the event detail panel", async () => {
+    let resolveSummary!: (value: unknown) => void;
+    apiMock.relatedNewsSummary.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSummary = resolve;
+      }),
+    );
+
+    await renderLoadedApp();
+    switchTo("events");
+
+    const detailPanel = (await screen.findByRole("heading", { name: "Event detail" })).closest(
+      "section",
+    )!;
+    fireEvent.click(within(detailPanel).getByRole("button", { name: /summary/i }));
+
+    expect(apiMock.relatedNewsSummary).toHaveBeenCalledWith("evt_1");
+    expect(await screen.findByRole("dialog", { name: "Related news summary" })).toBeInTheDocument();
+    expect(screen.getByText("Summarizing related news...")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSummary!({
+        status: "generated",
+        event_id: "evt_1",
+        message: null,
+        summary: "Related coverage points to a less hawkish Fed path.",
+        why_it_matters: "A softer Fed path can support equities and duration.",
+        digest_bullets: ["Fed communication softened.", "Rates pressure eased."],
+        caveats: ["One item only has snippet context."],
+        news_item_count: 2,
+        full_text_item_count: 1,
+        run_id: "llm_summary_1",
+        usage: { total_tokens: 100 },
+      });
+    });
+
+    expect(await screen.findByText("Related coverage points to a less hawkish Fed path.")).toBeInTheDocument();
+    expect(screen.getByText("Fed communication softened.")).toBeInTheDocument();
+    expect(screen.getByText("A softer Fed path can support equities and duration.")).toBeInTheDocument();
+    expect(screen.getByText("2 related news")).toBeInTheDocument();
+    expect(screen.getByText("1 with full text")).toBeInTheDocument();
   });
 
   it("shows event report range separately from updated time", async () => {
@@ -2439,6 +2496,40 @@ describe("App data states", () => {
     expect(
       within(detailPanel).getByRole("link", { name: /Open article Fed signals a slower rate path/i }),
     ).toHaveAttribute("href", "https://example.com/news");
+  });
+
+  it("shows the no-full-text summary message from the alert detail panel", async () => {
+    apiMock.relatedNewsSummary.mockResolvedValue({
+      status: "no_full_text",
+      event_id: "evt_2",
+      message: "At least one related news item needs full article text before a summary can be generated.",
+      summary: null,
+      why_it_matters: null,
+      digest_bullets: [],
+      caveats: [],
+      news_item_count: 1,
+      full_text_item_count: 0,
+      run_id: null,
+      usage: null,
+    });
+
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    const detailPanel = (await screen.findByRole("heading", { name: "Alert detail" })).closest(
+      "section",
+    )!;
+    await within(detailPanel).findByText("BLS · seed · 88");
+    fireEvent.click(within(detailPanel).getByRole("button", { name: /summary/i }));
+
+    expect(apiMock.relatedNewsSummary).toHaveBeenCalledWith("evt_2");
+    expect(
+      await screen.findByText(
+        "At least one related news item needs full article text before a summary can be generated.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 related news")).toBeInTheDocument();
+    expect(screen.getByText("0 with full text")).toBeInTheDocument();
   });
 
 });

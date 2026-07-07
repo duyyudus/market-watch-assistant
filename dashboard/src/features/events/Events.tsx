@@ -1,8 +1,10 @@
-import { ChevronLeft, ChevronRight, Database, RefreshCcw, Search } from "lucide-react";
+import { Brain, ChevronLeft, ChevronRight, Database, RefreshCcw, Search } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { EventCluster, EventDetail } from "../../api";
 import { EmptyState } from "../../components/EmptyState";
 import { Panel } from "../../components/Panel";
+import { RelatedNewsSummaryModal } from "../../components/RelatedNewsSummaryModal";
 import { SectionError } from "../../components/SectionError";
 import type { QueueCommand } from "../../types/dashboard";
 import { EventDetailReadOnly } from "./EventDetailReadOnly";
@@ -27,10 +29,15 @@ export function Events(props: {
   queue: QueueCommand;
   retry: () => Promise<void>;
 }) {
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const pageStart = props.total > 0 ? Math.min(props.offset + 1, props.total) : 0;
   const pageEnd = Math.min(props.offset + props.pageSize, props.total);
   const canGoPrevious = props.offset > 0;
   const canGoNext = props.offset + props.pageSize < props.total;
+
+  useEffect(() => {
+    setSummaryOpen(false);
+  }, [props.selectedEvent?.id]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
@@ -149,6 +156,14 @@ export function Events(props: {
             <div className="grid gap-2 sm:grid-cols-2">
               <button
                 className="btn btn-sm btn-outline btn-primary"
+                onClick={() => setSummaryOpen(true)}
+                type="button"
+              >
+                <Brain className="h-4 w-4" />
+                Summary
+              </button>
+              <button
+                className="btn btn-sm btn-outline btn-primary"
                 onClick={() => props.queue("event.rescore", { event_id: props.selectedEvent!.id })}
                 type="button"
               >
@@ -176,6 +191,12 @@ export function Events(props: {
                 Confirm
               </button>
             </div>
+            <RelatedNewsSummaryModal
+              eventId={props.selectedEvent.id}
+              headline={props.selectedEvent.canonical_headline}
+              onClose={() => setSummaryOpen(false)}
+              open={summaryOpen}
+            />
           </div>
         ) : (
           <EmptyState

@@ -92,3 +92,17 @@ class EventDetailRead(EventRead):
     timeline: list[EventTimelineItem]
     llm_runs: list[EventLLMRunRead]
     market_moves: list[EventMarketMoveRead]
+
+
+class EventRelatedNewsSummaryRead(BaseModel):
+    status: str
+    event_id: str
+    message: str | None = None
+    summary: str | None = None
+    why_it_matters: str | None = None
+    digest_bullets: list[str] = []
+    caveats: list[str] = []
+    news_item_count: int
+    full_text_item_count: int
+    run_id: str | None = None
+    usage: dict[str, Any] | None = None

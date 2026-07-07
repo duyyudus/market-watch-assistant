@@ -6,8 +6,13 @@ import json
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from api_server.app.api.dependencies import SessionDep
-from api_server.app.schemas import EventDetailRead, EventRead, ListEnvelope
+from api_server.app.api.dependencies import SessionDep, SettingsDep
+from api_server.app.schemas import (
+    EventDetailRead,
+    EventRead,
+    EventRelatedNewsSummaryRead,
+    ListEnvelope,
+)
 from api_server.app.services import events as event_service
 from common.db.models import EventCluster
 
@@ -76,6 +81,29 @@ async def get_event(
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
     return await event_service.get_event_detail(session, event)
+
+
+@router.post(
+    "/events/{event_id}/related-news-summary",
+    response_model=EventRelatedNewsSummaryRead,
+)
+async def summarize_related_news(
+    event_id: str,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> EventRelatedNewsSummaryRead:
+    event = await session.get(EventCluster, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    try:
+        payload = await event_service.summarize_related_news(
+            session,
+            event,
+            settings=settings,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return EventRelatedNewsSummaryRead.model_validate(payload)
 
 
 @router.get("/score-history/{event_id}")

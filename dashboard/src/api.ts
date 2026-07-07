@@ -178,6 +178,20 @@ export type EventDetail = EventCluster & {
   market_moves: EventMarketMove[];
 };
 
+export type EventRelatedNewsSummary = {
+  status: "generated" | "no_full_text";
+  event_id: string;
+  message?: string | null;
+  summary?: string | null;
+  why_it_matters?: string | null;
+  digest_bullets: string[];
+  caveats: string[];
+  news_item_count: number;
+  full_text_item_count: number;
+  run_id?: string | null;
+  usage?: Record<string, any> | null;
+};
+
 export type Digest = {
   id: string;
   digest_type: string;
@@ -673,6 +687,10 @@ export const api = {
     },
   ) => request<ListEnvelope<EventCluster>>(buildEventsPath(options)),
   event: (id: string) => request<EventDetail>(`/events/${id}`),
+  relatedNewsSummary: (eventId: string) =>
+    request<EventRelatedNewsSummary>(`/events/${eventId}/related-news-summary`, {
+      method: "POST",
+    }),
   digestLatest: () => request<Digest | null>("/digests/latest"),
   news: (limit = 100, domain?: string, offset = 0, filters?: NewsFilters) =>
     request<ListEnvelope<NewsItem>>(buildNewsPath(limit, domain, offset, filters)),

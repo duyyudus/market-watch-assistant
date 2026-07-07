@@ -15,7 +15,12 @@ from api_server.app.schemas.bot import (
     validate_command_payload,
 )
 from api_server.app.schemas.common import ListEnvelope
-from api_server.app.schemas.events import DigestRead, EventDetailRead, EventRead
+from api_server.app.schemas.events import (
+    DigestRead,
+    EventDetailRead,
+    EventRead,
+    EventRelatedNewsSummaryRead,
+)
 from api_server.app.schemas.jobs import JobRunRead
 from api_server.app.schemas.maintenance import (
     CatalystReviewRead,
@@ -67,6 +72,7 @@ __all__ = [
     "EmbeddingStats",
     "EntityRead",
     "EventDetailRead",
+    "EventRelatedNewsSummaryRead",
     "EventRead",
     "FetchLogRead",
     "JobRunRead",
