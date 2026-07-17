@@ -182,6 +182,7 @@ export type EventRelatedNewsSummary = {
   status: "generated" | "no_full_text";
   event_id: string;
   message?: string | null;
+  language: string | null;
   summary?: string | null;
   why_it_matters?: string | null;
   digest_bullets: string[];

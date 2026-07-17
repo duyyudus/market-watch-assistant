@@ -29,7 +29,7 @@ from common.db.models import (
 )
 from common.llm import LLMConfig, llm_provider, normalize_text, prompt_hash
 
-RELATED_NEWS_SUMMARY_PROMPT_VERSION = "event-related-news-summary-v1"
+RELATED_NEWS_SUMMARY_PROMPT_VERSION = "event-related-news-summary-v2"
 NO_FULL_TEXT_MESSAGE = (
     "At least one related news item needs full article text before a summary can be generated."
 )
@@ -381,6 +381,7 @@ async def summarize_related_news(
             "status": "no_full_text",
             "event_id": event.id,
             "message": NO_FULL_TEXT_MESSAGE,
+            "language": None,
             "summary": None,
             "why_it_matters": None,
             "digest_bullets": [],
@@ -409,7 +410,7 @@ async def summarize_related_news(
     await session.flush()
 
     try:
-        result, usage = await llm_provider(config).summarize_event(prompt)
+        result, usage = await llm_provider(config).summarize_related_news(prompt)
     except Exception as exc:
         run.status = "failed"
         run.error_message = str(exc)
@@ -428,6 +429,7 @@ async def summarize_related_news(
         "status": "generated",
         "event_id": event.id,
         "message": None,
+        "language": result.language,
         "summary": result.summary,
         "why_it_matters": result.why_it_matters,
         "digest_bullets": result.digest_bullets,
@@ -467,6 +469,7 @@ def _related_news_summary_snapshot(
                 "snippet": news.snippet,
                 "source_name": news.source_name,
                 "source_score": news.source_score,
+                "language": news.language,
                 "url": news.url,
                 "published_at": _isoformat(news.published_at),
                 "fetched_at": _isoformat(news.fetched_at),
@@ -496,6 +499,12 @@ def _build_related_news_summary_prompt(
             "Return only JSON matching the requested schema.",
             "Cover every important point that contributes to the event. Distinguish facts "
             "supported by full article text from partial title/snippet-only context.",
+            "Detect the predominant language by counting only articles with full text. "
+            "Use the language of the highest-scored full-text source to break a count tie; "
+            "if still tied, use the first article in the supplied order. Detect from article "
+            "content and treat stored language metadata only as a hint.",
+            "Write summary, digest_bullets, why_it_matters, and caveats entirely in the "
+            "selected language. Return that language as a lowercase BCP 47-style code.",
             "Keep the summary concise but complete enough for an alert detail popover.",
             "",
             f"Event cluster id: {event.id}",

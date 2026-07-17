@@ -248,6 +248,31 @@ class LLMEventSummary(BaseModel):
         return normalize_text(value)
 
 
+class LLMRelatedNewsSummary(BaseModel):
+    language: str = Field(
+        min_length=2,
+        max_length=35,
+        pattern=r"^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$",
+        description="Detected predominant language as a normalized BCP 47-style code.",
+    )
+    summary: str = Field(min_length=1)
+    digest_bullets: list[str] = Field(default_factory=list)
+    why_it_matters: str = Field(min_length=1)
+    caveats: list[str] = Field(default_factory=list)
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def normalize_language(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().replace("_", "-").lower()
+        return value
+
+    @field_validator("summary", "why_it_matters")
+    @classmethod
+    def normalize_summary_strings(cls, value: str) -> str:
+        return normalize_text(value)
+
+
 class LLMDigestSection(BaseModel):
     # A short topic label (e.g. "Oil & Middle East") and its 1-3 sentence body.
     topic: str = Field(min_length=1)
@@ -903,6 +928,23 @@ class OpenRouterChatProvider:
             ),
         )
         return LLMEventSummary.model_validate(result), usage
+
+    async def summarize_related_news(
+        self, prompt: str
+    ) -> tuple[LLMRelatedNewsSummary, dict[str, object]]:
+        result, usage = await self.complete_structured(
+            prompt=prompt,
+            schema_name="market_related_news_summary",
+            schema_model=LLMRelatedNewsSummary,
+            system_message=(
+                "You summarize all related articles for one market event. Detect the "
+                "predominant language from the supplied full article text and write every "
+                "human-readable response field in that language. Return its normalized "
+                "BCP 47-style language code. Keep output concise, factual, and caveated, "
+                "and do not invent facts."
+            ),
+        )
+        return LLMRelatedNewsSummary.model_validate(result), usage
 
     async def summarize_digest(self, prompt: str) -> tuple[LLMDigestSummary, dict[str, object]]:
         result, usage = await self.complete_structured(

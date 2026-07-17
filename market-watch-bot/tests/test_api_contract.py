@@ -40,7 +40,7 @@ from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
 from common.external_providers import ProviderRetryPolicy
-from common.llm import LLMEventSummary
+from common.llm import LLMRelatedNewsSummary
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
@@ -788,6 +788,132 @@ async def client():
     await engine.dispose()
 
 
+@pytest.fixture()
+async def multilingual_client():
+    app.state.settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        api_auth_token="test-token",
+    )
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    observed_at = datetime(2026, 5, 30, 1, 0, tzinfo=UTC)
+    async with factory() as session:
+        source = NewsSource(
+            id="src_multilingual",
+            name="Multilingual Markets",
+            source_type="rss",
+            category="vietnam_equity",
+            region="vietnam",
+            asset_classes=["vietnam_equity"],
+            url="https://example.vn/rss",
+            language="multi",
+            enabled=True,
+            polling_interval_seconds=900,
+            source_score=95,
+        )
+        event = EventCluster(
+            id="evt_multilingual",
+            canonical_headline="Ngân hàng Nhà nước điều chỉnh chính sách tiền tệ",
+            summary="Các nguồn tin thảo luận tác động của chính sách mới.",
+            status="reported",
+            regions=["vietnam"],
+            asset_classes=["vietnam_equity"],
+            affected_entities=["Ngân hàng Nhà nước Việt Nam"],
+            affected_tickers=["VNINDEX"],
+            source_count=3,
+            top_source_score=95,
+            confirmation_score=90,
+            novelty_score=80,
+            urgency_score=75,
+            market_impact_score=85,
+            relevance_score=90,
+            final_score=86,
+            first_seen_at=observed_at,
+            last_updated_at=observed_at,
+            created_at=observed_at,
+            updated_at=observed_at,
+        )
+        article_specs = [
+            (
+                "news_vi_primary",
+                "Ngân hàng Nhà nước công bố định hướng mới",
+                "Ngân hàng Nhà nước công bố định hướng điều hành tiền tệ mới.",
+                "vi",
+                95,
+            ),
+            (
+                "news_vi_secondary",
+                "Thị trường phản ứng với chính sách tiền tệ",
+                "Cổ phiếu ngân hàng tăng khi nhà đầu tư đánh giá thông báo mới.",
+                "vi",
+                80,
+            ),
+            (
+                "news_en_multilingual",
+                "Vietnam central bank updates policy guidance",
+                "Vietnamese bank shares rose after the central bank policy update.",
+                "en",
+                90,
+            ),
+        ]
+        articles = [
+            NormalizedNewsItem(
+                id=news_id,
+                source_id=source.id,
+                title=title,
+                snippet=title,
+                raw_content=content,
+                url=f"https://example.vn/{news_id}",
+                source_name=source.name,
+                source_type=source.source_type,
+                source_score=source_score,
+                language=language,
+                region="vietnam",
+                asset_classes=["vietnam_equity"],
+                is_paywalled=False,
+                full_text_available=True,
+                full_text_extraction_status="extracted",
+                processing_status="clustered",
+                fetched_at=observed_at,
+                title_hash=f"title_hash_{news_id}",
+                normalized_text_hash=f"text_hash_{news_id}",
+            )
+            for news_id, title, content, language, source_score in article_specs
+        ]
+        cluster_items = [
+            EventClusterItem(
+                event_cluster_id=event.id,
+                news_item_id=article.id,
+                relation_type="seed" if index == 0 else "related",
+                similarity_score=94 - index * 5,
+                added_at=observed_at + timedelta(minutes=index),
+            )
+            for index, article in enumerate(articles)
+        ]
+        session.add_all([source, event, *articles, *cluster_items])
+        await session.commit()
+
+    async def override_session():
+        async with factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+    await engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_monitoring_endpoints_return_existing_bot_data(client: AsyncClient) -> None:
     health = await client.get("/health")
@@ -1087,6 +1213,7 @@ async def test_related_news_summary_reports_missing_full_text(client: AsyncClien
     payload = response.json()
     assert payload["status"] == "no_full_text"
     assert payload["event_id"] == "evt_newer_report"
+    assert payload["language"] is None
     assert payload["summary"] is None
     assert payload["news_item_count"] == 1
     assert payload["full_text_item_count"] == 0
@@ -1099,20 +1226,20 @@ async def test_related_news_summary_uses_llm_and_persists_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeProvider:
-        async def summarize_event(self, prompt: str):
+        async def summarize_related_news(self, prompt: str):
             assert "Full article text about the Federal Reserve policy path." in prompt
             assert "Treasury yields fall after jobs report" in prompt
+            assert '"language": "en"' in prompt
+            assert "counting only articles with full text" in prompt
             return (
-                LLMEventSummary(
+                LLMRelatedNewsSummary(
+                    language="en",
                     summary="The Fed news points to a less hawkish policy path.",
-                    status="reported",
-                    affected_assets=["SPY"],
                     digest_bullets=[
                         "Full text supports a softer Fed policy signal.",
                         "Related jobs-report context adds rates pressure relief.",
                     ],
                     why_it_matters="A softer policy path can support duration and equities.",
-                    alert_message="Fed path looks less hawkish.",
                     caveats=["One related item only has title/snippet context."],
                 ),
                 {"prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168},
@@ -1130,6 +1257,7 @@ async def test_related_news_summary_uses_llm_and_persists_run(
     payload = response.json()
     assert payload["status"] == "generated"
     assert payload["event_id"] == "evt_1"
+    assert payload["language"] == "en"
     assert payload["summary"] == "The Fed news points to a less hawkish policy path."
     assert payload["digest_bullets"][0] == "Full text supports a softer Fed policy signal."
     assert payload["why_it_matters"] == "A softer policy path can support duration and equities."
@@ -1138,6 +1266,47 @@ async def test_related_news_summary_uses_llm_and_persists_run(
     assert payload["full_text_item_count"] == 1
     assert payload["run_id"]
     assert payload["usage"]["total_tokens"] == 168
+
+
+@pytest.mark.asyncio
+async def test_related_news_summary_uses_dominant_native_language_for_mixed_articles(
+    multilingual_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProvider:
+        async def summarize_related_news(self, prompt: str):
+            assert "Ngân hàng Nhà nước công bố định hướng điều hành tiền tệ mới." in prompt
+            assert "Cổ phiếu ngân hàng tăng khi nhà đầu tư" in prompt
+            assert "Vietnamese bank shares rose after the central bank policy update." in prompt
+            assert prompt.count('"language": "vi"') == 2
+            assert prompt.count('"language": "en"') == 1
+            assert "highest-scored full-text source to break a count tie" in prompt
+            return (
+                LLMRelatedNewsSummary(
+                    language="VI",
+                    summary="Các bài viết cho thấy chính sách mới hỗ trợ tâm lý thị trường.",
+                    digest_bullets=["Cổ phiếu ngân hàng tăng sau thông báo."],
+                    why_it_matters="Định hướng mới có thể ảnh hưởng thanh khoản và định giá.",
+                    caveats=["Phản ứng dài hạn của thị trường vẫn chưa rõ ràng."],
+                ),
+                {"prompt_tokens": 210, "completion_tokens": 70, "total_tokens": 280},
+            )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(event_service, "llm_provider", lambda _config: FakeProvider())
+
+    response = await multilingual_client.post(
+        "/events/evt_multilingual/related-news-summary",
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "generated"
+    assert payload["language"] == "vi"
+    assert payload["summary"].startswith("Các bài viết")
+    assert payload["digest_bullets"] == ["Cổ phiếu ngân hàng tăng sau thông báo."]
+    assert payload["full_text_item_count"] == 3
 
 
 @pytest.mark.asyncio

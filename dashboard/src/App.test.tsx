@@ -444,6 +444,7 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     status: "generated",
     event_id: "evt_1",
     message: null,
+    language: "en",
     summary: "Related coverage points to a less hawkish Fed path.",
     why_it_matters: "A softer Fed path can support equities and duration.",
     digest_bullets: ["Fed communication softened.", "Rates pressure eased."],
@@ -1394,6 +1395,7 @@ describe("App data states", () => {
         status: "generated",
         event_id: "evt_1",
         message: null,
+        language: "vi",
         summary: "Related coverage points to a less hawkish Fed path.",
         why_it_matters: "A softer Fed path can support equities and duration.",
         digest_bullets: ["Fed communication softened.", "Rates pressure eased."],
@@ -1410,6 +1412,7 @@ describe("App data states", () => {
     expect(screen.getByText("A softer Fed path can support equities and duration.")).toBeInTheDocument();
     expect(screen.getByText("2 related news")).toBeInTheDocument();
     expect(screen.getByText("1 with full text")).toBeInTheDocument();
+    expect(screen.getByText("Summary language: vi")).toBeInTheDocument();
   });
 
   it("shows event report range separately from updated time", async () => {
@@ -2498,11 +2501,26 @@ describe("App data states", () => {
     ).toHaveAttribute("href", "https://example.com/news");
   });
 
+  it("shows the detected summary language from the alert detail panel", async () => {
+    await renderLoadedApp();
+    switchTo("alerts");
+
+    const detailPanel = (await screen.findByRole("heading", { name: "Alert detail" })).closest(
+      "section",
+    )!;
+    await within(detailPanel).findByText("BLS · seed · 88");
+    fireEvent.click(within(detailPanel).getByRole("button", { name: /summary/i }));
+
+    expect(apiMock.relatedNewsSummary).toHaveBeenCalledWith("evt_2");
+    expect(await screen.findByText("Summary language: en")).toBeInTheDocument();
+  });
+
   it("shows the no-full-text summary message from the alert detail panel", async () => {
     apiMock.relatedNewsSummary.mockResolvedValue({
       status: "no_full_text",
       event_id: "evt_2",
       message: "At least one related news item needs full article text before a summary can be generated.",
+      language: null,
       summary: null,
       why_it_matters: null,
       digest_bullets: [],

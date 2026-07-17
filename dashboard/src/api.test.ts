@@ -82,6 +82,7 @@ describe("normalizeListResponse", () => {
           status: "no_full_text",
           event_id: "evt_1",
           message: "Full text required.",
+          language: null,
           digest_bullets: [],
           caveats: [],
           news_item_count: 1,

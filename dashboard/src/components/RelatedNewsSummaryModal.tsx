@@ -170,6 +170,11 @@ function SourceCounts({ summary }: { summary: EventRelatedNewsSummary }) {
       <span className="rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1">
         {summary.full_text_item_count} with full text
       </span>
+      {summary.language ? (
+        <span className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-primary">
+          Summary language: {summary.language}
+        </span>
+      ) : null}
     </div>
   );
 }

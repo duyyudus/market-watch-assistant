@@ -98,6 +98,7 @@ class EventRelatedNewsSummaryRead(BaseModel):
     status: str
     event_id: str
     message: str | None = None
+    language: str | None = None
     summary: str | None = None
     why_it_matters: str | None = None
     digest_bullets: list[str] = []
