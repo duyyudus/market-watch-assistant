@@ -68,6 +68,18 @@ def _segment_filter(segment: str) -> ColumnElement[bool] | None:
     return None
 
 
+def _region_filter(session: AsyncSession, region: str) -> ColumnElement[bool]:
+    if session.get_bind().dialect.name == "sqlite":
+        region_values = func.json_each(EventCluster.regions).table_valued("value")
+        return (
+            select(1)
+            .select_from(region_values)
+            .where(region_values.c.value == region)
+            .exists()
+        )
+    return EventCluster.regions.contains([region])
+
+
 async def list_events(
     session: AsyncSession,
     *,
@@ -77,6 +89,7 @@ async def list_events(
     min_score: int | None,
     status_filter: str | None,
     q: str | None,
+    region: str | None = None,
     segment: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     report_ranges = _report_range_subquery()
@@ -101,6 +114,8 @@ async def list_events(
         stmt = stmt.where(EventCluster.final_score >= min_score)
     if q:
         stmt = stmt.where(EventCluster.canonical_headline.ilike(f"%{q}%"))
+    if region:
+        stmt = stmt.where(_region_filter(session, region))
     if segment:
         segment_predicate = _segment_filter(segment)
         if segment_predicate is not None:
@@ -124,6 +139,19 @@ async def list_events(
         ],
         total,
     )
+
+
+async def list_event_filter_options(session: AsyncSession) -> dict[str, list[str]]:
+    stored_regions = (await session.scalars(select(EventCluster.regions))).all()
+    regions = sorted(
+        {
+            region
+            for event_regions in stored_regions
+            for region in event_regions
+            if isinstance(region, str) and region.strip()
+        }
+    )
+    return {"regions": regions}
 
 
 def _effective_report_time_expr() -> ColumnElement[datetime]:

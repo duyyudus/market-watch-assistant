@@ -6,6 +6,7 @@ export const emptyState: DashboardState = {
   sourceHealth: [],
   events: [],
   eventsTotal: 0,
+  eventFilterOptions: { regions: [] },
   eventDetails: {},
   overviewSegments: {},
   news: [],

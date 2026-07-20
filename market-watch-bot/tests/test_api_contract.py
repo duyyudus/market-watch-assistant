@@ -123,7 +123,7 @@ async def client():
             canonical_headline="Older high score inflation analysis",
             summary="Higher score but older report range.",
             status="reported",
-            regions=["us"],
+            regions=["us", "asia", ""],
             asset_classes=["global_macro"],
             affected_entities=["Inflation"],
             affected_tickers=["TIP"],
@@ -999,6 +999,19 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
         "evt_spy_entity_only",
     ]
 
+    region_filtered = await client.get(
+        "/events?limit=100&region=asia&min_score=90&max_items=1"
+    )
+    assert region_filtered.status_code == 200
+    assert region_filtered.json()["total"] == 1
+    assert [item["id"] for item in region_filtered.json()["items"]] == [
+        "evt_older_high_score"
+    ]
+
+    exact_region = await client.get("/events?limit=100&region=as")
+    assert exact_region.status_code == 200
+    assert exact_region.json() == {"items": [], "total": 0}
+
     capped_exhausted = await client.get("/events?limit=100&offset=2&max_items=2")
     assert capped_exhausted.status_code == 200
     assert capped_exhausted.json()["total"] == 2
@@ -1008,6 +1021,16 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
     assert uncapped.status_code == 200
     assert uncapped.json()["total"] >= 3
     assert [item["id"] for item in uncapped.json()["items"]] == ["evt_1"]
+
+
+@pytest.mark.asyncio
+async def test_event_filter_options_list_distinct_non_empty_regions(
+    client: AsyncClient,
+) -> None:
+    response = await client.get("/events/filter-options")
+
+    assert response.status_code == 200
+    assert response.json() == {"regions": ["asia", "global", "us"]}
 
 
 @pytest.mark.asyncio

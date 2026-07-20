@@ -40,6 +40,8 @@ export function App() {
     setEventsMaxItems,
     eventsMinScore,
     setEventsMinScore,
+    eventsRegion,
+    setEventsRegion,
     alertsOffset,
     setAlertsOffset,
     alertsPageSize,
@@ -318,6 +320,8 @@ export function App() {
                 query={query}
                 maxItems={eventsMaxItems}
                 minScore={eventsMinScore}
+                region={eventsRegion}
+                regionOptions={state.eventFilterOptions.regions}
                 offset={eventsOffset}
                 pageSize={eventsPageSize}
                 total={state.eventsTotal}
@@ -326,6 +330,7 @@ export function App() {
                 setQuery={setQuery}
                 setMaxItems={setEventsMaxItems}
                 setMinScore={setEventsMinScore}
+                setRegion={setEventsRegion}
                 setOffset={setEventsOffset}
                 setSelectedEventId={(id) => {
                   setSelectedEventId(id);

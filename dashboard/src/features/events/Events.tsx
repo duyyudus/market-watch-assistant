@@ -16,6 +16,8 @@ export function Events(props: {
   query: string;
   maxItems: number | null;
   minScore: number;
+  region: string;
+  regionOptions: string[];
   offset: number;
   pageSize: number;
   total: number;
@@ -24,6 +26,7 @@ export function Events(props: {
   setQuery: (value: string) => void;
   setMaxItems: (value: number | null) => void;
   setMinScore: (value: number) => void;
+  setRegion: (value: string) => void;
   setOffset: (value: number) => void;
   setSelectedEventId: (value: string) => void;
   queue: QueueCommand;
@@ -46,7 +49,7 @@ export function Events(props: {
           <SectionError title="Event clusters unavailable" message={props.error} retry={props.retry} />
         ) : (
           <>
-            <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_150px_150px_auto] lg:items-end">
+            <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_150px_150px_150px_auto] lg:items-end">
               <label className="form-control w-full">
                 <span className="label pb-1">
                   <span className="label-text text-xs font-semibold text-zinc-400">Search</span>
@@ -59,6 +62,27 @@ export function Events(props: {
                     placeholder="Search events, tickers, entities"
                   />
                 </span>
+              </label>
+              <label className="form-control w-full">
+                <span className="label pb-1">
+                  <span className="label-text text-xs font-semibold text-zinc-400">Region</span>
+                </span>
+                <select
+                  aria-label="Region"
+                  className="select select-bordered select-sm w-full bg-zinc-950"
+                  onChange={(event) => props.setRegion(event.target.value)}
+                  value={props.region}
+                >
+                  <option value="">All regions</option>
+                  {props.region && !props.regionOptions.includes(props.region) ? (
+                    <option value={props.region}>{props.region}</option>
+                  ) : null}
+                  {props.regionOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="form-control w-full">
                 <span className="label pb-1">

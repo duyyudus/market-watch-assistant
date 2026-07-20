@@ -8,6 +8,7 @@ const apiMock = vi.hoisted(() => ({
   botStatus: vi.fn(),
   sources: vi.fn(),
   events: vi.fn(),
+  eventFilterOptions: vi.fn(),
   event: vi.fn(),
   news: vi.fn(),
   newsDomains: vi.fn(),
@@ -303,6 +304,9 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
   apiMock.newsFilterOptions.mockResolvedValue({
     statuses: ["clustered", "new", "normalized"],
     regions: ["global", "us"],
+  });
+  apiMock.eventFilterOptions.mockResolvedValue({
+    regions: ["global", "us", "vietnam"],
   });
   apiMock.newsDetail.mockResolvedValue({
     id: "news_1",
@@ -1511,6 +1515,9 @@ describe("App data states", () => {
 
     expect(await screen.findByLabelText("Max items")).toBeInTheDocument();
     expect(await screen.findByLabelText("Minimum score")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Region")).toHaveValue("");
+    expect(screen.getByRole("option", { name: "All regions" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "vietnam" })).toBeInTheDocument();
     expect(screen.getByText("1-100 of 100")).toBeInTheDocument();
 
     apiMock.events.mockClear();
@@ -1526,6 +1533,36 @@ describe("App data states", () => {
 
     apiMock.events.mockClear();
     fireEvent.change(screen.getByLabelText("Minimum score"), { target: { value: "70" } });
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 70,
+      }),
+    );
+
+    apiMock.events.mockClear();
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "us" } });
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 70,
+        region: "us",
+      }),
+    );
+
+    apiMock.eventFilterOptions.mockResolvedValue({ regions: ["global", "vietnam"] });
+    const eventPanel = screen.getByRole("heading", { name: "Event clusters" }).closest("section")!;
+    fireEvent.click(within(eventPanel).getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(apiMock.eventFilterOptions).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Region")).toHaveValue("us");
+    expect(screen.getByRole("option", { name: "us" })).toBeInTheDocument();
+
+    apiMock.events.mockClear();
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "" } });
     await waitFor(() =>
       expect(apiMock.events).toHaveBeenCalledWith({
         offset: 0,
@@ -1600,6 +1637,25 @@ describe("App data states", () => {
         minScore: 0,
       }),
     );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Next event page" }));
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 100 }),
+      ),
+    );
+
+    apiMock.events.mockClear();
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "vietnam" } });
+    await waitFor(() =>
+      expect(apiMock.events).toHaveBeenCalledWith({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 500,
+        minScore: 0,
+        region: "vietnam",
+      }),
+    );
   });
 
   it("highlights selected event card and row and switches focus on selection", async () => {
@@ -1656,6 +1712,13 @@ describe("App data states", () => {
     expect(row1).not.toHaveClass("bg-primary/5");
     expect(card2).toHaveClass("bg-primary/5");
     expect(row2).toHaveClass("bg-primary/5");
+
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "us" } });
+
+    expect(card1).toHaveClass("bg-primary/5");
+    expect(row1).toHaveClass("bg-primary/5");
+    expect(card2).not.toHaveClass("bg-primary/5");
+    expect(row2).not.toHaveClass("bg-primary/5");
   });
 
   it("renders source health subtab and queues source test fetch", async () => {

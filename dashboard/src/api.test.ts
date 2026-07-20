@@ -119,6 +119,15 @@ describe("normalizeListResponse", () => {
         minScore: 0,
       }),
     ).toBe("/events?limit=100&offset=0&min_score=0");
+    expect(
+      buildEventsPath({
+        offset: 0,
+        pageSize: 100,
+        maxItems: 100,
+        minScore: 0,
+        region: "us",
+      }),
+    ).toBe("/events?limit=100&offset=0&max_items=100&min_score=0&region=us");
   });
 
   it("builds alert endpoint paths with pagination cap and decision filter", () => {

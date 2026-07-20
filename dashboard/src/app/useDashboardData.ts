@@ -12,6 +12,7 @@ import type {
   Digest,
   EventCluster,
   EventDetail,
+  EventFilterOptions,
   JobRun,
   NewsDetail,
   NewsFilterOptions,
@@ -52,6 +53,7 @@ export function useDashboardData() {
   const [eventsOffset, setEventsOffset] = useState(0);
   const [eventsMaxItems, setEventsMaxItems] = useState<number | null>(100);
   const [eventsMinScore, setEventsMinScore] = useState(0);
+  const [eventsRegion, setEventsRegion] = useState("");
   const [alertsOffset, setAlertsOffset] = useState(0);
   const [alertsMaxItems, setAlertsMaxItems] = useState<number | null>(100);
   const [alertsDecision, setAlertsDecision] = useState<string | null>(null);
@@ -73,7 +75,7 @@ export function useDashboardData() {
   const trackTimer = useRef<number | null>(null);
   const loadingKeys = useRef(new Set<ResourceKey>());
   const resourceCache = useRef(createResourceCache({ ttlMs: 15_000 })).current;
-  const eventsParams = `${eventsOffset}:${eventsMaxItems ?? "all"}:${eventsMinScore}`;
+  const eventsParams = `${eventsOffset}:${eventsMaxItems ?? "all"}:${eventsMinScore}:${eventsRegion}`;
   const previousEventsParams = useRef(eventsParams);
   const alertsParams = `${alertsOffset}:${alertsMaxItems ?? "all"}:${alertsDecision ?? "all"}`;
   const previousAlertsParams = useRef(alertsParams);
@@ -103,6 +105,9 @@ export function useDashboardData() {
       if (key === "events") {
         const response = normalizeListResponse<EventCluster>(value);
         return { ...current, events: response.items, eventsTotal: response.total };
+      }
+      if (key === "eventFilterOptions") {
+        return { ...current, eventFilterOptions: value as EventFilterOptions };
       }
       if (key === "news") {
         const response = normalizeListResponse<NewsItem>(value);
@@ -180,7 +185,9 @@ export function useDashboardData() {
           pageSize: EVENT_PAGE_SIZE,
           maxItems: eventsMaxItems,
           minScore: eventsMinScore,
+          ...(eventsRegion ? { region: eventsRegion } : {}),
         }),
+      eventFilterOptions: api.eventFilterOptions,
       news: () =>
         newsFilters
           ? api.news(newsLimit, newsDomain || undefined, newsOffset, newsFilters)
@@ -219,6 +226,7 @@ export function useDashboardData() {
       eventsMaxItems,
       eventsMinScore,
       eventsOffset,
+      eventsRegion,
       newsDomain,
       newsFilters,
       newsLimit,
@@ -371,7 +379,7 @@ export function useDashboardData() {
           "catalysts",
           "digestLatest",
         ],
-        events: ["status", "events"],
+        events: ["status", "events", "eventFilterOptions"],
         news: ["status", "news", "newsDomains", "newsFilterOptions", "sources"],
         alerts:
           alertSubTab === "settings"
@@ -671,6 +679,12 @@ export function useDashboardData() {
     setSelectedEventId(null);
   }, []);
 
+  const updateEventsRegion = useCallback((region: string) => {
+    setEventsRegion(region);
+    setEventsOffset(0);
+    setSelectedEventId(null);
+  }, []);
+
   const updateEventsOffset = useCallback((offset: number) => {
     setEventsOffset(Math.max(0, offset));
     setSelectedEventId(null);
@@ -708,6 +722,8 @@ export function useDashboardData() {
     setEventsMaxItems: updateEventsMaxItems,
     eventsMinScore,
     setEventsMinScore: updateEventsMinScore,
+    eventsRegion,
+    setEventsRegion: updateEventsRegion,
     alertsOffset,
     setAlertsOffset: updateAlertsOffset,
     alertsPageSize: ALERT_PAGE_SIZE,

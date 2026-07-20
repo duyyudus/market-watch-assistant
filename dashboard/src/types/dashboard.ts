@@ -10,6 +10,7 @@ import type {
   Digest,
   EventCluster,
   EventDetail,
+  EventFilterOptions,
   JobRun,
   NewsDetail,
   NewsItem,
@@ -36,6 +37,7 @@ export type DashboardState = {
   sourceHealth: SourceHealth[];
   events: EventCluster[];
   eventsTotal: number;
+  eventFilterOptions: EventFilterOptions;
   eventDetails: Record<string, EventDetail>;
   overviewSegments: Record<string, { items: EventCluster[]; total: number }>;
   news: NewsItem[];
@@ -70,6 +72,7 @@ export type ResourceKey =
   | "sources"
   | "sourceHealth"
   | "events"
+  | "eventFilterOptions"
   | "eventDetail"
   | "news"
   | "newsDomains"

@@ -28,6 +28,7 @@ async def list_events(
     min_score: int | None = Query(None, ge=0, le=100),
     status_filter: str | None = Query(None, alias="status"),
     q: str | None = None,
+    region: str | None = Query(None, min_length=1, max_length=64),
     segment: str | None = Query(None, pattern="^(global|us|vietnam|crypto)$"),
 ) -> ListEnvelope[EventRead]:
     rows, total = await event_service.list_events(
@@ -38,6 +39,7 @@ async def list_events(
         min_score=min_score,
         status_filter=status_filter,
         q=q,
+        region=region,
         segment=segment,
     )
     return ListEnvelope(items=[EventRead.model_validate(row) for row in rows], total=total)
@@ -70,6 +72,11 @@ async def event_stream(
             elapsed += 2
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/events/filter-options")
+async def list_event_filter_options(session: SessionDep) -> dict[str, list[str]]:
+    return await event_service.list_event_filter_options(session)
 
 
 @router.get("/events/{event_id}")

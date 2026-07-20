@@ -234,6 +234,10 @@ export type NewsFilterOptions = {
   regions: string[];
 };
 
+export type EventFilterOptions = {
+  regions: string[];
+};
+
 export type NewsItem = {
   id: string;
   source_id?: string;
@@ -613,6 +617,7 @@ export type EventQueryOptions = {
   pageSize: number;
   maxItems: number | null;
   minScore: number;
+  region?: string;
   segment?: EventSegment | null;
 };
 
@@ -621,6 +626,7 @@ export function buildEventsPath({
   pageSize,
   maxItems,
   minScore,
+  region,
   segment,
 }: EventQueryOptions): string {
   const params = new URLSearchParams({
@@ -629,6 +635,7 @@ export function buildEventsPath({
   });
   if (maxItems !== null) params.set("max_items", String(maxItems));
   params.set("min_score", String(minScore));
+  if (region) params.set("region", region);
   if (segment) params.set("segment", segment);
   return `/events?${params.toString()}`;
 }
@@ -687,6 +694,7 @@ export const api = {
       minScore: 0,
     },
   ) => request<ListEnvelope<EventCluster>>(buildEventsPath(options)),
+  eventFilterOptions: () => request<EventFilterOptions>("/events/filter-options"),
   event: (id: string) => request<EventDetail>(`/events/${id}`),
   relatedNewsSummary: (eventId: string) =>
     request<EventRelatedNewsSummary>(`/events/${eventId}/related-news-summary`, {
