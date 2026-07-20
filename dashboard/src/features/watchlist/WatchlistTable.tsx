@@ -8,7 +8,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { InlineEditPanel } from "../../components/InlineEditPanel";
 import { Panel } from "../../components/Panel";
 import { SectionError } from "../../components/SectionError";
-import { SortControls } from "../../components/SortControls";
+import { SortableHeader } from "../../components/SortableHeader";
 import { useSortableData } from "../../hooks/useSortableData";
 
 export function WatchlistTable({
@@ -117,71 +117,116 @@ export function WatchlistTable({
           }
         />
       ) : (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/40 pb-3 mb-4 text-xs text-zinc-500">
-            <span>{sortedRows.length} entries</span>
-            <div className="flex items-center gap-3">
-              <SortControls
-                currentSortKey={sortConfig.key}
-                direction={sortConfig.direction}
-                label="Sort by:"
-                onSort={requestSort}
-                options={[
-                  { key: "symbol", label: "Symbol" },
-                  { key: "name", label: "Name" },
-                  { key: "tier", label: "Tier" },
-                ]}
-              />
-            </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {sortedRows.map((row) => {
-              const label = row.symbol ?? row.name;
-              return (
-                <div
-                  key={row.id}
-                  className="rounded-md border border-zinc-800 bg-zinc-900/30 p-4 transition-all duration-150 hover:border-zinc-700/80"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-base font-bold text-zinc-100">{label}</div>
-                      <div className="mt-1.5 text-sm text-base-content/75">{row.name}</div>
-                    </div>
-                    <Badge tone={row.enabled ? "success" : "neutral"}>{row.tier}</Badge>
-                  </div>
-                  <div className="mt-2.5 text-xs text-base-content/60">
-                    {row.region ?? "global"} · {row.asset_class ?? row.entity_type}
-                  </div>
-                  {row.aliases.length > 0 ? (
-                    <div className="mt-2 text-xs text-base-content/50">
-                      Aliases: {row.aliases.join(", ")}
-                    </div>
-                  ) : null}
-                  <div className="mt-4 flex gap-2">
-                    <button
-                      aria-label={`Edit ${label}`}
-                      className="btn btn-xs btn-outline btn-primary"
-                      onClick={() => startEdit(row)}
-                      type="button"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      Edit
-                    </button>
-                    <button
-                      aria-label={`Delete ${label}`}
-                      className="btn btn-xs btn-ghost text-error"
-                      onClick={() => setDeletingEntry(row)}
-                      type="button"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </>
+        <div className="overflow-x-auto">
+          <table className="table w-full">
+            <thead>
+              <tr className="border-b border-zinc-800 text-xs uppercase tracking-wider text-zinc-500">
+                <SortableHeader
+                  label="Symbol"
+                  sortKey="symbol"
+                  currentSortKey={sortConfig.key}
+                  direction={sortConfig.direction}
+                  onSort={requestSort}
+                />
+                <SortableHeader
+                  label="Name"
+                  sortKey="name"
+                  currentSortKey={sortConfig.key}
+                  direction={sortConfig.direction}
+                  onSort={requestSort}
+                />
+                <SortableHeader
+                  label="Entity type"
+                  sortKey="entity_type"
+                  currentSortKey={sortConfig.key}
+                  direction={sortConfig.direction}
+                  onSort={requestSort}
+                />
+                <SortableHeader
+                  label="Tier"
+                  sortKey="tier"
+                  currentSortKey={sortConfig.key}
+                  direction={sortConfig.direction}
+                  onSort={requestSort}
+                />
+                <SortableHeader
+                  label="Region"
+                  sortKey="region"
+                  currentSortKey={sortConfig.key}
+                  direction={sortConfig.direction}
+                  onSort={requestSort}
+                />
+                <SortableHeader
+                  label="Asset class"
+                  sortKey="asset_class"
+                  currentSortKey={sortConfig.key}
+                  direction={sortConfig.direction}
+                  onSort={requestSort}
+                />
+                <th className="px-4 py-3 text-left">Aliases</th>
+                <th className="px-4 py-3 text-left">Enabled</th>
+                <th className="px-4 py-3 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/40">
+              {sortedRows.map((row) => {
+                const label = row.symbol ?? row.name;
+                return (
+                  <tr key={row.id} className="border-b border-zinc-800/30">
+                    <td className="whitespace-nowrap px-4 py-3 text-sm font-bold text-zinc-100">
+                      {row.symbol ?? "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-zinc-300">
+                      {row.name}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs text-zinc-400">
+                      {row.entity_type}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <Badge tone="neutral">{row.tier}</Badge>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs text-zinc-400">
+                      {row.region ?? "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs text-zinc-400">
+                      {row.asset_class ?? "—"}
+                    </td>
+                    <td className="max-w-64 px-4 py-3 text-xs text-zinc-400">
+                      {row.aliases.length > 0 ? row.aliases.join(", ") : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <Badge tone={row.enabled ? "success" : "neutral"}>
+                        {row.enabled ? "Enabled" : "Disabled"}
+                      </Badge>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <div className="flex gap-2">
+                        <button
+                          aria-label={`Edit ${label}`}
+                          className="btn btn-xs btn-outline btn-primary"
+                          onClick={() => startEdit(row)}
+                          type="button"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Edit
+                        </button>
+                        <button
+                          aria-label={`Delete ${label}`}
+                          className="btn btn-xs btn-ghost text-error"
+                          onClick={() => setDeletingEntry(row)}
+                          type="button"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
       <ConfirmDialog
         confirmLabel="Delete"

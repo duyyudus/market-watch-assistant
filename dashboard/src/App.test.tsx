@@ -1961,6 +1961,9 @@ describe("App data states", () => {
 
     expect(await screen.findByText("SPY")).toBeInTheDocument();
     const main = screen.getByRole("main");
+    expect(within(main).getByRole("table")).toBeInTheDocument();
+    expect(within(main).getByRole("columnheader", { name: /symbol/i })).toBeInTheDocument();
+    expect(within(main).getByRole("cell", { name: "SPDR S&P 500" })).toBeInTheDocument();
     expect(within(main).getByRole("button", { name: /add watchlist entry/i })).toBeInTheDocument();
     expect(within(main).getByRole("button", { name: /edit SPY/i })).toBeInTheDocument();
   });
