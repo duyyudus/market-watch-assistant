@@ -2,6 +2,21 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Run Worker",
+      "type": "shell",
+      "command": "./run-worker.sh",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "group": "none"
+    },
+    {
       "label": "Run Server",
       "type": "shell",
       "command": "./run-server.sh",
