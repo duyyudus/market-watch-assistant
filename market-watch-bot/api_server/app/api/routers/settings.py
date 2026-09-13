@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from api_server.app.api.dependencies import SessionDep
 from api_server.app.schemas import AlertPolicy, ConfigurationPresets
 from api_server.app.services import settings as settings_service
+from common.watched_topics import WatchedTopics, get_watched_topics, save_watched_topics
 
 router = APIRouter()
 
@@ -31,3 +32,13 @@ async def get_configuration_presets(session: SessionDep) -> ConfigurationPresets
             detail="Configuration presets are not initialized; run market-watch migrate",
         )
     return presets
+
+
+@router.get("/settings/watched-topics", response_model=WatchedTopics)
+async def read_watched_topics(session: SessionDep) -> WatchedTopics:
+    return await get_watched_topics(session)
+
+
+@router.put("/settings/watched-topics", response_model=WatchedTopics)
+async def update_watched_topics(payload: WatchedTopics, session: SessionDep) -> WatchedTopics:
+    return await save_watched_topics(session, payload)

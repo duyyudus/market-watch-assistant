@@ -40,6 +40,8 @@ import type {
   TrackCommand,
 } from "../../types/dashboard";
 
+import { WatchedTopicsModal } from "./WatchedTopicsModal";
+
 type Segment = "global" | "us" | "vietnam" | "crypto";
 type ActionItem =
   | { type: "alert"; id: string; alert: AlertDecision; event?: EventCluster }
@@ -450,6 +452,7 @@ export function Overview({
   openSources: () => void;
   openMaintenance: () => void;
 }) {
+  const [watchedTopicsOpen, setWatchedTopicsOpen] = useState(false);
   const [activeSegment, setActiveSegment] = useState<Segment>("global");
   const [spotlightPopover, setSpotlightPopover] = useState<SpotlightPopover | null>(null);
   const latestCompletedAt = state.status?.latest_job?.completed_at;
@@ -583,6 +586,7 @@ export function Overview({
 
   return (
     <div className="space-y-5">
+      {watchedTopicsOpen ? <WatchedTopicsModal onClose={() => setWatchedTopicsOpen(false)} /> : null}
       <div className="grid gap-5 xl:grid-cols-[1.35fr_1fr]">
         <OverviewPanel fill icon={ShieldCheck} title="Needs you now">
           <ActionQueue
@@ -597,11 +601,19 @@ export function Overview({
           icon={Sparkles}
           title="Daily synthesis"
           action={
-            state.latestDigest ? (
-              <div className="flex items-center gap-2">
-                {digestStatus ? (
-                  <span className="text-xs text-base-content/60">rebuild {digestStatus}</span>
-                ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              {digestStatus ? (
+                <span className="text-xs text-base-content/60">rebuild {digestStatus}</span>
+              ) : null}
+              <button
+                className="btn btn-xs btn-ghost gap-1"
+                type="button"
+                onClick={() => setWatchedTopicsOpen(true)}
+              >
+                <Eye className="h-3.5 w-3.5" />
+                Watched Topics
+              </button>
+              {state.latestDigest ? (
                 <button
                   className="btn btn-xs btn-ghost gap-1"
                   disabled={queueUnavailable || digestRebuilding}
@@ -613,8 +625,8 @@ export function Overview({
                   />
                   {digestRebuilding ? "Rebuilding…" : "Rebuild"}
                 </button>
-              </div>
-            ) : null
+              ) : null}
+            </div>
           }
         >
           {state.latestDigest ? (

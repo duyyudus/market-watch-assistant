@@ -64,3 +64,10 @@ A manual command console for launching worker tasks (e.g. executing a full pipel
 
 ### Maintenance (`maintenance/`)
 Consolidated operational view (`MaintenanceTabs`) that absorbed the former standalone operations panel. Tabs cover pipeline metrics, fetch logs, job history, score history, embedding coverage, LLM runs and costs, missed-catalyst review, and retention audits — pulled largely from the `/maintenance` router.
+
+
+### Daily synthesis watched topics
+
+The **Watched Topics** button beside **Rebuild** opens an editor for shared topic
+phrases. Save applies changes to the next scheduled generation or manual rebuild;
+Cancel discards edits. No rebuild or delivery is triggered by saving.

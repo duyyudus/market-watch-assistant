@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Callable
 from dataclasses import asdict
@@ -32,6 +33,7 @@ from common.llm import (
     LLMClassification,
     LLMClusterDecision,
     LLMConfig,
+    LLMEditedDigest,
     build_cluster_decision_prompt,
     build_digest_summary_prompt,
     build_event_analysis_prompt,
@@ -824,6 +826,55 @@ async def build_digest_narrative(
     # Assemble topic-separated text: a lead paragraph, then one block per theme
     # with the topic on its own line above its body, blank lines between blocks.
     blocks = [result.lead]
+    blocks.extend(f"{section.topic}\n{section.body}" for section in result.sections)
+    return "\n\n".join(blocks)
+
+
+async def remove_watched_topic_overlap(
+    session: AsyncSession,
+    *,
+    general_content: str,
+    watched_content: str,
+    since: datetime,
+    until: datetime,
+    config: LLMConfig,
+) -> str | None:
+    """Return only uncovered general prose; an empty string is a successful edit."""
+    if not config.enabled or not config.api_key:
+        return None
+    snapshot = {
+        "general_content": general_content,
+        "watched_content": watched_content,
+        "window_start": since.astimezone(UTC).isoformat(),
+        "window_end": until.astimezone(UTC).isoformat(),
+    }
+    prompt = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+    target_id = prompt_hash(prompt)
+    version = "digest-overlap-v1"
+    run = await _existing_llm_run(
+        session, target_type="digest_edit", target_id=target_id,
+        config=config, prompt_version=version,
+    )
+    if run is not None and run.status == "succeeded":
+        result = LLMEditedDigest.model_validate(run.result)
+    else:
+        run = await _prepare_llm_run(
+            session, existing_run=run, target_type="digest_edit", target_id=target_id,
+            config=config, prompt_version=version, prompt=prompt, input_snapshot=snapshot,
+        )
+        await session.flush()
+        try:
+            result, usage = await llm_provider(config).remove_digest_overlap(prompt)
+        except Exception as exc:  # noqa: BLE001 - keep the original digest on editing failure
+            run.status = "failed"
+            run.error_message = str(exc)
+            run.updated_at = utcnow()
+            return None
+        run.status = "succeeded"
+        run.result = result.model_dump()
+        run.usage = usage
+        run.updated_at = utcnow()
+    blocks = [result.lead.strip()] if result.lead.strip() else []
     blocks.extend(f"{section.topic}\n{section.body}" for section in result.sections)
     return "\n\n".join(blocks)
 

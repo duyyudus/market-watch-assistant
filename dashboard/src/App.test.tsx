@@ -47,6 +47,8 @@ const apiMock = vi.hoisted(() => ({
   presets: vi.fn(),
   maintenanceCatalysts: vi.fn(),
   digestLatest: vi.fn(),
+  watchedTopics: vi.fn(),
+  updateWatchedTopics: vi.fn(),
 }));
 
 class MockEventSource {
@@ -825,6 +827,9 @@ describe("App data states", () => {
     expect(screen.getAllByText("Fed signals a slower rate path").length).toBeGreaterThan(0);
     expect(screen.getByText("Unexplained BTC move")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Daily synthesis" })).toBeInTheDocument();
+    const topicButton = screen.getByRole("button", { name: "Watched Topics" });
+    const rebuildButton = screen.getByRole("button", { name: "Rebuild" });
+    expect(topicButton.compareDocumentPosition(rebuildButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/US \/ global_macro/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Top events" })).toBeInTheDocument();
     expect((await screen.findAllByText("SPY")).length).toBeGreaterThan(0);
@@ -1251,6 +1256,20 @@ describe("App data states", () => {
     expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
   });
 
+  it("saves watched topics without rebuilding the digest", async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+    apiMock.watchedTopics.mockResolvedValue({ topics: ["FOMC"] });
+    apiMock.updateWatchedTopics.mockResolvedValue({ topics: ["FOMC"] });
+    await renderLoadedApp();
+    fireEvent.click(screen.getByRole("button", { name: "Watched Topics" }));
+    await screen.findByLabelText("Topic 1");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(apiMock.updateWatchedTopics).toHaveBeenCalledWith({ topics: ["FOMC"] });
+    expect(apiMock.createCommand).not.toHaveBeenCalled();
+  });
+
   it("rebuilds the digest from the synthesis panel when one exists", async () => {
     apiMock.createCommand.mockResolvedValue({
       id: "cmd_digest",
@@ -1285,6 +1304,7 @@ describe("App data states", () => {
     await renderLoadedApp();
 
     expect(await screen.findByText("No digest yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Watched Topics" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: /build digest now/i }));
 
     await waitFor(() =>

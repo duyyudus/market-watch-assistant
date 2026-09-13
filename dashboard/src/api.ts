@@ -7,6 +7,8 @@ const API_BASE_URL =
   defaultApiBaseUrl(window.location.protocol, window.location.hostname);
 const API_AUTH_TOKEN = import.meta.env.VITE_API_AUTH_TOKEN;
 
+export type WatchedTopics = { topics: string[] };
+
 export type ListEnvelope<T> = {
   items: T[];
   total: number;
@@ -725,6 +727,12 @@ export const api = {
     request<ListEnvelope<WatchlistSpotlightItem>>(
       "/watchlist/spotlight?per_asset_limit=5&since_hours=48",
     ),
+  watchedTopics: () => request<WatchedTopics>("/settings/watched-topics"),
+  updateWatchedTopics: (payload: WatchedTopics) =>
+    request<WatchedTopics>("/settings/watched-topics", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   alertPolicy: () => request<AlertPolicy>("/settings/alert-policy"),
   presets: () => request<ConfigurationPresets>("/settings/presets"),
   commands: () => request<ListEnvelope<BotCommand>>("/bot/commands"),

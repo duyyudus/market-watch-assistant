@@ -99,3 +99,32 @@ Implemented in [investigation.py](../market-watch-bot/bot_worker/services/invest
 1. **Evidence Gathering**: Queries the database for local news items. If `BRAVE_SEARCH_API_KEY` is configured, it runs web search queries to fetch official filings, regulator updates, and announcements.
 2. **Result Ranking**: Deduplicates and ranks evidence, prioritizing official and high-quality domains.
 3. **LLM Synthesis**: Submits gathered evidence and event snapshots to the LLM. The LLM produces a structured summary of causes and suggests a **score modifier** (clamped to `-10`..`+10`) to correct potential scoring errors.
+
+
+### Watched topics in daily digests
+
+Digest builds read `AppSetting.watched_topics` once and use the configured LLM to
+assess all events with article reporting in the digest window, independently of
+normal digest score/limit selection. Deterministic batches of 50 events contain
+only in-window article headlines and descriptions. Cross-language semantic matches
+are consolidated into an optional **Watched Topics** section. The event count is
+the union of normal digest events and topic matches. Each watched-topic summary
+uses the language of its topic phrase, independently of other topics and article
+languages, including after batch consolidation. Mixed-language phrases use their
+predominant language; language-neutral phrases such as tickers default to English.
+
+Topic analysis runs use `target_type=digest_topics` and `watched-topics-v2`, recording
+inputs, results, usage, and failures. Cache identities include the window, topics,
+and supplied evidence. Disabled/unconfigured LLMs or failed/invalid topic analysis
+leave the normal digest intact and omit the topic section; keyword matching is never
+used as a fallback. Existing digests are not rewritten when preferences change.
+
+
+When a watched section is available, a final LLM editing pass removes developments
+already covered there from the general lead and sections, comparing meaning across
+languages. Mixed sections retain unrelated developments; wholly covered sections
+are dropped. Watched summaries and their languages are preserved verbatim. If all
+general coverage is redundant, only Watched Topics remains. This editing pass is
+cached/audited as `digest_edit` / `digest-overlap-v1`, keyed by both texts and the
+window. An editing failure retains the original general digest and omits the
+incomplete watched section, consistent with topic-analysis failure handling.

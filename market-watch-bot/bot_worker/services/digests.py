@@ -12,6 +12,7 @@ from bot_worker.db.models import (
     EventClusterItem,
     NormalizedNewsItem,
 )
+from common.watched_topics import get_watched_topics
 
 if TYPE_CHECKING:
     from bot_worker.services.alert_delivery import AlertDeliveryConfig, TelegramSender
@@ -221,6 +222,7 @@ async def build_digest_record(
     limit: int = 50,
     config: LLMConfig | None = None,
 ) -> DigestRecord:
+    topics = (await get_watched_topics(session)).topics
     events = [
         event
         for event in await digest_preview(session, limit=limit, since=since, until=until)
@@ -241,13 +243,32 @@ async def build_digest_record(
         )
         if narrative:
             content = narrative
+    from bot_worker.services.watched_topics import build_watched_topics
+
+    watched_content, watched_ids = await build_watched_topics(
+        session, topics=topics, since=since, until=until, config=config,
+    )
+    if watched_content:
+        from bot_worker.services.llm import remove_watched_topic_overlap
+
+        general_content = ""
+        if events and config is not None:
+            general_content = await remove_watched_topic_overlap(
+                session, general_content=content, watched_content=watched_content,
+                since=since, until=until, config=config,
+            )
+        if general_content is None:
+            # An incomplete topic/editing flow keeps the original general digest intact.
+            watched_ids = set()
+        else:
+            content = "\n\n".join(part for part in [general_content, watched_content] if part)
     digest = DigestRecord(
         digest_type="daily",
         window_start=since,
         window_end=until,
         content=content,
         status="built",
-        event_count=len(events),
+        event_count=len({event.id for event in events} | watched_ids),
     )
     session.add(digest)
     await session.flush()

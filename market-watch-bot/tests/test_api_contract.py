@@ -2467,3 +2467,29 @@ async def test_maintenance_endpoints(client: AsyncClient) -> None:
     assert data["items"][0]["id"] == "retention_1"
     assert data["items"][0]["status"] == "completed"
     assert data["items"][0]["deleted_counts"] == {"news": 10}
+
+
+@pytest.mark.asyncio
+async def test_watched_topics_settings(client):
+    response = await client.get("/settings/watched-topics")
+    assert response.status_code == 200
+    assert response.json() == {"topics": []}
+    payload = {"topics": [" Luật bất động sản ", "rate decision next FOMC meeting"]}
+    response = await client.put("/settings/watched-topics", json=payload)
+    assert response.status_code == 401
+    response = await client.put(
+        "/settings/watched-topics", json=payload, headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["topics"][0] == "Luật bất động sản"
+    assert (await client.get("/settings/watched-topics")).json() == response.json()
+    for topics in [[" "], ["x" * 301], ["x", " X "], [str(i) for i in range(31)]]:
+        response = await client.put(
+            "/settings/watched-topics", json={"topics": topics}, headers=AUTH_HEADERS,
+        )
+        assert response.status_code == 422
+    response = await client.put(
+        "/settings/watched-topics", json={"topics": []}, headers=AUTH_HEADERS,
+    )
+    assert response.json() == {"topics": []}
+    assert (await client.get("/settings/watched-topics")).json() == {"topics": []}
