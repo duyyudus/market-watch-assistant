@@ -33,6 +33,14 @@ The configuration loader ([config.py](../market-watch-bot/common/config.py)) dyn
 The unified AI access layer is implemented in [llm.py](../market-watch-bot/common/llm.py):
 
 - **LLM Prompt Templates**: Stores prompts for entity extraction, ambiguous clustering, event enrichment/scoring, and agentic investigations, with prompt versions/hashes recorded for cache reuse via `LLMAnalysisRun`.
+- **Ephemeral Discussion**: Provides a structured article-grounded answer schema for
+  dashboard discussion requests. Unlike pipeline analysis, these prompts and responses
+  are intentionally not written to `LLMAnalysisRun`.
+
+Embedding configuration and provider primitives live in `common/embeddings.py` so both
+the worker pipeline and API-side semantic retrieval use the same OpenRouter/local
+embedding behavior. The historical `bot_worker.embeddings` import path remains a
+compatibility re-export.
 - **OpenRouter Chat Provider**: `OpenRouterChatProvider` posts to the OpenAI-compatible `/chat/completions` endpoint, with structured-output (schema) validation, concurrency limits, and shared retry/cooldown policies.
 - **Token Auditing**: Tallies prompt/completion tokens, mapping usages to cost models to display live estimated spend breakdowns on the dashboard.
 

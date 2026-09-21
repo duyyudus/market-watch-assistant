@@ -186,6 +186,10 @@ commands that are not implemented.
 
 ## Agent Workflow Notes
 
+- Use Conventional Commit subjects in the form `<type>(<scope>): <imperative summary>`,
+  such as `feat(overview): add article-grounded discussion`. Choose the narrowest useful
+  scope and an appropriate type such as `feat`, `fix`, `refactor`, `docs`, `test`, or
+  `chore`.
 - Inspect relevant files under `brief/` and the existing implementation before editing
   architectural boundaries, CLI shape, data models, or dashboard flows.
 - Keep changes scoped to the requested behavior and avoid unrelated refactors.

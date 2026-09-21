@@ -15,6 +15,12 @@ from api_server.app.schemas.bot import (
     validate_command_payload,
 )
 from api_server.app.schemas.common import ListEnvelope
+from api_server.app.schemas.discussion import (
+    DiscussionChatRequest,
+    DiscussionChatResponse,
+    DiscussionMessage,
+    DiscussionSourceRead,
+)
 from api_server.app.schemas.events import (
     DigestRead,
     EventDetailRead,
@@ -69,6 +75,10 @@ __all__ = [
     "CatalystReviewRead",
     "ConfigurationPresets",
     "DigestRead",
+    "DiscussionChatRequest",
+    "DiscussionChatResponse",
+    "DiscussionMessage",
+    "DiscussionSourceRead",
     "EmbeddingStats",
     "EntityRead",
     "EventDetailRead",

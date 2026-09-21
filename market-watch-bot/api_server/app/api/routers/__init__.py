@@ -4,6 +4,7 @@ from api_server.app.api.routers import (
     alerts,
     bot,
     digests,
+    discussion,
     events,
     health,
     investigations,
@@ -19,6 +20,7 @@ from api_server.app.api.routers import (
 router = APIRouter()
 router.include_router(health.router)
 router.include_router(bot.router)
+router.include_router(discussion.router)
 router.include_router(jobs.router)
 router.include_router(sources.router)
 router.include_router(events.router)
@@ -32,4 +34,3 @@ router.include_router(settings.router)
 router.include_router(maintenance.router)
 
 __all__ = ["router"]
-

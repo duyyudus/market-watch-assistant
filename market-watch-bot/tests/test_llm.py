@@ -11,6 +11,7 @@ from common.llm import (
     LLMClassification,
     LLMClusterDecision,
     LLMConfig,
+    LLMDiscussionAnswer,
     LLMEventScore,
     LLMEventSummary,
     OpenRouterChatProvider,
@@ -25,6 +26,18 @@ from common.llm import (
     parse_structured_response_content,
     strict_json_schema,
 )
+
+
+def test_discussion_answer_preserves_formatting_and_comparison_text() -> None:
+    answer = LLMDiscussionAnswer(
+        answer="\nFirst paragraph.\n\n- Risk is <5%.\n- Second point.\n",
+        cited_article_ids=[],
+    )
+
+    assert answer.answer == "First paragraph.\n\n- Risk is <5%.\n- Second point."
+
+    with pytest.raises(ValidationError):
+        LLMDiscussionAnswer(answer=" \n\t ", cited_article_ids=[])
 
 
 def test_bot_worker_llm_reexports_shared_config_for_compatibility() -> None:

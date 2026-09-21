@@ -8,14 +8,18 @@ import {
   CheckCircle2,
   Database,
   Eye,
+  ExternalLink,
+  MessageCircle,
+  Plus,
   Radio,
   RefreshCcw,
   Search,
+  Send,
   ShieldCheck,
   Sparkles,
   Star,
 } from "lucide-react";
-import type { MouseEvent, ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -23,6 +27,7 @@ import type {
   AlertDecision,
   BotCommand,
   CatalystReview,
+  DiscussionTimeframe,
   EventCluster,
   EventDetail,
 } from "../../api";
@@ -41,6 +46,7 @@ import type {
 } from "../../types/dashboard";
 
 import { WatchedTopicsModal } from "./WatchedTopicsModal";
+import type { DiscussionChatController } from "./useDiscussionChat";
 
 type Segment = "global" | "us" | "vietnam" | "crypto";
 type ActionItem =
@@ -64,6 +70,12 @@ const SEGMENTS: Array<{ id: Segment; label: string }> = [
   { id: "us", label: "U.S." },
   { id: "vietnam", label: "Vietnam" },
   { id: "crypto", label: "Crypto" },
+];
+const DISCUSSION_TIMEFRAMES: Array<{ value: DiscussionTimeframe; label: string }> = [
+  { value: "24h", label: "Last 24 hours" },
+  { value: "3d", label: "Last 3 days" },
+  { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
 ];
 
 function isInvestigationAction(event: EventCluster) {
@@ -153,12 +165,165 @@ function DigestNarrative({ content }: { content: string }) {
   );
 }
 
+function DiscussionPanel({ discussion }: { discussion: DiscussionChatController }) {
+  const {
+    timeframe,
+    messages,
+    draft,
+    loading,
+    error,
+    setDraft,
+    resetForTimeframe,
+    startNewChat,
+    sendMessage,
+  } = discussion;
+
+  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    void sendMessage();
+  }
+
+  return (
+    <div className="flex h-[36rem] min-h-[27rem] flex-col gap-3 xl:h-full xl:min-h-0">
+      <div className="flex items-center justify-between gap-3 text-xs text-base-content/60">
+        <span className="font-semibold uppercase tracking-wide">Article context</span>
+        <div className="flex items-center gap-2">
+          <select
+            aria-label="Discussion article timeframe"
+            className="select select-bordered select-xs bg-zinc-950 text-zinc-100"
+            disabled={loading}
+            onChange={(event) => resetForTimeframe(event.target.value as DiscussionTimeframe)}
+            value={timeframe}
+          >
+            {DISCUSSION_TIMEFRAMES.map((option) => (
+              <option
+                className="bg-zinc-950 text-zinc-100"
+                key={option.value}
+                value={option.value}
+              >
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-xs btn-ghost gap-1"
+            disabled={loading}
+            onClick={startNewChat}
+            type="button"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </button>
+        </div>
+      </div>
+
+      <div
+        aria-live="polite"
+        className="min-h-44 flex-1 space-y-3 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/30 p-3 xl:min-h-0"
+        role="log"
+      >
+        {messages.length === 0 ? (
+          <div className="flex h-full min-h-44 flex-col items-center justify-center px-4 text-center">
+            <MessageCircle className="h-7 w-7 text-primary/70" />
+            <div className="mt-3 text-sm font-semibold text-zinc-200">Ask about recent coverage</div>
+            <p className="mt-1 text-xs leading-5 text-base-content/60">
+              Answers use semantically relevant ingested articles from the selected window.
+            </p>
+          </div>
+        ) : (
+          messages.map((message) => (
+            <div
+              className={classNames(
+                "rounded-lg border px-3 py-2 text-sm leading-5",
+                message.role === "user"
+                  ? "ml-6 border-primary/25 bg-primary/10 text-zinc-100"
+                  : "mr-3 border-zinc-800 bg-zinc-900/70 text-zinc-200",
+              )}
+              key={message.id}
+            >
+              <div className="whitespace-pre-wrap">{message.content}</div>
+              {message.sources?.length ? (
+                <div className="mt-2 border-t border-zinc-800/80 pt-2">
+                  <div className="mb-1 text-[0.65rem] font-bold uppercase tracking-wider text-zinc-500">
+                    Sources
+                  </div>
+                  <div className="space-y-1">
+                    {message.sources.map((source) => (
+                      <a
+                        className="flex items-start gap-1.5 text-xs text-primary hover:underline"
+                        href={source.url}
+                        key={source.id}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <ExternalLink className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          {source.title}{" "}
+                          <span className="text-zinc-500">
+                            · {source.source_name}
+                            {source.published_at ? ` · ${formatTime(source.published_at)}` : ""}
+                          </span>
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ))
+        )}
+        {loading ? (
+          <div className="mr-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs text-base-content/60">
+            <span className="loading loading-dots loading-xs" />
+            Searching articles and composing an answer…
+          </div>
+        ) : null}
+      </div>
+
+      {error ? <div className="alert alert-error px-3 py-2 text-xs">{error}</div> : null}
+
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void sendMessage();
+        }}
+      >
+        <textarea
+          aria-label="Discussion message"
+          className="textarea textarea-bordered min-h-16 flex-1 resize-none bg-zinc-950/50 text-sm"
+          disabled={loading}
+          maxLength={8_000}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
+          placeholder="Ask a question about the selected articles…"
+          rows={2}
+          value={draft}
+        />
+        <button
+          aria-label="Send discussion message"
+          className="btn btn-square btn-primary"
+          disabled={loading || !draft.trim()}
+          type="submit"
+        >
+          <Send className="h-4 w-4" />
+        </button>
+      </form>
+      <div className="text-[0.65rem] leading-4 text-zinc-600">
+        Temporary chat · cleared when this page is refreshed or closed
+      </div>
+    </div>
+  );
+}
+
 function OverviewPanel({
   title,
   icon: Icon,
   action,
   children,
   fill = false,
+  stretch = false,
 }: {
   title: string;
   icon: typeof Activity;
@@ -166,14 +331,16 @@ function OverviewPanel({
   children: ReactNode;
   // When true, the panel stretches with its grid row (matching a taller sibling) and
   // the body flexes to fill, so an absolutely-positioned scroll child can occupy the
-  // full height. Gated to xl, where the two-column overview grid exists.
+  // full height. Gated to xl, where the multi-column overview grid exists.
   fill?: boolean;
+  // Stretches regular padded content to consume the full height of its grid cell.
+  stretch?: boolean;
 }) {
   return (
     <section
       className={classNames(
         "overflow-hidden rounded-lg border border-zinc-800/80 bg-zinc-900/60 shadow-lg shadow-black/10",
-        fill && "xl:flex xl:flex-col",
+        (fill || stretch) && "xl:flex xl:flex-col",
       )}
     >
       <div className="flex items-center gap-2 border-b border-zinc-800/60 bg-zinc-900/40 px-5 py-4">
@@ -187,6 +354,7 @@ function OverviewPanel({
           // min-h floors the row at ~5 alert cards so a short sibling can't shrink the
           // list below a useful size; a taller sibling still grows it past the floor.
           fill && "xl:relative xl:flex-1 xl:p-0 xl:min-h-[27rem]",
+          stretch && "xl:flex xl:min-h-0 xl:flex-1 xl:flex-col",
         )}
       >
         {children}
@@ -432,6 +600,7 @@ function WatchlistEventPopover({
 export function Overview({
   state,
   errors,
+  discussion,
   retry,
   loadEventDetail,
   queue,
@@ -443,6 +612,7 @@ export function Overview({
 }: {
   state: DashboardState;
   errors: ResourceErrors;
+  discussion: DiscussionChatController;
   retry: () => Promise<void>;
   loadEventDetail: (id: string) => void;
   queue: QueueCommand;
@@ -587,7 +757,7 @@ export function Overview({
   return (
     <div className="space-y-5">
       {watchedTopicsOpen ? <WatchedTopicsModal onClose={() => setWatchedTopicsOpen(false)} /> : null}
-      <div className="grid gap-5 xl:grid-cols-[1.35fr_1fr]">
+      <div className="grid gap-5 xl:grid-cols-3">
         <OverviewPanel fill icon={ShieldCheck} title="Needs you now">
           <ActionQueue
             items={actionItems}
@@ -595,6 +765,10 @@ export function Overview({
             openEventPopover={openEventPopover}
             openMaintenance={openMaintenance}
           />
+        </OverviewPanel>
+
+        <OverviewPanel stretch icon={MessageCircle} title="Discussion">
+          <DiscussionPanel discussion={discussion} />
         </OverviewPanel>
 
         <OverviewPanel

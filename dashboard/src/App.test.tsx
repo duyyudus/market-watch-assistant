@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, compareValues } from "./App";
+import { buildDiscussionRequestMessages } from "./features/overview/useDiscussionChat";
 import { formatTime } from "./lib/time";
 
 const apiMock = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const apiMock = vi.hoisted(() => ({
   alerts: vi.fn(),
   alert: vi.fn(),
   relatedNewsSummary: vi.fn(),
+  discussionChat: vi.fn(),
   sourceHealth: vi.fn(),
   alertChannels: vi.fn(),
   alertSuppressionRules: vi.fn(),
@@ -631,6 +633,19 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     event_count: 1,
     created_at: "2026-05-29T13:05:00Z",
   });
+  apiMock.discussionChat.mockResolvedValue({
+    status: "answered",
+    answer: "Rates coverage points to a less hawkish policy path.",
+    sources: [
+      {
+        id: "news_1",
+        title: "Fed signals a slower rate path",
+        url: "https://www.example.com/news",
+        source_name: "Federal Reserve",
+        published_at: "2026-05-29T13:00:00Z",
+      },
+    ],
+  });
   apiMock.createSource.mockResolvedValue({
     id: "src_2",
     name: "CoinDesk",
@@ -801,6 +816,45 @@ describe("App navigation", () => {
 });
 
 describe("App data states", () => {
+  it("bounds long discussion history before sending it to the API", () => {
+    const history = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `message-${index}:` + "x".repeat(9_000),
+    }));
+
+    const messages = buildDiscussionRequestMessages(history, "y".repeat(9_000));
+
+    expect(messages.length).toBeLessThanOrEqual(20);
+    expect(
+      messages.reduce((total, message) => total + Array.from(message.content).length, 0),
+    ).toBeLessThanOrEqual(56_000);
+    expect(messages.every((message) => Array.from(message.content).length <= 8_000)).toBe(true);
+    expect(messages[messages.length - 1]).toEqual({
+      role: "user",
+      content: "y".repeat(8_000),
+    });
+    expect(messages.some((message) => message.content.startsWith("message-19:"))).toBe(true);
+    expect(messages.some((message) => message.content.startsWith("message-0:"))).toBe(false);
+  });
+
+  it("trims discussion history without splitting Unicode characters", () => {
+    const history = [
+      { role: "assistant" as const, content: "😀".repeat(9_000) },
+      ...Array.from({ length: 6 }, () => ({
+        role: "assistant" as const,
+        content: "x".repeat(8_000),
+      })),
+    ];
+
+    const messages = buildDiscussionRequestMessages(history, "y");
+
+    expect(Array.from(messages[0].content)).toHaveLength(7_999);
+    expect(messages[0].content.endsWith("😀")).toBe(true);
+    expect(
+      messages.reduce((total, message) => total + Array.from(message.content).length, 0),
+    ).toBe(56_000);
+  });
+
   it("loads only overview resources on initial render", async () => {
     await renderLoadedApp();
 
@@ -837,6 +891,168 @@ describe("App data states", () => {
     expect(screen.getByText("S&P 500 ETF")).toBeInTheDocument();
     expect(screen.getByText(/Coverage:/)).toBeInTheDocument();
     expect(screen.getByText(/1 healthy/)).toBeInTheDocument();
+  });
+
+  it("places equal-width Discussion between overview action and synthesis panels", async () => {
+    await renderLoadedApp();
+
+    const needsHeading = screen.getByRole("heading", { name: "Needs you now" });
+    const discussionHeading = screen.getByRole("heading", { name: "Discussion" });
+    const synthesisHeading = screen.getByRole("heading", { name: "Daily synthesis" });
+    const panelGrid = needsHeading.closest("div.grid");
+    const discussionPanel = discussionHeading.closest("section");
+    const conversationLog = within(discussionPanel!).getByRole("log");
+
+    expect(panelGrid).toHaveClass("xl:grid-cols-3");
+    expect(discussionPanel).toHaveClass("xl:flex", "xl:flex-col");
+    expect(conversationLog).toHaveClass("flex-1", "xl:min-h-0");
+    expect(conversationLog).not.toHaveClass("max-h-[20rem]");
+    expect(
+      needsHeading.compareDocumentPosition(discussionHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      discussionHeading.compareDocumentPosition(synthesisHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Discussion article timeframe")).toHaveValue("24h");
+    expect(screen.getByLabelText("Discussion article timeframe")).toHaveClass(
+      "bg-zinc-950",
+      "text-zinc-100",
+    );
+  });
+
+  it("chats with article context, displays sources, and resets when timeframe changes", async () => {
+    await renderLoadedApp();
+
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "What does the Fed coverage imply?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+
+    await waitFor(() =>
+      expect(apiMock.discussionChat).toHaveBeenCalledWith({
+        timeframe: "24h",
+        messages: [{ role: "user", content: "What does the Fed coverage imply?" }],
+      }),
+    );
+    expect(
+      await screen.findByText("Rates coverage points to a less hawkish policy path."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Fed signals a slower rate path/i }),
+    ).toHaveAttribute("href", "https://www.example.com/news");
+    expect(
+      screen.getByRole("link", { name: /Fed signals a slower rate path/i }),
+    ).toHaveTextContent(formatTime("2026-05-29T13:00:00Z"));
+
+    fireEvent.change(screen.getByLabelText("Discussion article timeframe"), {
+      target: { value: "7d" },
+    });
+
+    expect(screen.getByLabelText("Discussion article timeframe")).toHaveValue("7d");
+    expect(
+      screen.queryByText("Rates coverage points to a less hawkish policy path."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Discussion message")).toHaveValue("");
+  });
+
+  it("prevents duplicate discussion sends while a response is pending", async () => {
+    let resolveDiscussion: ((value: {
+      status: string;
+      answer: string;
+      sources: never[];
+    }) => void) | null = null;
+    apiMock.discussionChat.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDiscussion = resolve;
+        }),
+    );
+    await renderLoadedApp();
+
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "Summarize rates." },
+    });
+    const sendButton = screen.getByRole("button", { name: "Send discussion message" });
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(apiMock.discussionChat).toHaveBeenCalledTimes(1);
+    expect(sendButton).toBeDisabled();
+
+    await act(async () => {
+      resolveDiscussion?.({ status: "answered", answer: "Rates eased.", sources: [] });
+    });
+    expect(await screen.findByText("Rates eased.")).toBeInTheDocument();
+  });
+
+  it("shows a readable discussion validation error", async () => {
+    apiMock.discussionChat.mockRejectedValueOnce(
+      new Error('422 Unprocessable Entity: {"detail":[{"type":"too_long"}]}'),
+    );
+    await renderLoadedApp();
+
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "Continue the discussion." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+
+    expect(
+      await screen.findByText(
+        "The discussion request could not be validated. Shorten your message or start a new chat.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/unprocessable entity/i)).not.toBeInTheDocument();
+  });
+
+  it("starts a new discussion without changing the selected timeframe", async () => {
+    await renderLoadedApp();
+
+    fireEvent.change(screen.getByLabelText("Discussion article timeframe"), {
+      target: { value: "30d" },
+    });
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "Summarize the month." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+    expect(
+      await screen.findByText("Rates coverage points to a less hawkish policy path."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+
+    expect(screen.getByLabelText("Discussion article timeframe")).toHaveValue("30d");
+    expect(
+      screen.queryByText("Rates coverage points to a less hawkish policy path."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Discussion message")).toHaveValue("");
+    expect(screen.getByText("Ask about recent coverage")).toBeInTheDocument();
+  });
+
+  it("keeps the discussion when navigating away from Overview and back", async () => {
+    await renderLoadedApp();
+
+    fireEvent.change(screen.getByLabelText("Discussion article timeframe"), {
+      target: { value: "7d" },
+    });
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "What changed this week?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+    expect(
+      await screen.findByText("Rates coverage points to a less hawkish policy path."),
+    ).toBeInTheDocument();
+
+    switchTo("news");
+    expect(
+      screen.queryByText("Rates coverage points to a less hawkish policy path."),
+    ).not.toBeInTheDocument();
+    switchTo("overview");
+
+    expect(screen.getByLabelText("Discussion article timeframe")).toHaveValue("7d");
+    expect(
+      screen.getByText("Rates coverage points to a less hawkish policy path."),
+    ).toBeInTheDocument();
   });
 
   it("shows five newest reported spotlight events per watchlist asset", async () => {

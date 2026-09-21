@@ -9,6 +9,27 @@ const API_AUTH_TOKEN = import.meta.env.VITE_API_AUTH_TOKEN;
 
 export type WatchedTopics = { topics: string[] };
 
+export type DiscussionTimeframe = "24h" | "3d" | "7d" | "30d";
+
+export type DiscussionMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type DiscussionSource = {
+  id: string;
+  title: string;
+  url: string;
+  source_name: string;
+  published_at?: string | null;
+};
+
+export type DiscussionChatResponse = {
+  status: "answered" | "no_context";
+  answer: string;
+  sources: DiscussionSource[];
+};
+
 export type ListEnvelope<T> = {
   items: T[];
   total: number;
@@ -701,6 +722,14 @@ export const api = {
   relatedNewsSummary: (eventId: string) =>
     request<EventRelatedNewsSummary>(`/events/${eventId}/related-news-summary`, {
       method: "POST",
+    }),
+  discussionChat: (payload: {
+    timeframe: DiscussionTimeframe;
+    messages: DiscussionMessage[];
+  }) =>
+    request<DiscussionChatResponse>("/discussion/chat", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   digestLatest: () => request<Digest | null>("/digests/latest"),
   news: (limit = 100, domain?: string, offset = 0, filters?: NewsFilters) =>

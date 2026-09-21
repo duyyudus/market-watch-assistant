@@ -102,6 +102,33 @@ describe("normalizeListResponse", () => {
     vi.unstubAllGlobals();
   });
 
+  it("posts ephemeral discussion messages with the selected timeframe", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({ status: "answered", answer: "Grounded answer", sources: [] }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.discussionChat({
+      timeframe: "7d",
+      messages: [{ role: "user", content: "What changed?" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/discussion/chat"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          timeframe: "7d",
+          messages: [{ role: "user", content: "What changed?" }],
+        }),
+      }),
+    );
+    vi.unstubAllGlobals();
+  });
+
   it("builds event endpoint paths with pagination cap and score filter", () => {
     expect(
       buildEventsPath({

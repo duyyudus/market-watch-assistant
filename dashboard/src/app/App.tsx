@@ -10,6 +10,7 @@ import { Events } from "../features/events/Events";
 import { Maintenance } from "../features/maintenance/Maintenance";
 import { NewsTable } from "../features/news/NewsTable";
 import { Overview } from "../features/overview/Overview";
+import { useDiscussionChat } from "../features/overview/useDiscussionChat";
 import { SourcesTable } from "../features/sources/SourcesTable";
 import { WatchlistTable } from "../features/watchlist/WatchlistTable";
 import { classNames } from "../lib/classNames";
@@ -91,6 +92,7 @@ export function App() {
     setNewsRegion,
     setSelectedAlertId,
   } = useDashboardData();
+  const discussion = useDiscussionChat();
   const [themeMode, setThemeMode] = useState<string>(
     () => localStorage.getItem("mw-theme-mode") ?? "dark",
   );
@@ -300,6 +302,7 @@ export function App() {
               <Overview
                 state={state}
                 errors={resourceErrors}
+                discussion={discussion}
                 retry={() => load(true)}
                 loadEventDetail={(id) => void loadEventDetail(id)}
                 queue={queue}

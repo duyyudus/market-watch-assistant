@@ -34,6 +34,13 @@ The client source is organized into feature folders under [src/features/](../das
 ### Overview (`overview/`)
 The landing dashboard: system health and worker heartbeat liveness, the latest daily digest, and **per-segment spotlight event ranking**. Top events are fetched server-side per market segment — `global`, `us`, `vietnam`, and `crypto` (`EventSegment` in `api.ts`, loaded by `loadOverviewSegments`) — each with its own display limit.
 
+The top row also includes an equal-width **Discussion** panel between **Needs you now**
+and **Daily synthesis**. It provides an ephemeral, article-grounded chat with rolling
+24-hour, 3-day, 7-day, and 30-day context windows. Each question retrieves the most
+relevant stored article embeddings, answers with the configured LLM, and links the
+supporting ingested articles. Conversation state exists only in React memory and is
+cleared when the overview is remounted or the page is refreshed.
+
 ### Events (`events/`)
 An interactive event explorer (paginated, filterable, and sortable) displaying:
 - **Events Timeline**: Lists active event clusters with scores, headline titles, and regions.

@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import api_server.app.services.discussion as discussion_service
 import api_server.app.services.events as event_service
 import api_server.app.services.watchlist as watchlist_service
 from api_server.app.db import Base, get_session
@@ -40,7 +41,7 @@ from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
 from common.external_providers import ProviderRetryPolicy
-from common.llm import LLMRelatedNewsSummary
+from common.llm import LLMDiscussionAnswer, LLMRelatedNewsSummary
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
@@ -1340,6 +1341,163 @@ async def test_related_news_summary_missing_event_returns_404(client: AsyncClien
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_is_authenticated(client: AsyncClient) -> None:
+    response = await client.post(
+        "/discussion/chat",
+        json={"timeframe": "24h", "messages": [{"role": "user", "content": "Fed?"}]},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_validates_the_final_message(client: AsyncClient) -> None:
+    response = await client.post(
+        "/discussion/chat",
+        json={
+            "timeframe": "24h",
+            "messages": [{"role": "assistant", "content": "What would you like to know?"}],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422
+
+    too_many_messages = await client.post(
+        "/discussion/chat",
+        json={
+            "timeframe": "24h",
+            "messages": [{"role": "user", "content": f"Question {index}"} for index in range(21)],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert too_many_messages.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_returns_no_context_without_calling_providers(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        discussion_service,
+        "embedding_provider",
+        lambda _config: pytest.fail("embedding provider should not be called"),
+    )
+    response = await client.post(
+        "/discussion/chat",
+        json={
+            "timeframe": "24h",
+            "messages": [{"role": "user", "content": "What happened?"}],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "no_context",
+        "answer": discussion_service.NO_CONTEXT_MESSAGE,
+        "sources": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_uses_semantic_context_and_does_not_persist_run(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeEmbeddingProvider:
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            assert texts == ["What did rates do?\nWhat does that mean for equities?"]
+            return [[0.1] * 1536]
+
+    class FakeLLMProvider:
+        async def answer_discussion(self, prompt: str):
+            assert "Full article text about the Federal Reserve policy path." in prompt
+            assert "Labor data eased rates pressure." in prompt
+            assert "Older oil supply analysis" not in prompt
+            assert "What did rates do?" in prompt
+            assert "What does that mean for equities?" in prompt
+            return (
+                LLMDiscussionAnswer(
+                    answer="The articles describe a less hawkish policy path.",
+                    cited_article_ids=["news_1", "not-a-retrieved-article"],
+                ),
+                {"total_tokens": 120},
+            )
+
+    settings = app.state.settings
+    settings.embeddings.provider = "openai"
+    settings.embeddings.model = "text-embedding-3-small"
+    settings.embeddings.version = "1"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        discussion_service,
+        "utcnow",
+        lambda: datetime(2026, 5, 30, 12, 0, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        discussion_service,
+        "embedding_provider",
+        lambda _config: FakeEmbeddingProvider(),
+    )
+    monkeypatch.setattr(
+        discussion_service,
+        "llm_provider",
+        lambda _config: FakeLLMProvider(),
+    )
+
+    before = await client.get("/maintenance/llm-runs")
+    response = await client.post(
+        "/discussion/chat",
+        json={
+            "timeframe": "24h",
+            "messages": [
+                {"role": "user", "content": "What did rates do?"},
+                {"role": "assistant", "content": "They eased after the report."},
+                {"role": "user", "content": "What does that mean for equities?"},
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    after = await client.get("/maintenance/llm-runs")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "answered"
+    assert response.json()["answer"] == "The articles describe a less hawkish policy path."
+    assert [source["id"] for source in response.json()["sources"]] == ["news_1"]
+    assert response.json()["sources"][0]["url"] == "https://www.example.com/news"
+    assert before.json()["total"] == after.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_reports_missing_embedding_configuration(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = app.state.settings
+    settings.embeddings.provider = "openai"
+    settings.embeddings.model = "text-embedding-3-small"
+    settings.embeddings.version = "1"
+    settings.openrouter_api_key = None
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        discussion_service,
+        "utcnow",
+        lambda: datetime(2026, 5, 30, 12, 0, tzinfo=UTC),
+    )
+
+    response = await client.post(
+        "/discussion/chat",
+        json={"timeframe": "24h", "messages": [{"role": "user", "content": "Fed?"}]},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 503
+    assert "required for discussion retrieval" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
