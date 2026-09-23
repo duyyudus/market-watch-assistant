@@ -1023,6 +1023,13 @@ async def test_events_endpoint_orders_filters_and_caps_by_report_range(
     assert uncapped.json()["total"] >= 3
     assert [item["id"] for item in uncapped.json()["items"]] == ["evt_1"]
 
+    recent = await client.get("/events?limit=100&report_end_after=2026-05-30T00:00:00Z")
+    assert recent.status_code == 200
+    recent_ids = [item["id"] for item in recent.json()["items"]]
+    assert "evt_newer_report" in recent_ids
+    assert "evt_1" in recent_ids
+    assert "evt_older_high_score" not in recent_ids
+
 
 @pytest.mark.asyncio
 async def test_event_filter_options_list_distinct_non_empty_regions(

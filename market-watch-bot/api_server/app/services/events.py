@@ -91,6 +91,7 @@ async def list_events(
     q: str | None,
     region: str | None = None,
     segment: str | None = None,
+    report_end_after: datetime | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     report_ranges = _report_range_subquery()
     report_end_at = report_ranges.c.report_end_at
@@ -120,6 +121,8 @@ async def list_events(
         segment_predicate = _segment_filter(segment)
         if segment_predicate is not None:
             stmt = stmt.where(segment_predicate)
+    if report_end_after is not None:
+        stmt = stmt.where(report_end_at >= report_end_after)
     matching_total = await count_for(session, stmt)
     total = min(matching_total, max_items) if max_items is not None else matching_total
     if offset >= total:

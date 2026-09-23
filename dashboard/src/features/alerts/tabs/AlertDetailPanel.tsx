@@ -57,7 +57,7 @@ export function AlertDetailPanel({
   useEffect(() => {
     setActiveNewsId(null);
     setSummaryOpen(false);
-  }, [alert?.id, eventDetail?.id]);
+  }, [alert?.id]);
 
   useEffect(() => {
     if (!activeNewsId) return undefined;

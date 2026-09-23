@@ -642,6 +642,7 @@ export type EventQueryOptions = {
   minScore: number;
   region?: string;
   segment?: EventSegment | null;
+  reportEndAfter?: string;
 };
 
 export function buildEventsPath({
@@ -651,6 +652,7 @@ export function buildEventsPath({
   minScore,
   region,
   segment,
+  reportEndAfter,
 }: EventQueryOptions): string {
   const params = new URLSearchParams({
     limit: String(pageSize),
@@ -660,6 +662,7 @@ export function buildEventsPath({
   params.set("min_score", String(minScore));
   if (region) params.set("region", region);
   if (segment) params.set("segment", segment);
+  if (reportEndAfter) params.set("report_end_after", reportEndAfter);
   return `/events?${params.toString()}`;
 }
 

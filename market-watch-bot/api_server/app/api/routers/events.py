@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -30,6 +31,7 @@ async def list_events(
     q: str | None = None,
     region: str | None = Query(None, min_length=1, max_length=64),
     segment: str | None = Query(None, pattern="^(global|us|vietnam|crypto)$"),
+    report_end_after: datetime | None = None,
 ) -> ListEnvelope[EventRead]:
     rows, total = await event_service.list_events(
         session,
@@ -41,6 +43,7 @@ async def list_events(
         q=q,
         region=region,
         segment=segment,
+        report_end_after=report_end_after,
     )
     return ListEnvelope(items=[EventRead.model_validate(row) for row in rows], total=total)
 

@@ -143,7 +143,7 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
         regions: ["us"],
         asset_classes: ["global_macro"],
         affected_entities: ["Federal Reserve"],
-        affected_tickers: [],
+        affected_tickers: ["SPY"],
         source_count: 2,
         final_score: 84,
         alert_level: "immediate_alert",
@@ -885,7 +885,7 @@ describe("App data states", () => {
     const rebuildButton = screen.getByRole("button", { name: "Rebuild" });
     expect(topicButton.compareDocumentPosition(rebuildButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/US \/ global_macro/)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Top events" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Latest events" })).toBeInTheDocument();
     expect((await screen.findAllByText("SPY")).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "Watchlist spotlight" })).toBeInTheDocument();
     expect(screen.getByText("S&P 500 ETF")).toBeInTheDocument();
@@ -1421,26 +1421,129 @@ describe("App data states", () => {
     expect(screen.queryByText("ETF outflows pressure BTC")).not.toBeInTheDocument();
   });
 
-  it("opens top event details in an overview popover", async () => {
+  it("caps recent segment rows and removes duplicates between pages", async () => {
+    const reports = Array.from({ length: 501 }, (_, index) => ({
+      id: `recent_${index}`,
+      canonical_headline: `Recent report ${index}`,
+      status: "reported",
+      regions: ["global"],
+      asset_classes: ["global_macro"],
+      affected_entities: [],
+      affected_tickers: [],
+      source_count: 1,
+      final_score: 100 - (index % 100),
+      report_end_at: new Date(Date.now() - (501 - index) * 60_000).toISOString(),
+      last_updated_at: new Date().toISOString(),
+    })).reverse();
+    apiMock.events.mockImplementation(
+      async (options?: { segment?: string; offset?: number }) => {
+        if (options?.segment === "global") {
+          const items = options.offset === 0
+            ? reports.slice(0, 200)
+            : options.offset === 200
+              ? [reports[199], ...reports.slice(200, 399)]
+              : reports.slice(399, 499);
+          return { items, total: reports.length };
+        }
+        return envelope([]);
+      },
+    );
     await renderLoadedApp();
 
-    const topEvents = screen.getByRole("heading", { name: "Top events" }).closest("section");
+    const latestEvents = screen.getByRole("heading", { name: "Latest events" }).closest("section");
+    expect(latestEvents).not.toBeNull();
+    await waitFor(() =>
+      expect(within(latestEvents!).getAllByTestId(/^event-card-recent_/)).toHaveLength(499),
+    );
+    const list = within(latestEvents!).getByLabelText("Latest events list");
+    expect(list).toHaveClass("max-h-[38rem]", "overflow-y-auto", "xl:grid-cols-3");
+    const cards = within(list).getAllByTestId(/^event-card-recent_/);
+    expect(cards[0]).toHaveTextContent("Recent report 500");
+    expect(cards[498]).toHaveTextContent("Recent report 2");
+    expect(new Set(cards.map((card) => card.dataset.testid)).size).toBe(cards.length);
+    expect(apiMock.event).not.toHaveBeenCalled();
+    const globalCalls = apiMock.events.mock.calls
+      .map(([options]) => options)
+      .filter((options) => options?.segment === "global");
+    expect(globalCalls.map((options) => options.offset)).toEqual([0, 200, 400]);
+    expect(globalCalls.map((options) => options.pageSize)).toEqual([200, 200, 100]);
+    expect(globalCalls.every((options) => options.maxItems === 500)).toBe(true);
+    const cutoffAge = Date.now() - Date.parse(globalCalls[0].reportEndAfter);
+    expect(cutoffAge).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+    expect(cutoffAge).toBeLessThan(24 * 60 * 60 * 1000 + 60_000);
+  });
+
+  it("opens latest event details in an overview popover", async () => {
+    await renderLoadedApp();
+
+    const topEvents = screen.getByRole("heading", { name: "Latest events" }).closest("section");
     expect(topEvents).not.toBeNull();
 
-    fireEvent.click(
-      within(topEvents!).getByRole("button", { name: /Fed signals a slower rate path/ }),
-    );
+    const eventCard = within(topEvents!).getByRole("button", {
+      name: /Fed signals a slower rate path/,
+    });
+    expect(eventCard).toHaveAttribute("title", "Tickers: SPY");
+    expect(within(eventCard).queryByText("SPY")).not.toBeInTheDocument();
+    fireEvent.click(eventCard);
 
     const popover = await screen.findByRole("dialog", {
       name: "Fed signals a slower rate path details",
     });
 
     expect(apiMock.event).toHaveBeenCalledWith("evt_1");
-    expect(screen.getByRole("heading", { name: "Top events" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Latest events" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Event clusters" })).not.toBeInTheDocument();
     expect(within(popover).getByText("Policy makers leaned less hawkish.")).toBeInTheDocument();
     expect(within(popover).getByText("Event ID")).toBeInTheDocument();
     expect(within(popover).getByText("evt_1")).toBeInTheDocument();
+
+    fireEvent.scroll(within(topEvents!).getByLabelText("Latest events list"));
+    expect(
+      screen.queryByRole("dialog", { name: "Fed signals a slower rate path details" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens the Events summary from a latest event context menu", async () => {
+    await renderLoadedApp();
+
+    const topEvents = screen.getByRole("heading", { name: "Latest events" }).closest("section")!;
+    const eventCard = await within(topEvents).findByRole("button", {
+      name: /Fed signals a slower rate path/,
+    });
+
+    fireEvent.contextMenu(eventCard, { clientX: 120, clientY: 160 });
+
+    const menu = screen.getByRole("menu", { name: "Event actions" });
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(1);
+    expect(within(menu).getByRole("menuitem", { name: "Summary" })).toHaveFocus();
+    expect(apiMock.relatedNewsSummary).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "Fed signals a slower rate path details" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Summary" }));
+
+    expect(screen.queryByRole("menu", { name: "Event actions" })).not.toBeInTheDocument();
+    expect(apiMock.relatedNewsSummary).toHaveBeenCalledWith("evt_1");
+    const summary = await screen.findByRole("dialog", { name: "Related news summary" });
+    expect(within(summary).getByText("Related coverage points to a less hawkish Fed path."))
+      .toBeInTheDocument();
+
+    fireEvent.click(within(summary).getByRole("button", { name: "Close summary" }));
+    fireEvent.contextMenu(eventCard, { clientX: 120, clientY: 160 });
+    fireEvent.scroll(within(topEvents).getByLabelText("Latest events list"));
+    expect(screen.queryByRole("menu", { name: "Event actions" })).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(eventCard, { clientX: 120, clientY: 160 });
+    fireEvent.blur(screen.getByRole("menuitem", { name: "Summary" }), {
+      relatedTarget: eventCard,
+    });
+    expect(screen.queryByRole("menu", { name: "Event actions" })).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(eventCard, { clientX: 120, clientY: 160 });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "Event actions" })).not.toBeInTheDocument();
+    expect(eventCard).toHaveFocus();
   });
 
   it("shows the overview caught-up state when there are no action items", async () => {
@@ -1603,7 +1706,7 @@ describe("App data states", () => {
     expect(screen.getByText("Latest price move snapshots")).toBeInTheDocument();
     expect(screen.getByText("Less hawkish Fed path.")).toBeInTheDocument();
     expect(screen.getByText("monitor duration exposure")).toBeInTheDocument();
-    expect(screen.getByText("SPY")).toBeInTheDocument();
+    expect(screen.getAllByText("SPY").length).toBeGreaterThan(0);
     expect(screen.getByText(`Captured ${formatTime("2026-05-29T13:10:00Z")}`)).toBeInTheDocument();
     expect(screen.getByText("Source")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /rescore/i })).toBeInTheDocument();

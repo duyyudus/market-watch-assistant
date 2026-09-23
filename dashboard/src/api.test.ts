@@ -155,6 +155,18 @@ describe("normalizeListResponse", () => {
         region: "us",
       }),
     ).toBe("/events?limit=100&offset=0&max_items=100&min_score=0&region=us");
+    expect(
+      buildEventsPath({
+        offset: 0,
+        pageSize: 200,
+        maxItems: null,
+        minScore: 0,
+        segment: "crypto",
+        reportEndAfter: "2026-05-29T12:00:00.000Z",
+      }),
+    ).toBe(
+      "/events?limit=200&offset=0&min_score=0&segment=crypto&report_end_after=2026-05-29T12%3A00%3A00.000Z",
+    );
   });
 
   it("builds alert endpoint paths with pagination cap and decision filter", () => {

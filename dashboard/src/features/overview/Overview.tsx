@@ -1,10 +1,8 @@
 import {
   Activity,
   AlertTriangle,
-  ArrowDownRight,
-  ArrowRight,
-  ArrowUpRight,
   Bell,
+  Brain,
   CheckCircle2,
   Database,
   Eye,
@@ -20,7 +18,7 @@ import {
   Star,
 } from "lucide-react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type {
@@ -33,10 +31,10 @@ import type {
 } from "../../api";
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/EmptyState";
+import { RelatedNewsSummaryModal } from "../../components/RelatedNewsSummaryModal";
 import { SectionError } from "../../components/SectionError";
 import { EventDetailReadOnly } from "../events/EventDetailReadOnly";
 import { classNames } from "../../lib/classNames";
-import { scoreTone } from "../../lib/score";
 import { formatTime } from "../../lib/time";
 import type {
   DashboardState,
@@ -58,6 +56,12 @@ type SpotlightAnchor = Pick<DOMRect, "bottom" | "height" | "left" | "top" | "wid
 // event is in the events page). When absent, the popover renders off the fetched
 // EventDetail, which is a superset of EventCluster.
 type SpotlightPopover = { eventId: string; event?: EventCluster; anchor: SpotlightAnchor };
+type EventContextMenu = {
+  event: EventCluster;
+  left: number;
+  top: number;
+  trigger: HTMLButtonElement;
+};
 
 // "Needs you now" surfaces immediate alerts as read-only cards (no acknowledgement
 // step) within a rolling window keyed off the event's report time, so the panel
@@ -109,28 +113,6 @@ function freshnessTone(value?: string | null) {
   if (minutes <= 30) return "bg-emerald-400";
   if (minutes <= 180) return "bg-amber-400";
   return "bg-rose-400";
-}
-
-function scoreTrend(detail?: EventDetail) {
-  if (!detail || detail.score_history.length < 2) return null;
-  const ordered = [...detail.score_history].sort(
-    (left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
-  );
-  const first = ordered[0].final_score;
-  const latest = ordered[ordered.length - 1].final_score;
-  const delta = latest - first;
-  if (Math.abs(delta) < 1) return { label: "flat", className: "text-zinc-400", icon: ArrowRight };
-  return delta > 0
-    ? { label: `+${delta.toFixed(0)}`, className: "text-emerald-400", icon: ArrowUpRight }
-    : { label: delta.toFixed(0), className: "text-rose-400", icon: ArrowDownRight };
-}
-
-function primaryMove(detail?: EventDetail) {
-  return detail?.market_moves[0] ?? null;
-}
-
-function mergedEvent(event: EventCluster, detail?: EventDetail) {
-  return detail ?? event;
 }
 
 function sourceHealthCounts(state: DashboardState) {
@@ -470,26 +452,31 @@ function ActionQueue({
 
 function EventCard({
   event,
-  detail,
   isOpen,
   openEventPopover,
+  openContextMenu,
 }: {
   event: EventCluster;
-  detail?: EventDetail;
   isOpen: boolean;
   openEventPopover: (
     eventId: string,
     baseEvent: EventCluster | undefined,
     clickEvent: MouseEvent<HTMLButtonElement>,
   ) => void;
+  openContextMenu: (
+    event: EventCluster,
+    trigger: HTMLButtonElement,
+    x: number,
+    y: number,
+  ) => void;
 }) {
-  const combined = mergedEvent(event, detail);
-  const trend = scoreTrend(detail);
-  const move = primaryMove(detail);
-  const TrendIcon = trend?.icon;
+  const tickerTooltip = event.affected_tickers.length
+    ? `Tickers: ${event.affected_tickers.join(", ")}`
+    : undefined;
   return (
     <button
       aria-controls={isOpen ? `watchlist-event-popover-${event.id}` : undefined}
+      aria-description={tickerTooltip}
       aria-expanded={isOpen}
       className={classNames(
         "w-full rounded-lg border bg-zinc-950/30 p-4 text-left transition-colors hover:border-primary/40 hover:bg-zinc-900/70",
@@ -498,47 +485,21 @@ function EventCard({
       data-watchlist-event-trigger={event.id}
       data-testid={`event-card-${event.id}`}
       onClick={(clickEvent) => openEventPopover(event.id, event, clickEvent)}
+      onContextMenu={(contextEvent) => {
+        contextEvent.preventDefault();
+        openContextMenu(
+          event,
+          contextEvent.currentTarget,
+          contextEvent.clientX,
+          contextEvent.clientY,
+        );
+      }}
+      title={tickerTooltip}
       type="button"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={scoreTone(event.final_score)}>{event.final_score}</Badge>
-        {event.alert_level ? <Badge tone="neutral">{event.alert_level.replace(/_/g, " ")}</Badge> : null}
-        <span className="text-xs text-base-content/50">{event.source_count} sources</span>
-        {trend && TrendIcon ? (
-          <span className={classNames("inline-flex items-center gap-1 text-xs font-semibold", trend.className)}>
-            <TrendIcon className="h-3.5 w-3.5" />
-            {trend.label}
-          </span>
-        ) : null}
-        {move ? (
-          <span
-            className={classNames(
-              "rounded-md px-2 py-0.5 text-xs font-semibold",
-              move.price_change_pct >= 0
-                ? "bg-emerald-500/10 text-emerald-300"
-                : "bg-rose-500/10 text-rose-300",
-            )}
-          >
-            {move.asset_symbol} {move.price_change_pct >= 0 ? "+" : ""}
-            {move.price_change_pct.toFixed(1)}%
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-3 text-sm font-semibold text-zinc-100">{event.canonical_headline}</div>
-      {combined.summary ? (
-        <p className="mt-1 text-xs leading-5 text-base-content/60">{combined.summary}</p>
-      ) : null}
-      {combined.affected_tickers.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {combined.affected_tickers.slice(0, 5).map((ticker) => (
-            <span
-              className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-xs font-semibold text-zinc-300"
-              key={ticker}
-            >
-              {ticker}
-            </span>
-          ))}
-        </div>
+      <div className="text-sm font-semibold text-zinc-100">{event.canonical_headline}</div>
+      {event.summary ? (
+        <p className="mt-1 text-xs leading-5 text-base-content/60">{event.summary}</p>
       ) : null}
     </button>
   );
@@ -625,6 +586,10 @@ export function Overview({
   const [watchedTopicsOpen, setWatchedTopicsOpen] = useState(false);
   const [activeSegment, setActiveSegment] = useState<Segment>("global");
   const [spotlightPopover, setSpotlightPopover] = useState<SpotlightPopover | null>(null);
+  const [eventContextMenu, setEventContextMenu] = useState<EventContextMenu | null>(null);
+  const [summaryEvent, setSummaryEvent] = useState<EventCluster | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const summaryActionRef = useRef<HTMLButtonElement>(null);
   const latestCompletedAt = state.status?.latest_job?.completed_at;
   const queueUnavailable = state.status?.command_queue_available === false;
 
@@ -665,27 +630,7 @@ export function Overview({
         .map((catalyst) => ({ type: "catalyst" as const, id: `catalyst:${catalyst.id}`, catalyst })),
     ];
   }, [state.overviewAlerts, state.catalystReviews, state.events]);
-  // Each segment is fetched server-side (top results for that market), so a quiet
-  // segment surfaces its own clusters instead of being crowded out of the shared
-  // recency window. Sort the returned set by score for a "top events" ordering.
-  const selectedEvents = useMemo(
-    () =>
-      [...(state.overviewSegments[activeSegment]?.items ?? [])].sort(
-        (left, right) => right.final_score - left.final_score,
-      ),
-    [activeSegment, state.overviewSegments],
-  );
-
-  // Load detail (score history + market moves) for the events actually shown, so the
-  // trend arrows and move chips render for the active segment rather than only the
-  // first few events globally.
-  useEffect(() => {
-    for (const event of selectedEvents) {
-      if (!state.eventDetails[event.id]) {
-        loadEventDetail(event.id);
-      }
-    }
-  }, [loadEventDetail, selectedEvents, state.eventDetails]);
+  const selectedEvents = state.overviewSegments[activeSegment]?.items ?? [];
 
   const healthCounts = sourceHealthCounts(state);
   const degradedSources = healthCounts.degraded + healthCounts.failing;
@@ -693,6 +638,62 @@ export function Overview({
   const activeSpotlightDetail = spotlightPopover
     ? state.eventDetails[spotlightPopover.eventId]
     : undefined;
+
+  function openContextMenu(
+    event: EventCluster,
+    trigger: HTMLButtonElement,
+    x: number,
+    y: number,
+  ) {
+    const rect = trigger.getBoundingClientRect();
+    const margin = 8;
+    const menuWidth = 176;
+    const menuHeight = 48;
+    setSpotlightPopover(null);
+    setEventContextMenu({
+      event,
+      left: Math.min(
+        Math.max(x || rect.left, margin),
+        Math.max(margin, window.innerWidth - menuWidth - margin),
+      ),
+      top: Math.min(
+        Math.max(y || rect.bottom, margin),
+        Math.max(margin, window.innerHeight - menuHeight - margin),
+      ),
+      trigger,
+    });
+  }
+
+  useEffect(() => {
+    if (!eventContextMenu) return undefined;
+    summaryActionRef.current?.focus();
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.target instanceof Node && !contextMenuRef.current?.contains(event.target)) {
+        setEventContextMenu(null);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setEventContextMenu(null);
+        eventContextMenu?.trigger.focus();
+      }
+    }
+
+    function handleScroll() {
+      setEventContextMenu(null);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("scroll", handleScroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [eventContextMenu]);
 
   function openEventPopover(
     eventId: string,
@@ -736,11 +737,23 @@ export function Overview({
       }
     }
 
+    function handleScroll(event: Event) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-watchlist-event-popover]")
+      ) {
+        return;
+      }
+      setSpotlightPopover(null);
+    }
+
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("scroll", handleScroll, true);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("scroll", handleScroll, true);
     };
   }, [spotlightPopover]);
 
@@ -844,7 +857,7 @@ export function Overview({
         </OverviewPanel>
       </div>
 
-      <OverviewPanel icon={Database} title="Top events">
+      <OverviewPanel icon={Database} title="Latest events">
         <div className="mb-4 flex flex-wrap gap-2">
           {SEGMENTS.map((segment) => (
             <button
@@ -863,14 +876,17 @@ export function Overview({
           ))}
         </div>
         {selectedEvents.length > 0 ? (
-          <div className="grid gap-3 xl:grid-cols-2">
-            {selectedEvents.slice(0, 10).map((event) => (
+          <div
+            aria-label="Latest events list"
+            className="grid max-h-[38rem] grid-cols-1 gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3"
+          >
+            {selectedEvents.map((event) => (
               <EventCard
-                detail={state.eventDetails[event.id]}
                 event={event}
                 isOpen={spotlightPopover?.eventId === event.id}
                 key={event.id}
                 openEventPopover={openEventPopover}
+                openContextMenu={openContextMenu}
               />
             ))}
           </div>
@@ -878,7 +894,7 @@ export function Overview({
           <EmptyState
             icon={Database}
             title={`No ${SEGMENTS.find((segment) => segment.id === activeSegment)?.label} events`}
-            body="No event clusters currently match this market segment."
+            body="No event reports in the last 24 hours for this market segment."
           />
         )}
       </OverviewPanel>
@@ -940,6 +956,50 @@ export function Overview({
         <WatchlistEventPopover
           detail={activeSpotlightDetail}
           popover={spotlightPopover}
+        />
+      ) : null}
+
+      {eventContextMenu
+        ? createPortal(
+            <div
+              aria-label="Event actions"
+              className="fixed z-[60] w-44 rounded-md border border-zinc-700 bg-zinc-950 p-1 shadow-xl shadow-black/40"
+              onBlur={(blurEvent) => {
+                if (
+                  !(blurEvent.relatedTarget instanceof Node) ||
+                  !blurEvent.currentTarget.contains(blurEvent.relatedTarget)
+                ) {
+                  setEventContextMenu(null);
+                }
+              }}
+              ref={contextMenuRef}
+              role="menu"
+              style={{ left: eventContextMenu.left, top: eventContextMenu.top }}
+            >
+              <button
+                className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800 focus:bg-zinc-800 focus:outline-none"
+                onClick={() => {
+                  setSummaryEvent(eventContextMenu.event);
+                  setEventContextMenu(null);
+                }}
+                ref={summaryActionRef}
+                role="menuitem"
+                type="button"
+              >
+                <Brain className="h-4 w-4" />
+                Summary
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {summaryEvent ? (
+        <RelatedNewsSummaryModal
+          eventId={summaryEvent.id}
+          headline={summaryEvent.canonical_headline}
+          onClose={() => setSummaryEvent(null)}
+          open
         />
       ) : null}
 

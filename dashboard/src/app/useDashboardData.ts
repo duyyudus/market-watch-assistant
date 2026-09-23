@@ -37,7 +37,8 @@ const ALERT_PAGE_SIZE = 100;
 // pagination/filter state.
 const OVERVIEW_ALERT_PAGE_SIZE = 100;
 const OVERVIEW_SEGMENTS = ["global", "us", "vietnam", "crypto"] as const;
-const OVERVIEW_SEGMENT_SIZE = 10;
+const OVERVIEW_SEGMENT_PAGE_SIZE = 200;
+const OVERVIEW_SEGMENT_MAX_ITEMS = 500;
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -285,27 +286,48 @@ export function useDashboardData() {
         OVERVIEW_SEGMENTS.map(async (segment) => {
           const key = `overview-segment:${segment}`;
           if (invalidate) resourceCache.invalidate(key);
+          const reportEndAfter = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
           const result = await settle(
             "events",
-            resourceCache.get(key, () =>
-              api.events({
-                offset: 0,
-                pageSize: OVERVIEW_SEGMENT_SIZE,
-                maxItems: OVERVIEW_SEGMENT_SIZE,
-                minScore: 0,
-                segment,
-              }),
-            ),
+            resourceCache.get(key, async () => {
+              const items = new Map<string, EventCluster>();
+              let offset = 0;
+              let total = 0;
+              do {
+                const response = normalizeListResponse<EventCluster>(
+                  await api.events({
+                    offset,
+                    pageSize: Math.min(
+                      OVERVIEW_SEGMENT_PAGE_SIZE,
+                      OVERVIEW_SEGMENT_MAX_ITEMS - offset,
+                    ),
+                    maxItems: OVERVIEW_SEGMENT_MAX_ITEMS,
+                    minScore: 0,
+                    segment,
+                    reportEndAfter,
+                  }),
+                );
+                total = response.total;
+                if (response.items.length === 0) break;
+                // Advance by fetched rows even when a page repeats an event ID.
+                offset += response.items.length;
+                for (const event of response.items) {
+                  if (items.size >= OVERVIEW_SEGMENT_MAX_ITEMS) break;
+                  if (!items.has(event.id)) items.set(event.id, event);
+                }
+              } while (offset < Math.min(total, OVERVIEW_SEGMENT_MAX_ITEMS));
+              return { items: [...items.values()], total: items.size };
+            }),
           );
           // A single segment failing is non-fatal: leave its panel empty rather
           // than blanking the whole overview (the shared "events" load owns that).
           if ("error" in result) return;
-          const response = normalizeListResponse<EventCluster>(result.value);
+          const response = result.value as { items: EventCluster[]; total: number };
           setState((current) => ({
             ...current,
             overviewSegments: {
               ...current.overviewSegments,
-              [segment]: { items: response.items, total: response.total },
+              [segment]: response,
             },
           }));
         }),
