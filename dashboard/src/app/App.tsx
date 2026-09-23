@@ -1,8 +1,9 @@
-import { Bot, Palette, RefreshCcw, ShieldCheck } from "lucide-react";
+import { Bot, Palette, RefreshCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "../components/Badge";
 import { DashboardErrorBoundary } from "../components/ErrorBoundary";
+import { Logo } from "../components/Logo";
 import { Panel } from "../components/Panel";
 import { Alerts } from "../features/alerts/Alerts";
 import { CommandsTable } from "../features/commands/CommandsTable";
@@ -137,7 +138,7 @@ export function App() {
         data-theme="emerald_dark"
       >
         <div className="flex h-16 items-center gap-3 border-b border-zinc-800 px-5">
-          <ShieldCheck className="h-6 w-6 text-primary animate-pulse" />
+          <Logo className="h-8 w-8 shrink-0" />
           <div>
             <div className="text-sm font-bold text-zinc-100 tracking-wide">Market Watch</div>
             <div className="text-xs font-semibold uppercase tracking-widest text-zinc-500">
