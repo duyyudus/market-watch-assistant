@@ -167,7 +167,7 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
   }
 
   return (
-    <div className="flex h-[36rem] min-h-[27rem] flex-col gap-3 xl:h-full xl:min-h-0">
+    <div className="flex flex-col gap-3 xl:absolute xl:inset-5 xl:min-h-0">
       <div className="flex items-center justify-between gap-3 text-xs text-base-content/60">
         <span className="font-semibold uppercase tracking-wide">Article context</span>
         <div className="flex items-center gap-2">
@@ -202,7 +202,7 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
 
       <div
         aria-live="polite"
-        className="min-h-44 flex-1 space-y-3 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/30 p-3 xl:min-h-0"
+        className="min-h-[12.5rem] max-h-[60vh] space-y-3 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/30 p-3 xl:max-h-none"
         role="log"
       >
         {messages.length === 0 ? (
@@ -274,7 +274,7 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
       >
         <textarea
           aria-label="Discussion message"
-          className="textarea textarea-bordered min-h-16 flex-1 resize-none bg-zinc-950/50 text-sm"
+          className="textarea textarea-bordered h-16 min-h-16 flex-1 resize-none bg-zinc-950/50 text-sm"
           disabled={loading}
           maxLength={8_000}
           onChange={(event) => setDraft(event.target.value)}
@@ -285,7 +285,7 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
         />
         <button
           aria-label="Send discussion message"
-          className="btn btn-square btn-primary"
+          className="btn btn-primary h-16 w-16 shrink-0 p-0"
           disabled={loading || !draft.trim()}
           type="submit"
         >
@@ -315,7 +315,7 @@ function OverviewPanel({
   // the body flexes to fill, so an absolutely-positioned scroll child can occupy the
   // full height. Gated to xl, where the multi-column overview grid exists.
   fill?: boolean;
-  // Stretches regular padded content to consume the full height of its grid cell.
+  // Gives the Discussion content the row height without making its messages fill unused space.
   stretch?: boolean;
 }) {
   return (
@@ -336,7 +336,7 @@ function OverviewPanel({
           // min-h floors the row at ~5 alert cards so a short sibling can't shrink the
           // list below a useful size; a taller sibling still grows it past the floor.
           fill && "xl:relative xl:flex-1 xl:p-0 xl:min-h-[27rem]",
-          stretch && "xl:flex xl:min-h-0 xl:flex-1 xl:flex-col",
+          stretch && "xl:relative xl:min-h-0 xl:flex-1",
         )}
       >
         {children}

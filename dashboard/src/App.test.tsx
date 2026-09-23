@@ -893,7 +893,7 @@ describe("App data states", () => {
     expect(screen.getByText(/1 healthy/)).toBeInTheDocument();
   });
 
-  it("places equal-width Discussion between overview action and synthesis panels", async () => {
+  it("matches the synthesis panel while the Discussion log grows with messages", async () => {
     await renderLoadedApp();
 
     const needsHeading = screen.getByRole("heading", { name: "Needs you now" });
@@ -902,11 +902,19 @@ describe("App data states", () => {
     const panelGrid = needsHeading.closest("div.grid");
     const discussionPanel = discussionHeading.closest("section");
     const conversationLog = within(discussionPanel!).getByRole("log");
+    const messageInput = screen.getByLabelText("Discussion message");
+    const sendButton = screen.getByRole("button", { name: "Send discussion message" });
 
     expect(panelGrid).toHaveClass("xl:grid-cols-3");
     expect(discussionPanel).toHaveClass("xl:flex", "xl:flex-col");
-    expect(conversationLog).toHaveClass("flex-1", "xl:min-h-0");
-    expect(conversationLog).not.toHaveClass("max-h-[20rem]");
+    expect(discussionPanel).not.toHaveClass("xl:self-start");
+    expect(discussionPanel?.lastElementChild).toHaveClass("xl:relative", "xl:flex-1");
+    expect(conversationLog.parentElement).toHaveClass("xl:absolute", "xl:inset-5");
+    expect(conversationLog).toHaveClass("min-h-[12.5rem]", "xl:max-h-none", "overflow-y-auto");
+    expect(conversationLog).not.toHaveClass("flex-1");
+    expect(conversationLog).not.toHaveClass("max-h-[28rem]");
+    expect(messageInput).toHaveClass("h-16");
+    expect(sendButton).toHaveClass("h-16");
     expect(
       needsHeading.compareDocumentPosition(discussionHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
