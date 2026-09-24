@@ -40,6 +40,23 @@ def test_discussion_answer_preserves_formatting_and_comparison_text() -> None:
         LLMDiscussionAnswer(answer=" \n\t ", cited_article_ids=[])
 
 
+@pytest.mark.asyncio
+async def test_discussion_provider_requests_markdown(monkeypatch) -> None:
+    provider = OpenRouterChatProvider(LLMConfig())
+
+    async def complete_structured(**kwargs):
+        assert kwargs["schema_model"] is LLMDiscussionAnswer
+        assert "answer as Markdown" in kwargs["system_message"]
+        assert "plain prose" not in kwargs["system_message"]
+        return {"answer": "- First point\n- Second point", "cited_article_ids": []}, {}
+
+    monkeypatch.setattr(provider, "complete_structured", complete_structured)
+
+    answer, _usage = await provider.answer_discussion("prompt")
+
+    assert answer.answer == "- First point\n- Second point"
+
+
 def test_bot_worker_llm_reexports_shared_config_for_compatibility() -> None:
     from bot_worker.llm import LLMConfig as WorkerLLMConfig
 

@@ -1428,6 +1428,8 @@ async def test_discussion_chat_uses_semantic_context_and_does_not_persist_run(
             assert "Older oil supply analysis" not in prompt
             assert "What did rates do?" in prompt
             assert "What does that mean for equities?" in prompt
+            assert "Write the answer field in Markdown with short paragraphs." in prompt
+            assert "use a Markdown list with one item per line" in prompt
             return (
                 LLMDiscussionAnswer(
                     answer="The articles describe a less hawkish policy path.",

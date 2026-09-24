@@ -20,6 +20,8 @@ import {
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type {
   AlertDecision,
@@ -224,7 +226,20 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
               )}
               key={message.id}
             >
-              <div className="whitespace-pre-wrap">{message.content}</div>
+              <div className="discussion-markdown min-w-0 break-words">
+                <ReactMarkdown
+                  components={{
+                    a: ({ children, href, title }) => (
+                      <a href={href} rel="noopener noreferrer" target="_blank" title={title}>
+                        {children}
+                      </a>
+                    ),
+                  }}
+                  remarkPlugins={[remarkGfm]}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              </div>
               {message.sources?.length ? (
                 <div className="mt-2 border-t border-zinc-800/80 pt-2">
                   <div className="mb-1 text-[0.65rem] font-bold uppercase tracking-wider text-zinc-500">

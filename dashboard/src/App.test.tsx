@@ -964,6 +964,53 @@ describe("App data states", () => {
     expect(screen.getByLabelText("Discussion message")).toHaveValue("");
   });
 
+  it("renders Discussion Markdown with safe external links", async () => {
+    await renderLoadedApp();
+    apiMock.discussionChat.mockResolvedValueOnce({
+      status: "answered",
+      answer: [
+        "## Market view",
+        "",
+        "**Rates** eased.",
+        "",
+        "- Bonds rose",
+        "- Stocks rose",
+        "",
+        "| Asset | Move |",
+        "| --- | --- |",
+        "| Bonds | Up |",
+        "",
+        "[Read more](https://example.com/research)",
+        "[unsafe](javascript:alert(1))",
+        "<script>alert(1)</script>",
+      ].join("\n"),
+      sources: [],
+    });
+
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "**Explain** this" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+
+    const log = screen.getByRole("log");
+    expect(within(log).getByText("Explain", { selector: "strong" })).toBeInTheDocument();
+    expect(await within(log).findByRole("heading", { name: "Market view" })).toBeInTheDocument();
+    expect(within(log).getByText("Rates", { selector: "strong" })).toBeInTheDocument();
+    expect(within(log).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(log).getByRole("list")).toHaveTextContent("Bonds rose Stocks rose");
+    expect(within(log).getByRole("table")).toHaveTextContent("BondsUp");
+    expect(within(log).getByRole("link", { name: "Read more" })).toHaveAttribute(
+      "href",
+      "https://example.com/research",
+    );
+    expect(within(log).getByRole("link", { name: "Read more" })).toHaveAttribute(
+      "target",
+      "_blank",
+    );
+    expect(within(log).getByText("unsafe").closest("a")).toHaveAttribute("href", "");
+    expect(log.querySelector("script")).toBeNull();
+  });
+
   it("prevents duplicate discussion sends while a response is pending", async () => {
     let resolveDiscussion: ((value: {
       status: string;

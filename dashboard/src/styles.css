@@ -58,3 +58,94 @@ body {
   padding: 0 0.75rem;
   width: 100%;
 }
+
+.discussion-markdown > :first-child {
+  margin-top: 0;
+}
+
+.discussion-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.discussion-markdown p,
+.discussion-markdown ul,
+.discussion-markdown ol,
+.discussion-markdown blockquote,
+.discussion-markdown pre,
+.discussion-markdown table {
+  margin: 0.5rem 0;
+}
+
+.discussion-markdown p {
+  white-space: pre-wrap;
+}
+
+.discussion-markdown h1,
+.discussion-markdown h2,
+.discussion-markdown h3,
+.discussion-markdown h4 {
+  margin: 0.75rem 0 0.375rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.discussion-markdown h1 { font-size: 1.25rem; }
+.discussion-markdown h2 { font-size: 1.125rem; }
+.discussion-markdown h3 { font-size: 1rem; }
+
+.discussion-markdown ul,
+.discussion-markdown ol {
+  padding-left: 1.25rem;
+}
+
+.discussion-markdown ul { list-style: disc; }
+.discussion-markdown ol { list-style: decimal; }
+.discussion-markdown li { margin: 0.25rem 0; }
+.discussion-markdown li > p { margin: 0; }
+
+.discussion-markdown a {
+  @apply text-primary underline underline-offset-2;
+}
+
+.discussion-markdown blockquote {
+  border-left: 2px solid rgb(var(--zinc-700));
+  padding-left: 0.75rem;
+  color: rgb(var(--zinc-400));
+}
+
+.discussion-markdown code {
+  border-radius: 0.25rem;
+  background: rgb(var(--zinc-950));
+  padding: 0.125rem 0.25rem;
+  font-size: 0.875em;
+}
+
+.discussion-markdown pre {
+  overflow-x: auto;
+  border: 1px solid rgb(var(--zinc-800));
+  border-radius: 0.5rem;
+  background: rgb(var(--zinc-950));
+  padding: 0.75rem;
+}
+
+.discussion-markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.discussion-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.discussion-markdown th,
+.discussion-markdown td {
+  border: 1px solid rgb(var(--zinc-700));
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+}
+
+.discussion-markdown img { max-width: 100%; }
+.discussion-markdown hr { margin: 0.75rem 0; border-color: rgb(var(--zinc-700)); }

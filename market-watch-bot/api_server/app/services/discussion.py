@@ -207,6 +207,11 @@ def _discussion_prompt(
             "Cite only IDs present in the supplied article context.",
             "If the articles are insufficient, say so directly and avoid unsupported conclusions.",
             "Respond in the language of the latest user message.",
+            "Write the answer field in Markdown with short paragraphs.",
+            (
+                "For multiple distinct points, use a Markdown list with one item per line "
+                "rather than inline (1), (2), (3) numbering. Do not use raw HTML."
+            ),
             "",
             f"Conversation: {json.dumps(conversation, ensure_ascii=False)}",
             f"Article context: {json.dumps(article_context, ensure_ascii=False)}",
