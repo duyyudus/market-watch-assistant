@@ -949,6 +949,15 @@ export function Overview({
                       data-watchlist-event-trigger={event.id}
                       key={event.id}
                       onClick={(clickEvent) => openEventPopover(event.id, event, clickEvent)}
+                      onContextMenu={(contextEvent) => {
+                        contextEvent.preventDefault();
+                        openContextMenu(
+                          event,
+                          contextEvent.currentTarget,
+                          contextEvent.clientX,
+                          contextEvent.clientY,
+                        );
+                      }}
                       type="button"
                     >
                       {event.canonical_headline}

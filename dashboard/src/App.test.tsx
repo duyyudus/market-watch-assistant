@@ -1601,6 +1601,25 @@ describe("App data states", () => {
     expect(eventCard).toHaveFocus();
   });
 
+  it("opens the Events summary from a watchlist spotlight event context menu", async () => {
+    await renderLoadedApp();
+
+    const spotlight = screen
+      .getByRole("heading", { name: "Watchlist spotlight" })
+      .closest("section")!;
+    const spotlightEvent = await within(spotlight).findByRole("button", {
+      name: "Fed signals a slower rate path",
+    });
+
+    fireEvent.contextMenu(spotlightEvent, { clientX: 120, clientY: 160 });
+
+    const menu = screen.getByRole("menu", { name: "Event actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Summary" }));
+
+    expect(apiMock.relatedNewsSummary).toHaveBeenCalledWith("evt_1");
+    expect(await screen.findByRole("dialog", { name: "Related news summary" })).toBeInTheDocument();
+  });
+
   it("shows the overview caught-up state when there are no action items", async () => {
     apiMock.alerts.mockResolvedValue(envelope([]));
     apiMock.events.mockResolvedValue(
