@@ -16,8 +16,14 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  X,
 } from "lucide-react";
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent, ReactNode } from "react";
+import type {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent,
+  ReactNode,
+} from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -47,6 +53,11 @@ import type {
 
 import { WatchedTopicsModal } from "./WatchedTopicsModal";
 import type { DiscussionChatController } from "./useDiscussionChat";
+import {
+  DISCUSSION_PRESET_CHARACTER_LIMIT,
+  DISCUSSION_PRESET_LIMIT,
+  useDiscussionPresets,
+} from "./useDiscussionPresets";
 
 type Segment = "global" | "us" | "vietnam" | "crypto";
 type ActionItem =
@@ -161,6 +172,13 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
     startNewChat,
     sendMessage,
   } = discussion;
+  const { presets, addPreset, removePreset } = useDiscussionPresets();
+  const [presetDraft, setPresetDraft] = useState<string | null>(null);
+
+  function handlePresetSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!presetDraft?.trim() || addPreset(presetDraft)) setPresetDraft(null);
+  }
 
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
@@ -214,6 +232,69 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
             <p className="mt-1 text-xs leading-5 text-base-content/60">
               Answers use semantically relevant ingested articles from the selected window.
             </p>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {presets.map((preset) => (
+                <div
+                  className="flex max-w-full items-center rounded-full border border-zinc-700 bg-zinc-900/70 text-xs text-zinc-200 transition-colors hover:border-primary/40"
+                  key={preset}
+                >
+                  <button
+                    className="min-w-0 truncate py-1 pl-3 pr-1 hover:text-primary disabled:opacity-50"
+                    disabled={loading}
+                    onClick={() => void sendMessage(preset)}
+                    title={preset}
+                    type="button"
+                  >
+                    {preset}
+                  </button>
+                  <button
+                    aria-label={`Remove preset: ${preset}`}
+                    className="shrink-0 rounded-full py-1 pl-1 pr-2 text-zinc-500 hover:text-rose-300"
+                    onClick={() => removePreset(preset)}
+                    type="button"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+              {presetDraft === null ? (
+                presets.length < DISCUSSION_PRESET_LIMIT ? (
+                  <button
+                    className="flex items-center gap-1 rounded-full border border-dashed border-zinc-700 px-3 py-1 text-xs text-zinc-400 transition-colors hover:border-primary/40 hover:text-primary"
+                    onClick={() => setPresetDraft(draft.trim())}
+                    type="button"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add preset
+                  </button>
+                ) : null
+              ) : (
+                <form className="flex w-full items-center gap-2" onSubmit={handlePresetSubmit}>
+                  <input
+                    aria-label="New preset message"
+                    autoFocus
+                    className="input input-bordered input-xs min-w-0 flex-1 bg-zinc-950/50"
+                    maxLength={DISCUSSION_PRESET_CHARACTER_LIMIT}
+                    onChange={(event) => setPresetDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setPresetDraft(null);
+                    }}
+                    placeholder="Question to save, e.g. What's new today?"
+                    value={presetDraft}
+                  />
+                  <button className="btn btn-xs btn-primary" type="submit">
+                    Save
+                  </button>
+                  <button
+                    className="btn btn-xs btn-ghost"
+                    onClick={() => setPresetDraft(null)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              )}
+            </div>
           </div>
         ) : (
           messages.map((message) => (

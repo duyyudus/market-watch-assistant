@@ -27,7 +27,8 @@ export type DiscussionChatController = {
   setDraft: (value: string) => void;
   resetForTimeframe: (timeframe: DiscussionTimeframe) => void;
   startNewChat: () => void;
-  sendMessage: () => Promise<void>;
+  // Sends the composer draft, or `preset` directly (leaving the draft untouched).
+  sendMessage: (preset?: string) => Promise<void>;
 };
 
 function codePoints(value: string) {
@@ -97,8 +98,8 @@ export function useDiscussionChat(): DiscussionChatController {
     startNewChat();
   }
 
-  async function sendMessage() {
-    const content = draft.trim();
+  async function sendMessage(preset?: string) {
+    const content = (preset ?? draft).trim();
     if (!content || requestInFlight.current) return;
 
     const previousMessages = messages;
@@ -115,7 +116,7 @@ export function useDiscussionChat(): DiscussionChatController {
       content,
     );
     setMessages((current) => [...current, userMessage].slice(-DISCUSSION_MESSAGE_LIMIT));
-    setDraft("");
+    if (preset === undefined) setDraft("");
     setError(null);
     requestInFlight.current = true;
     setLoading(true);
@@ -133,7 +134,7 @@ export function useDiscussionChat(): DiscussionChatController {
       );
     } catch (sendError) {
       setMessages(previousMessages);
-      setDraft(content);
+      if (preset === undefined) setDraft(content);
       setError(discussionErrorMessage(sendError));
     } finally {
       requestInFlight.current = false;

@@ -1084,6 +1084,45 @@ describe("App data states", () => {
     expect(screen.getByText("Ask about recent coverage")).toBeInTheDocument();
   });
 
+  it("starts a discussion from a saved preset and lets presets be added and removed", async () => {
+    await renderLoadedApp();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add preset" }));
+    fireEvent.change(screen.getByLabelText("New preset message"), {
+      target: { value: "  Any Vietnam movers?  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(screen.queryByLabelText("New preset message")).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("mw-discussion-presets") ?? "[]")).toEqual([
+      "What's new today?",
+      "Any Vietnam movers?",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove preset: What's new today?" }));
+
+    expect(screen.queryByRole("button", { name: "What's new today?" })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("mw-discussion-presets") ?? "[]")).toEqual([
+      "Any Vietnam movers?",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Any Vietnam movers?" }));
+
+    await waitFor(() =>
+      expect(apiMock.discussionChat).toHaveBeenCalledWith({
+        timeframe: "24h",
+        messages: [{ role: "user", content: "Any Vietnam movers?" }],
+      }),
+    );
+    expect(
+      await screen.findByText("Rates coverage points to a less hawkish policy path."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+
+    expect(screen.getByRole("button", { name: "Any Vietnam movers?" })).toBeInTheDocument();
+  });
+
   it("keeps the discussion when navigating away from Overview and back", async () => {
     await renderLoadedApp();
 
