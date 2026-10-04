@@ -7,9 +7,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-import api_server.app.services.discussion as discussion_service
 import api_server.app.services.events as event_service
 import api_server.app.services.watchlist as watchlist_service
+import common.discussion as discussion_service
 from api_server.app.db import Base, get_session
 from api_server.app.main import app, create_app
 from common.config import Settings

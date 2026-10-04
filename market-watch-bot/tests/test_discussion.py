@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_server.app.services.discussion import _rank_sqlite_articles
 from common.db.models import Base, NewsItemEmbedding, NormalizedNewsItem
+from common.discussion import _rank_sqlite_articles
 from common.embeddings import EmbeddingConfig
 
 

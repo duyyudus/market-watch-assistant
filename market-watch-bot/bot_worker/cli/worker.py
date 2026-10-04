@@ -33,6 +33,7 @@ from bot_worker.services.telegram_commands import (
     poll_telegram_commands,
     register_telegram_bot_commands,
 )
+from common import discussion
 from common.llm import LLMConfig
 from common.logging import WORKER_TASK_LOG_FILES, log_component, setup_logging
 
@@ -86,6 +87,12 @@ async def drain_telegram_commands(session, settings) -> None:
             settings.bot,
             "telegram_detail_article_limit",
             TELEGRAM_DETAIL_ARTICLE_LIMIT,
+        ),
+        answer_question=lambda session, timeframe, messages: discussion.chat(
+            session,
+            timeframe=timeframe,
+            messages=messages,
+            settings=settings,
         ),
     )
     if result["updates"] or result["processed"]:

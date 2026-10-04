@@ -34,7 +34,8 @@ The unified AI access layer is implemented in [llm.py](../market-watch-bot/commo
 
 - **LLM Prompt Templates**: Stores prompts for entity extraction, ambiguous clustering, event enrichment/scoring, and agentic investigations, with prompt versions/hashes recorded for cache reuse via `LLMAnalysisRun`.
 - **Ephemeral Discussion**: Provides a structured article-grounded answer schema for
-  dashboard discussion requests. Unlike pipeline analysis, these prompts and responses
+  dashboard and Telegram discussion requests (retrieval and prompt assembly live in
+  `common/discussion.py`). Unlike pipeline analysis, these prompts and responses
   are intentionally not written to `LLMAnalysisRun`.
 
 Embedding configuration and provider primitives live in `common/embeddings.py` so both

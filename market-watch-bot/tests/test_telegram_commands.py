@@ -228,7 +228,16 @@ async def test_register_telegram_bot_commands_sets_detail_command(monkeypatch) -
                     {
                         "command": "detail",
                         "description": "Show article titles and URLs for a replied alert",
-                    }
+                    },
+                    {
+                        "command": "ask",
+                        "description": "Ask a question about recently ingested articles",
+                    },
+                    {"command": "new", "description": "Start a new chat"},
+                    {
+                        "command": "timeframe",
+                        "description": "Show or set the article window: 24h, 3d, 7d, 30d",
+                    },
                 ],
                 "scope": {"type": "chat", "chat_id": "chat_1"},
             },

@@ -18,6 +18,11 @@ When started with `market-watch worker start`, the Bot Worker ([worker.py](../ma
 
 No command can trigger the pipeline, so the two loops never run the pipeline concurrently.
 
+When Telegram credentials are set and `telegram_command_poll_enabled` is true, a third loop (`_telegram_command_loop`) polls the configured chat for inbound messages ([telegram_commands.py](../market-watch-bot/bot_worker/services/telegram_commands.py)):
+
+- `/detail` (as a reply to an alert) lists that alert's article titles and URLs.
+- **Quick chat** ([telegram_discussion.py](../market-watch-bot/bot_worker/services/telegram_discussion.py)) mirrors the dashboard Discussion panel using the shared [discussion.py](../market-watch-bot/common/discussion.py) retrieval + LLM answer. `/ask <question>` — or any plain message in a private chat — asks a question, and follow-ups continue the same conversation. `/new` starts over; `/timeframe <24h|3d|7d|30d>` changes the article window (and starts over). The conversation lives in the `telegram.discussion` app setting and resets after one idle hour.
+
 - A row lock (`SELECT FOR UPDATE SKIP LOCKED`) ensures concurrent worker processes do not execute the same command. Once claimed, the worker sets the command status to `running`, runs the handler, and saves the final result/error message.
 - Recognized command types include `source.fetch`, `source.quality.refresh`, `alert.dispatch`, `alert.test_channel`, `digest.send`, `event.rescore`, `event.mark`, `event.recluster`, `event.merge`, `event.split`, `event.compact_archived`, `investigation.run_event`, `market.fetch`, `catalyst.review`, and `retention.preview`/`retention.run`.
 - **Liveness:** each loop periodically writes a `worker.heartbeat` `AppSetting` (`record_worker_heartbeat`); the API server reports it stale after 60s.

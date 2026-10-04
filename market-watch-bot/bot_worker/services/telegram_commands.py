@@ -17,6 +17,14 @@ from bot_worker.db.models import (
     NormalizedNewsItem,
 )
 from bot_worker.services.alert_delivery import AlertDeliveryConfig
+from bot_worker.services.telegram_discussion import (
+    ASK_USAGE,
+    DiscussionAnswerer,
+    answer_telegram_question,
+    set_telegram_discussion_timeframe,
+    split_telegram_message,
+    start_new_telegram_chat,
+)
 
 TELEGRAM_COMMAND_OFFSET_KEY = "telegram.command_offset"
 DETAIL_REQUIRES_REPLY = "Reply to an alert message with /detail."
@@ -26,7 +34,19 @@ TELEGRAM_BOT_COMMANDS = [
     {
         "command": "detail",
         "description": "Show article titles and URLs for a replied alert",
-    }
+    },
+    {
+        "command": "ask",
+        "description": "Ask a question about recently ingested articles",
+    },
+    {
+        "command": "new",
+        "description": "Start a new chat",
+    },
+    {
+        "command": "timeframe",
+        "description": "Show or set the article window: 24h, 3d, 7d, 30d",
+    },
 ]
 
 TelegramUpdatesFetcher = Callable[
@@ -118,6 +138,7 @@ async def poll_telegram_commands(
     config: AlertDeliveryConfig,
     *,
     article_limit: int = 10,
+    answer_question: DiscussionAnswerer | None = None,
     fetch_updates: TelegramUpdatesFetcher = fetch_telegram_updates,
     send_reply: TelegramReplySender = send_telegram_reply,
 ) -> ProcessCounts:
@@ -130,6 +151,7 @@ async def poll_telegram_commands(
         config,
         updates,
         article_limit=article_limit,
+        answer_question=answer_question,
         send_reply=send_reply,
     )
 
@@ -140,6 +162,7 @@ async def process_telegram_updates(
     updates: Sequence[dict[str, Any]],
     *,
     article_limit: int = 10,
+    answer_question: DiscussionAnswerer | None = None,
     send_reply: TelegramReplySender = send_telegram_reply,
 ) -> ProcessCounts:
     counts = {"updates": len(updates), "processed": 0, "ignored": 0, "replied": 0, "failed": 0}
@@ -152,21 +175,25 @@ async def process_telegram_updates(
                 await set_telegram_command_offset(session, update_id + 1)
             continue
         chat_id = _chat_id(message)
-        text = str(message.get("text") or "").strip()
-        if chat_id != str(config.telegram_chat_id) or _command_name(text) != "/detail":
+        reply_message = None
+        if chat_id == str(config.telegram_chat_id):
+            reply_message = await _reply_message(
+                session,
+                message,
+                article_limit=article_limit,
+                answer_question=answer_question,
+            )
+        if reply_message is None:
             counts["ignored"] += 1
             if update_id is not None:
                 await set_telegram_command_offset(session, update_id + 1)
             continue
         counts["processed"] += 1
-        reply_message = await _detail_reply_message(session, message, article_limit=article_limit)
         try:
-            await send_reply(
-                config,
-                chat_id,
-                reply_message,
-                _int_or_none(message.get("message_id")),
-            )
+            reply_to_message_id = _int_or_none(message.get("message_id"))
+            for chunk in split_telegram_message(reply_message):
+                await send_reply(config, chat_id, chunk, reply_to_message_id)
+                reply_to_message_id = None
         except Exception:  # noqa: BLE001 - one failed reply must not replay earlier updates
             counts["failed"] += 1
         else:
@@ -190,6 +217,36 @@ async def set_telegram_command_offset(session: AsyncSession, offset: int) -> Non
         session.add(AppSetting(key=TELEGRAM_COMMAND_OFFSET_KEY, value=value))
         return
     setting.value = value
+
+
+async def _reply_message(
+    session: AsyncSession,
+    message: dict[str, Any],
+    *,
+    article_limit: int,
+    answer_question: DiscussionAnswerer | None,
+) -> str | None:
+    """Return the reply for a supported message, or None when it should be ignored."""
+    text = str(message.get("text") or "").strip()
+    command = _command_name(text)
+    if command == "/detail":
+        return await _detail_reply_message(session, message, article_limit=article_limit)
+    if answer_question is None:
+        return None
+    parts = text.split(maxsplit=1)
+    argument = parts[1].strip() if len(parts) > 1 else ""
+    if command == "/new":
+        return await start_new_telegram_chat(session)
+    if command == "/timeframe":
+        return await set_telegram_discussion_timeframe(session, argument)
+    if command == "/ask":
+        if not argument:
+            return ASK_USAGE
+        return await answer_telegram_question(session, argument, answer_question=answer_question)
+    # Plain messages are questions only in a private chat; groups must use /ask.
+    if text and not text.startswith("/") and _chat_type(message) == "private":
+        return await answer_telegram_question(session, text, answer_question=answer_question)
+    return None
 
 
 async def _detail_reply_message(
@@ -328,6 +385,13 @@ def _chat_id(message: dict[str, Any]) -> str:
     if not isinstance(chat, dict):
         return ""
     return str(chat.get("id") or "")
+
+
+def _chat_type(message: dict[str, Any]) -> str:
+    chat = message.get("chat")
+    if not isinstance(chat, dict):
+        return ""
+    return str(chat.get("type") or "")
 
 
 def _command_name(text: str) -> str:

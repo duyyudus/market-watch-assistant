@@ -688,7 +688,7 @@ async def test_drain_telegram_commands_polls_with_configured_article_limit(monke
 
     calls = []
 
-    async def fake_poll_telegram_commands(session, config, *, article_limit):
+    async def fake_poll_telegram_commands(session, config, *, article_limit, answer_question):
         calls.append((session, config.telegram_chat_id, article_limit))
         return {"updates": 1, "processed": 1, "ignored": 0, "replied": 1}
 
