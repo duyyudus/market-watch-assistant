@@ -19,6 +19,7 @@ const apiMock = vi.hoisted(() => ({
   alert: vi.fn(),
   relatedNewsSummary: vi.fn(),
   discussionChat: vi.fn(),
+  discussionSettings: vi.fn(),
   sourceHealth: vi.fn(),
   alertChannels: vi.fn(),
   alertSuppressionRules: vi.fn(),
@@ -633,6 +634,12 @@ function mockSuccessfulLoad(overrides: Partial<typeof apiMock> = {}) {
     event_count: 1,
     created_at: "2026-05-29T13:05:00Z",
   });
+  apiMock.discussionSettings.mockResolvedValue({
+    max_window_days: 180,
+    event_limit: 6,
+    articles_per_event: 2,
+    article_text_chars: 6_000,
+  });
   apiMock.discussionChat.mockResolvedValue({
     status: "answered",
     answer: "Rates coverage points to a less hawkish policy path.",
@@ -922,7 +929,7 @@ describe("App data states", () => {
       discussionHeading.compareDocumentPosition(synthesisHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByLabelText("Discussion article timeframe")).toHaveValue("24h");
+    expect(screen.getByLabelText("Discussion article timeframe")).toHaveValue("auto");
     expect(screen.getByLabelText("Discussion article timeframe")).toHaveClass(
       "bg-zinc-950",
       "text-zinc-100",
@@ -939,7 +946,7 @@ describe("App data states", () => {
 
     await waitFor(() =>
       expect(apiMock.discussionChat).toHaveBeenCalledWith({
-        timeframe: "24h",
+        timeframe: "auto",
         messages: [{ role: "user", content: "What does the Fed coverage imply?" }],
       }),
     );
@@ -1060,6 +1067,85 @@ describe("App data states", () => {
     expect(screen.queryByText(/unprocessable entity/i)).not.toBeInTheDocument();
   });
 
+  it("shows the article window an auto-timeframe answer searched", async () => {
+    apiMock.discussionChat.mockResolvedValueOnce({
+      status: "answered",
+      answer: "Oil supply tightened.",
+      sources: [],
+      context_window: {
+        start: "2026-05-23T12:00:00Z",
+        end: null,
+        label: "last 7 days",
+        source: "inferred",
+      },
+    });
+    await renderLoadedApp();
+
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "Updates on oil price last week" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+
+    await waitFor(() =>
+      expect(apiMock.discussionChat).toHaveBeenCalledWith({
+        timeframe: "auto",
+        messages: [{ role: "user", content: "Updates on oil price last week" }],
+      }),
+    );
+    expect(
+      await screen.findByText("Searched last 7 days · from your question"),
+    ).toBeInTheDocument();
+
+    apiMock.discussionChat.mockResolvedValueOnce({
+      status: "answered",
+      answer: "Gold held steady.",
+      sources: [],
+      context_window: {
+        start: "2026-05-16T12:00:00Z",
+        end: "2026-05-23T12:00:00Z",
+        label: "14 days to 7 days ago",
+        source: "inferred",
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "And the week before?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+
+    // The follow-up carries the inferred window independently of the message history.
+    await waitFor(() =>
+      expect(apiMock.discussionChat).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          timeframe: "auto",
+          previous_window_start: "2026-05-23T12:00:00Z",
+        }),
+      ),
+    );
+    expect(
+      await screen.findByText("Searched 14 days to 7 days ago · from your question"),
+    ).toBeInTheDocument();
+  });
+
+  it("offers the configured max window as a timeframe", async () => {
+    await renderLoadedApp();
+
+    const maxOption = await screen.findByRole("option", { name: "Max (180 days)" });
+    fireEvent.change(screen.getByLabelText("Discussion article timeframe"), {
+      target: { value: (maxOption as HTMLOptionElement).value },
+    });
+    fireEvent.change(screen.getByLabelText("Discussion message"), {
+      target: { value: "Oil supply story arc" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send discussion message" }));
+
+    await waitFor(() =>
+      expect(apiMock.discussionChat).toHaveBeenCalledWith({
+        timeframe: "max",
+        messages: [{ role: "user", content: "Oil supply story arc" }],
+      }),
+    );
+  });
+
   it("starts a new discussion without changing the selected timeframe", async () => {
     await renderLoadedApp();
 
@@ -1110,7 +1196,7 @@ describe("App data states", () => {
 
     await waitFor(() =>
       expect(apiMock.discussionChat).toHaveBeenCalledWith({
-        timeframe: "24h",
+        timeframe: "auto",
         messages: [{ role: "user", content: "Any Vietnam movers?" }],
       }),
     );

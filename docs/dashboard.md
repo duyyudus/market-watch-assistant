@@ -35,10 +35,15 @@ The client source is organized into feature folders under [src/features/](../das
 The landing dashboard: system health and worker heartbeat liveness, the latest daily digest, and **per-segment spotlight event ranking**. Top events are fetched server-side per market segment — `global`, `us`, `vietnam`, and `crypto` (`EventSegment` in `api.ts`, loaded by `loadOverviewSegments`) — each with its own display limit.
 
 The top row also includes an equal-width **Discussion** panel between **Needs you now**
-and **Daily synthesis**. It provides an ephemeral, article-grounded chat with rolling
-24-hour, 3-day, 7-day, and 30-day context windows. Each question retrieves the most
-relevant stored article embeddings, answers with the configured LLM, and links the
-supporting ingested articles. Conversation state exists only in React memory and is
+and **Daily synthesis**. It provides an ephemeral, article-grounded chat. The default **Auto**
+timeframe infers the article window from each question ("today", "last week",
+"yesterday"; last 24 hours when none is named) and captions the answer with the window
+searched; fixed 24-hour, 3-day, 7-day, 30-day and **Max** (`discussion.max_days`)
+windows are also available, with a note when a question names a period they miss.
+Each question ranks stored
+article embeddings, groups the matches by event, and answers from the most relevant
+events (headline, summary, outlet count, and their best-matching articles), so one
+heavily covered story takes a single slot; it links the supporting ingested articles. Conversation state exists only in React memory and is
 cleared when the overview is remounted or the page is refreshed.
 
 ### Events (`events/`)

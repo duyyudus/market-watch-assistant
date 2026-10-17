@@ -19,6 +19,7 @@ from api_server.app.schemas.discussion import (
     DiscussionChatRequest,
     DiscussionChatResponse,
     DiscussionMessage,
+    DiscussionSettingsRead,
     DiscussionSourceRead,
 )
 from api_server.app.schemas.events import (
@@ -78,6 +79,7 @@ __all__ = [
     "DiscussionChatRequest",
     "DiscussionChatResponse",
     "DiscussionMessage",
+    "DiscussionSettingsRead",
     "DiscussionSourceRead",
     "EmbeddingStats",
     "EntityRead",

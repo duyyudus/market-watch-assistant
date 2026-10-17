@@ -685,11 +685,14 @@ async def test_drain_telegram_commands_polls_with_configured_article_limit(monke
 
         class bot:
             telegram_detail_article_limit = 7
+            timezone = "Asia/Ho_Chi_Minh"
 
     calls = []
 
-    async def fake_poll_telegram_commands(session, config, *, article_limit, answer_question):
-        calls.append((session, config.telegram_chat_id, article_limit))
+    async def fake_poll_telegram_commands(
+        session, config, *, article_limit, answer_question, timezone
+    ):
+        calls.append((session, config.telegram_chat_id, article_limit, timezone.key))
         return {"updates": 1, "processed": 1, "ignored": 0, "replied": 1}
 
     monkeypatch.setattr(worker_cli, "poll_telegram_commands", fake_poll_telegram_commands)
@@ -698,7 +701,7 @@ async def test_drain_telegram_commands_polls_with_configured_article_limit(monke
 
     assert len(calls) == 1
     assert isinstance(calls[0][0], Session)
-    assert calls[0][1:] == ("chat_1", 7)
+    assert calls[0][1:] == ("chat_1", 7, "Asia/Ho_Chi_Minh")
 
 
 @pytest.mark.asyncio

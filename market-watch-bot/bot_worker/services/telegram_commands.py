@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import func, select
@@ -18,7 +19,7 @@ from bot_worker.db.models import (
 )
 from bot_worker.services.alert_delivery import AlertDeliveryConfig
 from bot_worker.services.telegram_discussion import (
-    ASK_USAGE,
+    DEFAULT_TIMEZONE,
     DiscussionAnswerer,
     answer_telegram_question,
     set_telegram_discussion_timeframe,
@@ -36,16 +37,12 @@ TELEGRAM_BOT_COMMANDS = [
         "description": "Show article titles and URLs for a replied alert",
     },
     {
-        "command": "ask",
-        "description": "Ask a question about recently ingested articles",
-    },
-    {
         "command": "new",
-        "description": "Start a new chat",
+        "description": "Start a new chat (send any message to ask a question)",
     },
     {
         "command": "timeframe",
-        "description": "Show or set the article window: 24h, 3d, 7d, 30d",
+        "description": "Show or set the article window: auto, 24h, 3d, 7d, 30d, max",
     },
 ]
 
@@ -139,6 +136,7 @@ async def poll_telegram_commands(
     *,
     article_limit: int = 10,
     answer_question: DiscussionAnswerer | None = None,
+    timezone: ZoneInfo = DEFAULT_TIMEZONE,
     fetch_updates: TelegramUpdatesFetcher = fetch_telegram_updates,
     send_reply: TelegramReplySender = send_telegram_reply,
 ) -> ProcessCounts:
@@ -152,6 +150,7 @@ async def poll_telegram_commands(
         updates,
         article_limit=article_limit,
         answer_question=answer_question,
+        timezone=timezone,
         send_reply=send_reply,
     )
 
@@ -163,6 +162,7 @@ async def process_telegram_updates(
     *,
     article_limit: int = 10,
     answer_question: DiscussionAnswerer | None = None,
+    timezone: ZoneInfo = DEFAULT_TIMEZONE,
     send_reply: TelegramReplySender = send_telegram_reply,
 ) -> ProcessCounts:
     counts = {"updates": len(updates), "processed": 0, "ignored": 0, "replied": 0, "failed": 0}
@@ -182,6 +182,7 @@ async def process_telegram_updates(
                 message,
                 article_limit=article_limit,
                 answer_question=answer_question,
+                timezone=timezone,
             )
         if reply_message is None:
             counts["ignored"] += 1
@@ -225,6 +226,7 @@ async def _reply_message(
     *,
     article_limit: int,
     answer_question: DiscussionAnswerer | None,
+    timezone: ZoneInfo,
 ) -> str | None:
     """Return the reply for a supported message, or None when it should be ignored."""
     text = str(message.get("text") or "").strip()
@@ -239,13 +241,12 @@ async def _reply_message(
         return await start_new_telegram_chat(session)
     if command == "/timeframe":
         return await set_telegram_discussion_timeframe(session, argument)
-    if command == "/ask":
-        if not argument:
-            return ASK_USAGE
-        return await answer_telegram_question(session, argument, answer_question=answer_question)
-    # Plain messages are questions only in a private chat; groups must use /ask.
-    if text and not text.startswith("/") and _chat_type(message) == "private":
-        return await answer_telegram_question(session, text, answer_question=answer_question)
+    # Any other plain message from the configured chat is a discussion question. In a
+    # group with bot privacy mode on, Telegram only delivers replies to the bot.
+    if text and not text.startswith("/"):
+        return await answer_telegram_question(
+            session, text, answer_question=answer_question, timezone=timezone
+        )
     return None
 
 
@@ -385,13 +386,6 @@ def _chat_id(message: dict[str, Any]) -> str:
     if not isinstance(chat, dict):
         return ""
     return str(chat.get("id") or "")
-
-
-def _chat_type(message: dict[str, Any]) -> str:
-    chat = message.get("chat")
-    if not isinstance(chat, dict):
-        return ""
-    return str(chat.get("type") or "")
 
 
 def _command_name(text: str) -> str:

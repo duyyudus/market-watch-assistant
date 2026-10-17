@@ -89,6 +89,7 @@ const SEGMENTS: Array<{ id: Segment; label: string }> = [
   { id: "crypto", label: "Crypto" },
 ];
 const DISCUSSION_TIMEFRAMES: Array<{ value: DiscussionTimeframe; label: string }> = [
+  { value: "auto", label: "Auto" },
   { value: "24h", label: "Last 24 hours" },
   { value: "3d", label: "Last 3 days" },
   { value: "7d", label: "Last 7 days" },
@@ -163,6 +164,7 @@ function DigestNarrative({ content }: { content: string }) {
 function DiscussionPanel({ discussion }: { discussion: DiscussionChatController }) {
   const {
     timeframe,
+    maxWindowDays,
     messages,
     draft,
     loading,
@@ -196,6 +198,11 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
             className="select select-bordered select-xs bg-zinc-950 text-zinc-100"
             disabled={loading}
             onChange={(event) => resetForTimeframe(event.target.value as DiscussionTimeframe)}
+            title={
+              timeframe === "auto"
+                ? "Infer the window from your question, e.g. “today” or “last week”; follow-ups keep it, otherwise the last 24 hours"
+                : undefined
+            }
             value={timeframe}
           >
             {DISCUSSION_TIMEFRAMES.map((option) => (
@@ -207,6 +214,11 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
                 {option.label}
               </option>
             ))}
+            {maxWindowDays !== null ? (
+              <option className="bg-zinc-950 text-zinc-100" value="max">
+                Max ({maxWindowDays} days)
+              </option>
+            ) : null}
           </select>
           <button
             className="btn btn-xs btn-ghost gap-1"
@@ -230,7 +242,9 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
             <MessageCircle className="h-7 w-7 text-primary/70" />
             <div className="mt-3 text-sm font-semibold text-zinc-200">Ask about recent coverage</div>
             <p className="mt-1 text-xs leading-5 text-base-content/60">
-              Answers use semantically relevant ingested articles from the selected window.
+              {timeframe === "auto"
+                ? "Answers use semantically relevant ingested articles from the period your question mentions, or the last 24 hours."
+                : "Answers use semantically relevant ingested articles from the selected window."}
             </p>
             <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
               {presets.map((preset) => (
@@ -321,6 +335,13 @@ function DiscussionPanel({ discussion }: { discussion: DiscussionChatController 
                   {message.content}
                 </ReactMarkdown>
               </div>
+              {message.contextWindow && message.contextWindow.source !== "selected" ? (
+                <div className="mt-1.5 text-[0.65rem] text-zinc-500">
+                  Searched {message.contextWindow.label}
+                  {message.contextWindow.source === "inferred" ? " · from your question" : ""}
+                  {message.contextWindow.source === "carried" ? " · same as previous answer" : ""}
+                </div>
+              ) : null}
               {message.sources?.length ? (
                 <div className="mt-2 border-t border-zinc-800/80 pt-2">
                   <div className="mb-1 text-[0.65rem] font-bold uppercase tracking-wider text-zinc-500">

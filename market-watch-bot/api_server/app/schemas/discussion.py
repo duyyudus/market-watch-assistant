@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 
 class DiscussionMessage(BaseModel):
@@ -20,8 +20,15 @@ class DiscussionMessage(BaseModel):
 
 
 class DiscussionChatRequest(BaseModel):
-    timeframe: Literal["24h", "3d", "7d", "30d"] = "24h"
+    # "auto" lets an LLM infer the window from the conversation (24h when none);
+    # "max" searches the longest configured window (settings discussion.max_days).
+    timeframe: Literal["auto", "24h", "3d", "7d", "30d", "max"] = "24h"
     messages: list[DiscussionMessage] = Field(min_length=1, max_length=20)
+    # Auto only: the window the chat's previous answer searched, kept by the client so a
+    # follow-up retains it after older messages fall out of the bounded history.
+    # Clamped to the configured maximum window server-side.
+    previous_window_start: AwareDatetime | None = None
+    previous_window_end: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_conversation(self) -> DiscussionChatRequest:
@@ -29,6 +36,11 @@ class DiscussionChatRequest(BaseModel):
             raise ValueError("the final discussion message must be from the user")
         if sum(len(message.content) for message in self.messages) > 60_000:
             raise ValueError("discussion messages exceed the 60000 character limit")
+        if self.previous_window_end is not None and (
+            self.previous_window_start is None
+            or self.previous_window_end <= self.previous_window_start
+        ):
+            raise ValueError("previous_window_end must be after previous_window_start")
         return self
 
 
@@ -40,7 +52,23 @@ class DiscussionSourceRead(BaseModel):
     published_at: datetime | None = None
 
 
+class DiscussionSettingsRead(BaseModel):
+    max_window_days: int
+    event_limit: int
+    articles_per_event: int
+    article_text_chars: int
+
+
+class DiscussionContextWindowRead(BaseModel):
+    # Articles published in [start, end); end null means up to now.
+    start: datetime
+    end: datetime | None = None
+    label: str
+    source: Literal["selected", "inferred", "carried", "fallback"]
+
+
 class DiscussionChatResponse(BaseModel):
     status: Literal["answered", "no_context"]
     answer: str
     sources: list[DiscussionSourceRead] = Field(default_factory=list)
+    context_window: DiscussionContextWindowRead | None = None

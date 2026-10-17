@@ -161,6 +161,19 @@ configuration_presets:
     regions: [global, asia, us, vietnam, china, crypto, other]
     asset_classes: [equity, crypto, global_macro, vietnam_equity, us_equity, commodity, fx, rates, credit]
 
+discussion:
+  # Longest article window, in days, for the Auto and Max discussion timeframes.
+  # null follows retention.normalized_news_items_days (older articles are deleted).
+  max_days: 90
+  # Events retrieved as context for each discussion answer. Articles are ranked by
+  # relevance and grouped by event, so one heavily covered story takes one slot.
+  event_limit: 10
+  # Most relevant articles included with each event's headline and summary.
+  articles_per_event: 2
+  # Characters of each article's text the model reads (longer articles are cut).
+  # Prompt size grows with event_limit x articles_per_event x article_text_chars.
+  article_text_chars: 10000
+
 retention:
   fetch_logs_days: 14
   raw_news_items_days: 60

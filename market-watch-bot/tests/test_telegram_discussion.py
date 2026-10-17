@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -45,12 +46,12 @@ class Chat:
         self.session = SettingsSession()
         self.chat_type = chat_type
         self.sent: list[tuple[str, int | None]] = []
-        self.requests: list[tuple[str, list[dict[str, str]]]] = []
+        self.requests: list[tuple[str, list[dict[str, str]], object]] = []
         self.result: dict | Exception = {"status": "answered", "answer": "Answer", "sources": []}
         self.update_id = 0
 
-    async def answer(self, _session, timeframe, messages):
-        self.requests.append((timeframe, messages))
+    async def answer(self, _session, timeframe, messages, previous_window):
+        self.requests.append((timeframe, messages, previous_window))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -79,8 +80,20 @@ class Chat:
         )
 
 
+WEEK_START = datetime(2026, 5, 23, 12, 0, tzinfo=UTC)
+
+
+def _auto_result(source: str, *, label: str = "last 7 days", end=None) -> dict:
+    return {
+        "status": "answered",
+        "answer": "Oil supply tightened.",
+        "sources": [],
+        "context_window": {"start": WEEK_START, "end": end, "label": label, "source": source},
+    }
+
+
 @pytest.mark.asyncio
-async def test_plain_private_message_is_answered_and_continues_the_conversation() -> None:
+async def test_plain_message_is_answered_on_auto_and_continues_the_conversation() -> None:
     chat = Chat()
     chat.result = {
         "status": "answered",
@@ -91,7 +104,7 @@ async def test_plain_private_message_is_answered_and_continues_the_conversation(
     }
 
     counts = await chat.say("What did rates do?")
-    await chat.say("/ask@market_bot And equities?")
+    await chat.say("And equities?")
 
     assert counts == {"updates": 1, "processed": 1, "ignored": 0, "replied": 1, "failed": 0}
     assert chat.sent[0] == (
@@ -99,7 +112,8 @@ async def test_plain_private_message_is_answered_and_continues_the_conversation(
         "Sources:\n• Rates fall · Test Wire\n  https://example.test/a",
         101,
     )
-    assert chat.requests[0] == ("24h", [{"role": "user", "content": "What did rates do?"}])
+    # Auto is the default, like the dashboard chat box.
+    assert chat.requests[0] == ("auto", [{"role": "user", "content": "What did rates do?"}], None)
     assert [message["content"] for message in chat.requests[1][1]] == [
         "What did rates do?",
         chat.result["answer"],
@@ -109,19 +123,70 @@ async def test_plain_private_message_is_answered_and_continues_the_conversation(
 
 
 @pytest.mark.asyncio
-async def test_group_chat_requires_ask_command() -> None:
+async def test_group_messages_are_questions_and_ask_is_no_longer_a_command() -> None:
     chat = Chat(chat_type="supergroup")
 
-    ignored = await chat.say("what happened today?")
-    usage = await chat.say("/ask")
-    await chat.say("/ask what happened today?")
+    answered = await chat.say("what happened today?")
+    ignored = await chat.say("/ask what happened today?")
 
+    assert answered["replied"] == 1
     assert ignored["ignored"] == 1
-    assert usage["replied"] == 1
-    assert "/ask" in chat.sent[0][0]
-    assert [messages[-1]["content"] for _timeframe, messages in chat.requests] == [
+    assert [messages[-1]["content"] for _timeframe, messages, _window in chat.requests] == [
         "what happened today?"
     ]
+
+
+@pytest.mark.asyncio
+async def test_auto_window_is_captioned_and_carried_into_follow_ups() -> None:
+    chat = Chat()
+    chat.result = _auto_result("inferred")
+
+    await chat.say("Oil supply last week")
+    chat.result = _auto_result("carried")
+    await chat.say("And gold?")
+
+    assert chat.sent[0][0] == (
+        "Oil supply tightened.\n\nSearched last 7 days · from your question"
+    )
+    assert chat.sent[1][0] == (
+        "Oil supply tightened.\n\nSearched last 7 days · same as previous answer"
+    )
+    assert chat.requests[0][2] is None
+    assert chat.requests[1][2] == (WEEK_START, None)
+    assert chat.session.discussion()["previous_window"] == {
+        "start": WEEK_START.isoformat(),
+        "end": None,
+    }
+
+    await chat.say("/new")
+    await chat.say("Fresh topic")
+
+    assert chat.requests[2][2] is None
+
+
+@pytest.mark.asyncio
+async def test_fallback_and_fixed_windows_are_not_carried() -> None:
+    chat = Chat()
+    chat.result = {
+        **_auto_result("fallback", label="last 24 hours"),
+        "answer": (
+            "Rates eased.\n\n_No time period found in your question, so I searched "
+            "articles from the last 24 hours._"
+        ),
+    }
+
+    await chat.say("What moved rates?")
+    chat.result = _auto_result("selected", label="last 24 hours")
+    await chat.say("And equities?")
+
+    # The note's Markdown italics are flattened for plain-text Telegram replies.
+    assert chat.sent[0][0] == (
+        "Rates eased.\n\nNo time period found in your question, so I searched articles "
+        "from the last 24 hours.\n\nSearched last 24 hours"
+    )
+    assert chat.sent[1][0] == "Oil supply tightened."
+    assert chat.requests[1][2] is None
+    assert "previous_window" not in chat.session.discussion()
 
 
 @pytest.mark.asyncio
@@ -134,12 +199,37 @@ async def test_new_and_timeframe_commands_reset_the_conversation() -> None:
     await chat.say("/new")
     await chat.say("Third question")
     await chat.say("/timeframe 2w")
+    await chat.say("/timeframe")
 
-    assert chat.requests[1] == ("7d", [{"role": "user", "content": "Second question"}])
-    assert chat.requests[2] == ("7d", [{"role": "user", "content": "Third question"}])
-    assert chat.sent[1][0] == "Started a new chat. Article context: last 7d."
-    assert chat.sent[-1][0] == "Unknown timeframe. Choose one of: 24h, 3d, 7d, 30d."
+    assert chat.requests[1] == ("7d", [{"role": "user", "content": "Second question"}], None)
+    assert chat.requests[2] == ("7d", [{"role": "user", "content": "Third question"}], None)
+    assert chat.sent[1][0] == "Started a new chat. Article context: last 7 days."
+    assert chat.sent[-2][0] == (
+        "Unknown timeframe. Choose one of: auto, 24h, 3d, 7d, 30d, max."
+    )
+    assert chat.sent[-1][0] == (
+        "Article context: last 7 days. "
+        "Change it with /timeframe <auto, 24h, 3d, 7d, 30d, max>."
+    )
     assert chat.session.discussion()["timeframe"] == "7d"
+
+
+@pytest.mark.asyncio
+async def test_timeframe_accepts_auto_and_max() -> None:
+    chat = Chat()
+
+    await chat.say("/timeframe max")
+    await chat.say("Long story")
+    await chat.say("/timeframe auto")
+
+    assert chat.requests[0][0] == "max"
+    assert chat.sent[0][0] == (
+        "Started a new chat. Article context: Max (the longest configured window)."
+    )
+    assert chat.sent[-1][0] == (
+        "Started a new chat. Article context: "
+        "Auto (from your question; last 24 hours if it names no period)."
+    )
 
 
 @pytest.mark.asyncio
@@ -189,3 +279,33 @@ def test_split_telegram_message_hard_cuts_text_without_newlines() -> None:
 
 def test_format_discussion_reply_without_sources_is_just_the_answer() -> None:
     assert format_discussion_reply("Not enough evidence.", []) == "Not enough evidence."
+
+
+def test_format_discussion_reply_lists_sources_with_outlet_and_local_time() -> None:
+    reply = format_discussion_reply(
+        "Rates eased.",
+        [
+            {
+                "title": "Fed signals a slower rate path",
+                "source_name": "Reuters",
+                "url": "https://example.test/fed",
+                "published_at": datetime(2026, 5, 29, 13, 5, tzinfo=UTC),
+            },
+            {
+                "title": "Undated wire",
+                "source_name": "Test Wire",
+                "url": "https://example.test/wire",
+                "published_at": None,
+            },
+        ],
+        timezone=ZoneInfo("Asia/Ho_Chi_Minh"),
+    )
+
+    assert reply == (
+        "Rates eased.\n\n"
+        "Sources:\n"
+        "• Fed signals a slower rate path · Reuters · May 29, 20:05\n"
+        "  https://example.test/fed\n"
+        "• Undated wire · Test Wire\n"
+        "  https://example.test/wire"
+    )

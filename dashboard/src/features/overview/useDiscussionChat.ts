@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../api";
 import type {
+  DiscussionContextWindow,
   DiscussionMessage,
   DiscussionSource,
   DiscussionTimeframe,
@@ -16,10 +17,13 @@ export type DiscussionUiMessage = {
   role: "user" | "assistant";
   content: string;
   sources?: DiscussionSource[];
+  contextWindow?: DiscussionContextWindow | null;
 };
 
 export type DiscussionChatController = {
   timeframe: DiscussionTimeframe;
+  // Configured longest window; null until loaded (or if the settings request fails).
+  maxWindowDays: number | null;
   messages: DiscussionUiMessage[];
   draft: string;
   loading: boolean;
@@ -78,14 +82,44 @@ function discussionErrorMessage(error: unknown) {
   return message;
 }
 
+// In auto mode, the window the last answer found in the conversation. Sent separately
+// so follow-ups keep it after the question that named it is trimmed from history.
+function previousWindow(messages: DiscussionUiMessage[]) {
+  const lastAnswer = [...messages].reverse().find((message) => message.role === "assistant");
+  const contextWindow = lastAnswer?.contextWindow;
+  return contextWindow &&
+    (contextWindow.source === "inferred" || contextWindow.source === "carried")
+    ? {
+        previous_window_start: contextWindow.start,
+        ...(contextWindow.end ? { previous_window_end: contextWindow.end } : {}),
+      }
+    : {};
+}
+
 export function useDiscussionChat(): DiscussionChatController {
-  const [timeframe, setTimeframe] = useState<DiscussionTimeframe>("24h");
+  const [timeframe, setTimeframe] = useState<DiscussionTimeframe>("auto");
+  const [maxWindowDays, setMaxWindowDays] = useState<number | null>(null);
   const [messages, setMessages] = useState<DiscussionUiMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nextMessageId = useRef(1);
   const requestInFlight = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .discussionSettings()
+      .then((settings) => {
+        if (!cancelled) setMaxWindowDays(settings.max_window_days);
+      })
+      .catch(() => {
+        // Without settings the Max option is hidden; other timeframes still work.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function startNewChat() {
     setMessages([]);
@@ -122,12 +156,17 @@ export function useDiscussionChat(): DiscussionChatController {
     setLoading(true);
 
     try {
-      const response = await api.discussionChat({ timeframe, messages: requestMessages });
+      const response = await api.discussionChat({
+        timeframe,
+        messages: requestMessages,
+        ...(timeframe === "auto" ? previousWindow(messages) : {}),
+      });
       const assistantMessage: DiscussionUiMessage = {
         id: nextMessageId.current++,
         role: "assistant",
         content: response.answer,
         sources: response.sources,
+        contextWindow: response.context_window,
       };
       setMessages((current) =>
         [...current, assistantMessage].slice(-DISCUSSION_MESSAGE_LIMIT),
@@ -144,6 +183,7 @@ export function useDiscussionChat(): DiscussionChatController {
 
   return {
     timeframe,
+    maxWindowDays,
     messages,
     draft,
     loading,

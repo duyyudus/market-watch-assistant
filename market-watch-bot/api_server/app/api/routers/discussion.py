@@ -3,10 +3,21 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from api_server.app.api.dependencies import SessionDep, SettingsDep
-from api_server.app.schemas import DiscussionChatRequest, DiscussionChatResponse
+from api_server.app.schemas import (
+    DiscussionChatRequest,
+    DiscussionChatResponse,
+    DiscussionSettingsRead,
+)
 from api_server.app.services import discussion as discussion_service
 
 router = APIRouter()
+
+
+@router.get("/discussion/settings", response_model=DiscussionSettingsRead)
+async def discussion_settings(settings: SettingsDep) -> DiscussionSettingsRead:
+    return DiscussionSettingsRead.model_validate(
+        discussion_service.discussion_settings(settings)
+    )
 
 
 @router.post("/discussion/chat", response_model=DiscussionChatResponse)

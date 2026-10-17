@@ -88,12 +88,16 @@ async def drain_telegram_commands(session, settings) -> None:
             "telegram_detail_article_limit",
             TELEGRAM_DETAIL_ARTICLE_LIMIT,
         ),
-        answer_question=lambda session, timeframe, messages: discussion.chat(
+        answer_question=lambda session, timeframe, messages, previous_window: discussion.chat(
             session,
             timeframe=timeframe,
             messages=messages,
             settings=settings,
+            previous_window_start=previous_window[0] if previous_window else None,
+            previous_window_end=previous_window[1] if previous_window else None,
+            flag_timeframe_conflicts=True,
         ),
+        timezone=ZoneInfo(settings.bot.timezone),
     )
     if result["updates"] or result["processed"]:
         typer.echo(f"telegram_commands: {result}")

@@ -246,6 +246,19 @@ class ConfigurationPresetConfig(BaseModel):
     watchlist: WatchlistPresetConfig = Field(default_factory=WatchlistPresetConfig)
 
 
+class DiscussionConfig(BaseModel):
+    # Longest article window, in days, for the "auto" and "max" discussion timeframes.
+    # None follows retention.normalized_news_items_days, past which articles are deleted.
+    max_days: int | None = Field(default=None, ge=1)
+    # Events (stories) retrieved as answer context per discussion message, and how many
+    # of each event's most relevant articles are included with its summary.
+    event_limit: int = Field(default=6, ge=1, le=20)
+    articles_per_event: int = Field(default=2, ge=1, le=5)
+    # Characters of each article's text given to the model. 10000 keeps ~97% of
+    # extracted articles whole; prompt size grows with event_limit x articles_per_event x this.
+    article_text_chars: int = Field(default=10_000, ge=500, le=50_000)
+
+
 class RetentionConfig(BaseModel):
     fetch_logs_days: int = 14
     raw_news_items_days: int = 60
@@ -288,6 +301,7 @@ class Settings(BaseModel):
     configuration_presets: ConfigurationPresetConfig = Field(
         default_factory=ConfigurationPresetConfig
     )
+    discussion: DiscussionConfig = Field(default_factory=DiscussionConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

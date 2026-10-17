@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -41,7 +43,7 @@ from common.db.models import (
     AlertDecisionRecord as AlertDecision,
 )
 from common.external_providers import ProviderRetryPolicy
-from common.llm import LLMDiscussionAnswer, LLMRelatedNewsSummary
+from common.llm import LLMDiscussionAnswer, LLMDiscussionTimeframe, LLMRelatedNewsSummary
 from common.source_preview import ArticlePreviewResult, SourcePreviewResult
 
 AUTH_HEADERS = {"Authorization": "Bearer test-token"}
@@ -1389,6 +1391,9 @@ async def test_discussion_chat_returns_no_context_without_calling_providers(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Without an LLM key the fixed-timeframe conflict check is skipped too.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(app.state.settings, "openrouter_api_key", None)
     monkeypatch.setattr(
         discussion_service,
         "embedding_provider",
@@ -1404,11 +1409,18 @@ async def test_discussion_chat_returns_no_context_without_calling_providers(
     )
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    window = body.pop("context_window")
+    assert body == {
         "status": "no_context",
         "answer": discussion_service.NO_CONTEXT_MESSAGE,
         "sources": [],
     }
+    assert (window["label"], window["source"], window["end"]) == (
+        "last 24 hours",
+        "selected",
+        None,
+    )
 
 
 @pytest.mark.asyncio
@@ -1480,6 +1492,617 @@ async def test_discussion_chat_uses_semantic_context_and_does_not_persist_run(
     assert [source["id"] for source in response.json()["sources"]] == ["news_1"]
     assert response.json()["sources"][0]["url"] == "https://www.example.com/news"
     assert before.json()["total"] == after.json()["total"] == 1
+
+
+DISCUSSION_NOW = datetime(2026, 5, 30, 12, 0, tzinfo=UTC)  # 19:00 in Ho Chi Minh City
+
+
+def _patch_discussion_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    timeframe: LLMDiscussionTimeframe,
+    embedded_texts: list[str],
+    timeframe_prompts: list[str],
+    answer_prompts: list[str],
+    now: datetime = DISCUSSION_NOW,
+    timeframe_error: Exception | None = None,
+) -> None:
+    class FakeEmbeddingProvider:
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            embedded_texts.extend(texts)
+            return [[0.1] * 1536]
+
+    class FakeLLMProvider:
+        async def infer_discussion_timeframe(self, prompt: str):
+            timeframe_prompts.append(prompt)
+            if timeframe_error is not None:
+                raise timeframe_error
+            return timeframe, {"total_tokens": 20}
+
+        async def answer_discussion(self, prompt: str):
+            answer_prompts.append(prompt)
+            return (
+                LLMDiscussionAnswer(answer="Oil supply tightened.", cited_article_ids=[]),
+                {"total_tokens": 50},
+            )
+
+    settings = app.state.settings
+    settings.embeddings.provider = "openai"
+    settings.embeddings.model = "text-embedding-3-small"
+    settings.embeddings.version = "1"
+    monkeypatch.setattr(settings.bot, "timezone", "Asia/Ho_Chi_Minh")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(discussion_service, "utcnow", lambda: now)
+    monkeypatch.setattr(
+        discussion_service, "embedding_provider", lambda _config: FakeEmbeddingProvider()
+    )
+    monkeypatch.setattr(discussion_service, "llm_provider", lambda _config: FakeLLMProvider())
+
+
+def _llm_period(
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    start_hours_ago: int | None = None,
+    end_hours_ago: int | None = None,
+    search_query: str = "Oil supply",
+) -> LLMDiscussionTimeframe:
+    return LLMDiscussionTimeframe(
+        start_date=start_date,
+        end_date=end_date,
+        start_hours_ago=start_hours_ago,
+        end_hours_ago=end_hours_ago,
+        search_query=search_query,
+    )
+
+
+async def _auto_discussion(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    period: LLMDiscussionTimeframe,
+    question: str,
+    now: datetime = DISCUSSION_NOW,
+    previous_window: tuple[datetime, datetime | None] | None = None,
+) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
+    embedded_texts: list[str] = []
+    timeframe_prompts: list[str] = []
+    answer_prompts: list[str] = []
+    _patch_discussion_providers(
+        monkeypatch,
+        timeframe=period,
+        embedded_texts=embedded_texts,
+        timeframe_prompts=timeframe_prompts,
+        answer_prompts=answer_prompts,
+        now=now,
+    )
+    payload: dict[str, object] = {
+        "timeframe": "auto",
+        "messages": [{"role": "user", "content": question}],
+    }
+    if previous_window is not None:
+        payload["previous_window_start"] = previous_window[0].isoformat()
+        if previous_window[1] is not None:
+            payload["previous_window_end"] = previous_window[1].isoformat()
+    response = await client.post("/discussion/chat", json=payload, headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    return response.json(), embedded_texts, timeframe_prompts, answer_prompts
+
+
+def _prompt_stories(prompt: str) -> list[dict[str, Any]]:
+    return json.loads(prompt.split("Stories: ", 1)[1])
+
+
+def _prompt_article_ids(prompt: str) -> set[str]:
+    return {
+        article["id"] for story in _prompt_stories(prompt) for article in story["articles"]
+    }
+
+
+def _window(body: dict[str, Any]) -> tuple[datetime, datetime | None, str, str]:
+    window = body["context_window"]
+    return (
+        datetime.fromisoformat(window["start"]),
+        datetime.fromisoformat(window["end"]) if window["end"] else None,
+        window["label"],
+        window["source"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_uses_llm_window_and_query(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, embedded_texts, timeframe_prompts, answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_hours_ago=168, end_hours_ago=0, search_query="Oil supply news"),
+        question="Oil supply news last week",
+    )
+
+    assert body["answer"] == "Oil supply tightened."
+    assert _window(body) == (
+        DISCUSSION_NOW - timedelta(hours=168),
+        None,
+        "last 7 days",
+        "inferred",
+    )
+    # The LLM's rewritten query, without the period words, drives semantic retrieval.
+    assert embedded_texts == ["Oil supply news"]
+    prompt = timeframe_prompts[0]
+    assert "Oil supply news last week" in prompt
+    assert (
+        "Current time: Saturday 2026-05-30 12:00 UTC "
+        "(Saturday 2026-05-30 19:00 Asia/Ho_Chi_Minh)"
+    ) in prompt
+    assert "- yesterday: Friday 2026-05-29" in prompt
+    assert "Future horizons are topics" in prompt
+    assert "3D printing" in prompt
+    # A 3-day-old article falls inside the inferred week but outside the 24h default.
+    assert "Older oil supply analysis" in answer_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_falls_back_to_24h_and_says_so(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, _embedded, _timeframe_prompts, answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(search_query="What moved oil supply?"),
+        question="What moved oil supply?",
+    )
+
+    assert _window(body)[2:] == ("last 24 hours", "fallback")
+    assert str(body["answer"]).startswith("Oil supply tightened.\n\n_No time period found")
+    assert "last 24 hours" in str(body["answer"])
+    assert "news_3" not in _prompt_article_ids(answer_prompts[0])
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_bounds_yesterday_to_local_calendar_day(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, _embedded, _timeframe_prompts, answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_date="2026-05-29", end_date="2026-05-29", search_query="Rates"),
+        question="What happened with rates yesterday?",
+    )
+
+    # Local midnights in Ho Chi Minh City (UTC+7).
+    assert _window(body) == (
+        datetime(2026, 5, 28, 17, 0, tzinfo=UTC),
+        datetime(2026, 5, 29, 17, 0, tzinfo=UTC),
+        "Friday 2026-05-29",
+        "inferred",
+    )
+    article_ids = _prompt_article_ids(answer_prompts[0])
+    # Published 13:00 UTC on May 29 (20:00 local): yesterday.
+    assert "news_1" in article_ids
+    # Fetched 09:00 UTC on May 30 (16:00 local): today, so excluded before ranking.
+    assert "news_2" not in article_ids
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_uses_the_actual_local_date_late_at_night(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    late_night = datetime(2026, 5, 30, 16, 20, tzinfo=UTC)  # 23:20 local
+    body, _embedded, timeframe_prompts, _answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_date="2026-05-29", end_date="2026-05-29"),
+        question="Oil supply yesterday?",
+        now=late_night,
+    )
+
+    assert "- today: Saturday 2026-05-30" in timeframe_prompts[0]
+    assert _window(body)[:3] == (
+        datetime(2026, 5, 28, 17, 0, tzinfo=UTC),
+        datetime(2026, 5, 29, 17, 0, tzinfo=UTC),
+        "Friday 2026-05-29",
+    )
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_counts_rolling_spans_from_the_actual_time(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    just_after_noon = datetime(2026, 5, 30, 5, 1, tzinfo=UTC)  # 12:01 local
+    body, _embedded, _timeframe_prompts, _answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_hours_ago=1, end_hours_ago=0),
+        question="Oil supply in the last hour?",
+        now=just_after_noon,
+    )
+
+    assert _window(body) == (
+        datetime(2026, 5, 30, 4, 1, tzinfo=UTC),
+        None,
+        "last hour",
+        "inferred",
+    )
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_labels_calendar_periods_up_to_now(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, _embedded, _timeframe_prompts, _answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_date="2026-05-28", end_date=None),
+        question="Oil supply since Thursday?",
+    )
+
+    assert _window(body) == (
+        datetime(2026, 5, 27, 17, 0, tzinfo=UTC),
+        None,
+        "Thursday 2026-05-28 to now",
+        "inferred",
+    )
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_carries_previous_window(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = (DISCUSSION_NOW - timedelta(hours=168), DISCUSSION_NOW - timedelta(hours=48))
+    body, embedded_texts, timeframe_prompts, answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(search_query="Oil supply outlook"),
+        question="And the outlook?",
+        previous_window=previous,
+    )
+
+    assert _window(body) == (*previous, "7 days to 2 days ago", "carried")
+    assert body["answer"] == "Oil supply tightened."
+    assert (
+        "Previous search window: 7 days to 2 days ago "
+        "(from 2026-05-23 19:00 to 2026-05-28 19:00 local time)"
+    ) in timeframe_prompts[0]
+    assert embedded_texts == ["Oil supply outlook"]
+    assert "news_3" in _prompt_article_ids(answer_prompts[0])
+    assert "news_1" not in _prompt_article_ids(answer_prompts[0])
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_bounds_older_periods_before_ranking(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, embedded_texts, _timeframe_prompts, answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_hours_ago=168, end_hours_ago=48),
+        question="And the days before that?",
+    )
+
+    assert _window(body)[2:] == ("7 days to 2 days ago", "inferred")
+    assert embedded_texts == ["Oil supply"]
+    # Recent articles are filtered out before ranking, so they cannot crowd out the
+    # older period the follow-up asked about.
+    article_ids = _prompt_article_ids(answer_prompts[0])
+    assert "news_3" in article_ids
+    assert {"news_1", "news_2", "news_newer_report"}.isdisjoint(article_ids)
+    # news_3 belongs to evt_1, whose current headline and summary come from later
+    # articles; a past period gets only the in-period outlet count.
+    story = next(
+        story
+        for story in _prompt_stories(answer_prompts[0])
+        if any(article["id"] == "news_3" for article in story["articles"])
+    )
+    assert story["event"] == {"outlets_in_period": 1}
+    assert "Policy makers leaned less hawkish." not in answer_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_auto_timeframe_caps_long_lookbacks(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.state.settings.discussion, "max_days", 30)
+    body, _embedded, timeframe_prompts, _answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_hours_ago=8_760, end_hours_ago=0),
+        question="Gold performance this year",
+    )
+
+    assert _window(body) == (
+        DISCUSSION_NOW - timedelta(days=30),
+        None,
+        "last 30 days",
+        "inferred",
+    )
+    assert str(body["answer"]).endswith(
+        "_Searched the last 30 days, as far back as the window goes._"
+    )
+    assert "Longest searchable period: the last 30 days" in timeframe_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_reports_periods_older_than_the_max_window(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.state.settings.discussion, "max_days", 7)
+    body, embedded_texts, _timeframe_prompts, answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_hours_ago=336, end_hours_ago=168),
+        question="Oil supply two weeks ago?",
+    )
+
+    assert body == {
+        "status": "no_context",
+        "answer": (
+            "I can only search the last 7 days of coverage, so "
+            "14 days to 7 days ago is out of range."
+        ),
+        "sources": [],
+        "context_window": None,
+    }
+    assert embedded_texts == []
+    assert answer_prompts == []
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_clips_periods_partly_older_than_the_max_window(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.state.settings.discussion, "max_days", 7)
+    body, _embedded, _timeframe_prompts, _answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(start_hours_ago=336, end_hours_ago=48),
+        question="Oil supply from two weeks ago until two days ago?",
+    )
+
+    assert _window(body) == (
+        DISCUSSION_NOW - timedelta(days=7),
+        DISCUSSION_NOW - timedelta(hours=48),
+        "7 days to 2 days ago",
+        "inferred",
+    )
+    assert str(body["answer"]).endswith(
+        "_Searched 7 days to 2 days ago, as far back as the window goes._"
+    )
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_clamps_carried_window_to_configured_max(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.state.settings.discussion, "max_days", 7)
+    body, _embedded, _timeframe_prompts, _answer_prompts = await _auto_discussion(
+        client,
+        monkeypatch,
+        period=_llm_period(),
+        question="And oil?",
+        previous_window=(DISCUSSION_NOW - timedelta(days=90), None),
+    )
+
+    assert _window(body) == (
+        DISCUSSION_NOW - timedelta(days=7),
+        None,
+        "last 7 days",
+        "carried",
+    )
+
+
+async def _fixed_discussion(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    timeframe: str,
+    period: LLMDiscussionTimeframe,
+    question: str,
+    timeframe_error: Exception | None = None,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    embedded_texts: list[str] = []
+    timeframe_prompts: list[str] = []
+    _patch_discussion_providers(
+        monkeypatch,
+        timeframe=period,
+        embedded_texts=embedded_texts,
+        timeframe_prompts=timeframe_prompts,
+        answer_prompts=[],
+        timeframe_error=timeframe_error,
+    )
+    response = await client.post(
+        "/discussion/chat",
+        json={"timeframe": timeframe, "messages": [{"role": "user", "content": question}]},
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    return response.json(), embedded_texts, timeframe_prompts
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_flags_a_fixed_timeframe_that_misses_the_asked_period(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, embedded_texts, timeframe_prompts = await _fixed_discussion(
+        client,
+        monkeypatch,
+        timeframe="24h",
+        period=_llm_period(start_hours_ago=168, end_hours_ago=0),
+        question="Oil price last week",
+    )
+
+    # The selected window still decides the search; the question only adds a note.
+    assert _window(body)[2:] == ("last 24 hours", "selected")
+    assert embedded_texts == ["Oil price last week"]
+    assert len(timeframe_prompts) == 1
+    assert body["answer"] == (
+        "Oil supply tightened.\n\n_Your question mentions the last 7 days, but the "
+        "timeframe is set to the last 24 hours, so only part of that period was searched. "
+        "Switch to Auto or a wider timeframe to include it._"
+    )
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_flags_an_asked_period_wholly_outside_the_fixed_timeframe(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, _embedded, _timeframe_prompts = await _fixed_discussion(
+        client,
+        monkeypatch,
+        timeframe="24h",
+        period=_llm_period(start_date="2026-05-27", end_date="2026-05-27"),
+        question="Oil supply on Wednesday?",
+    )
+
+    assert str(body["answer"]).endswith(
+        "_Your question mentions Wednesday 2026-05-27, but the timeframe is set to the "
+        "last 24 hours, so that period wasn't searched. Switch to Auto or a wider "
+        "timeframe to include it._"
+    )
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "period"),
+    [
+        # "today" (since 00:00 local, 19 hours ago) sits inside the last 24 hours.
+        ("24h", _llm_period(start_date="2026-05-30", end_date=None)),
+        # Narrower periods inside a wider fixed window are already searched.
+        ("30d", _llm_period(start_hours_ago=168, end_hours_ago=0)),
+        # No period named.
+        ("24h", _llm_period()),
+    ],
+)
+@pytest.mark.asyncio
+async def test_discussion_chat_does_not_flag_periods_the_fixed_timeframe_covers(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    timeframe: str,
+    period: LLMDiscussionTimeframe,
+) -> None:
+    body, _embedded, _timeframe_prompts = await _fixed_discussion(
+        client, monkeypatch, timeframe=timeframe, period=period, question="Oil supply?"
+    )
+
+    assert body["answer"] == "Oil supply tightened."
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_answers_without_a_note_when_the_conflict_check_fails(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body, _embedded, timeframe_prompts = await _fixed_discussion(
+        client,
+        monkeypatch,
+        timeframe="24h",
+        period=_llm_period(),
+        question="Oil price last week",
+        timeframe_error=RuntimeError("provider down"),
+    )
+
+    assert len(timeframe_prompts) == 1
+    assert body["status"] == "answered"
+    assert body["answer"] == "Oil supply tightened."
+
+
+@pytest.mark.asyncio
+async def test_discussion_settings_default_max_window_to_article_retention(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = app.state.settings
+    monkeypatch.setattr(settings.discussion, "max_days", None)
+    monkeypatch.setattr(settings.retention, "normalized_news_items_days", 180)
+    monkeypatch.setattr(settings.discussion, "event_limit", 6)
+    monkeypatch.setattr(settings.discussion, "articles_per_event", 2)
+    monkeypatch.setattr(settings.discussion, "article_text_chars", 6_000)
+
+    response = await client.get("/discussion/settings", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    assert response.json() == {
+        "max_window_days": 180,
+        "event_limit": 6,
+        "articles_per_event": 2,
+        "article_text_chars": 6_000,
+    }
+
+    monkeypatch.setattr(settings.discussion, "max_days", 45)
+    response = await client.get("/discussion/settings", headers=AUTH_HEADERS)
+    assert response.json()["max_window_days"] == 45
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_max_timeframe_and_event_limits_follow_settings(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    embedded_texts: list[str] = []
+    answer_prompts: list[str] = []
+    _patch_discussion_providers(
+        monkeypatch,
+        timeframe=_llm_period(search_query="unused"),
+        embedded_texts=embedded_texts,
+        timeframe_prompts=[],
+        answer_prompts=answer_prompts,
+    )
+    monkeypatch.setattr(app.state.settings.discussion, "max_days", 90)
+    monkeypatch.setattr(app.state.settings.discussion, "event_limit", 1)
+    monkeypatch.setattr(app.state.settings.discussion, "articles_per_event", 1)
+    monkeypatch.setattr(app.state.settings.discussion, "article_text_chars", 20)
+
+    response = await client.post(
+        "/discussion/chat",
+        json={
+            "timeframe": "max",
+            "messages": [{"role": "user", "content": "Oil supply"}],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert _window(response.json()) == (
+        DISCUSSION_NOW - timedelta(days=90),
+        None,
+        "last 90 days",
+        "selected",
+    )
+    assert embedded_texts == ["Oil supply"]
+    stories = _prompt_stories(answer_prompts[0])
+    assert len(stories) == 1
+    assert len(stories[0]["articles"]) == 1
+    assert len(stories[0]["articles"][0]["text"]) <= 20
+
+
+@pytest.mark.asyncio
+async def test_discussion_chat_rejects_previous_window_end_before_its_start(
+    client: AsyncClient,
+) -> None:
+    response = await client.post(
+        "/discussion/chat",
+        json={
+            "timeframe": "auto",
+            "messages": [{"role": "user", "content": "And gold?"}],
+            "previous_window_start": "2026-05-29T00:00:00Z",
+            "previous_window_end": "2026-05-28T00:00:00Z",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

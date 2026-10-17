@@ -9,7 +9,16 @@ const API_AUTH_TOKEN = import.meta.env.VITE_API_AUTH_TOKEN;
 
 export type WatchedTopics = { topics: string[] };
 
-export type DiscussionTimeframe = "24h" | "3d" | "7d" | "30d";
+// "auto" lets the backend infer the window from the conversation; "max" searches the
+// longest configured window (see DiscussionSettings.max_window_days).
+export type DiscussionTimeframe = "auto" | "24h" | "3d" | "7d" | "30d" | "max";
+
+export type DiscussionSettings = {
+  max_window_days: number;
+  event_limit: number;
+  articles_per_event: number;
+  article_text_chars: number;
+};
 
 export type DiscussionMessage = {
   role: "user" | "assistant";
@@ -24,10 +33,19 @@ export type DiscussionSource = {
   published_at?: string | null;
 };
 
+export type DiscussionContextWindow = {
+  // Articles published in [start, end); a null end means up to now.
+  start: string;
+  end?: string | null;
+  label: string;
+  source: "selected" | "inferred" | "carried" | "fallback";
+};
+
 export type DiscussionChatResponse = {
   status: "answered" | "no_context";
   answer: string;
   sources: DiscussionSource[];
+  context_window?: DiscussionContextWindow | null;
 };
 
 export type ListEnvelope<T> = {
@@ -726,9 +744,12 @@ export const api = {
     request<EventRelatedNewsSummary>(`/events/${eventId}/related-news-summary`, {
       method: "POST",
     }),
+  discussionSettings: () => request<DiscussionSettings>("/discussion/settings"),
   discussionChat: (payload: {
     timeframe: DiscussionTimeframe;
     messages: DiscussionMessage[];
+    previous_window_start?: string;
+    previous_window_end?: string;
   }) =>
     request<DiscussionChatResponse>("/discussion/chat", {
       method: "POST",
